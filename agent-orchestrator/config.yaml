@@ -1,0 +1,91 @@
+# Agent Orchestrator - Example Configuration
+# Copy this file, fill in your API keys, and run:
+#   ./agent-orchestrator server --config config.yaml
+
+providers:
+  # Uncomment and fill in your OpenAI-compatible company API
+  # - name: company-api
+  #   type: openai_compatible
+  #   base_url: https://api.company.com/v1
+  #   api_key: ${COMPANY_API_KEY}
+
+  # Local Ollama (no API key needed)
+  - name: ollama-local
+    type: ollama
+    base_url: http://localhost:11434
+
+  # Anthropic Claude
+  # - name: claude
+  #   type: anthropic
+  #   api_key: ${ANTHROPIC_API_KEY}
+
+models:
+  # Orchestrator / reviewer model (fast, smart)
+  # - name: o4-mini
+  #   provider: company-api
+  #   model: o4-mini
+  #   roles: [orchestrator, reviewer, chat_brain]
+
+  # Worker model (local coder)
+  - name: qwen-coder
+    provider: ollama-local
+    model: qwen2.5-coder:7b
+    roles: [worker]
+
+roles:
+  # orchestrator: o4-mini
+  worker: qwen-coder
+  # reviewer: o4-mini
+  # chat_brain: o4-mini
+  # embedder: qwen-coder
+
+routing:
+  plan: orchestrator
+  implement: worker
+  review: reviewer
+  test: worker
+
+prompts:
+  implement: |
+    You are a senior coding agent responsible for implementing work packages.
+
+    Task: {task_description}
+    Repo Path: {repo_path}
+    Context: {context}
+
+    Use tool calls to:
+    1. Read relevant files
+    2. Implement the feature
+    3. Run tests
+    4. Report results
+
+  review: |
+    You are a senior code reviewer.
+    Review the implementation for correctness, testing, and alignment with requirements.
+
+    Return JSON with:
+    - approved: boolean
+    - issues: array of issues
+    - suggestions: array of improvement suggestions
+
+context_rules:
+  implement:
+    include: [code, diff, test_results, problems]
+    exclude: [docs, folder_structure]
+  review:
+    include: [diff, code, test_results]
+    exclude: [docs, folder_structure]
+
+server:
+  port: 8080
+  host: "0.0.0.0"
+  tls_enabled: false
+
+database:
+  type: sqlite
+  path: ./data/orchestrator.db
+
+agents:
+  heartbeat_interval_sec: 30
+  task_poll_interval_sec: 5
+  task_timeout_sec: 300

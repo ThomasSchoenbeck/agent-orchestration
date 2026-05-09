@@ -1,0 +1,100 @@
+package db
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+)
+
+// CreateProvider inserts a new provider.
+func (d *Database) CreateProvider(ctx context.Context, p *Provider) error {
+	if p.ID == "" {
+		p.ID = newID()
+	}
+	now := time.Now().UTC()
+	p.CreatedAt = now
+	p.UpdatedAt = now
+
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO providers (id, name, type, base_url, model_name, api_key, capabilities, config, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.Name, p.Type, p.BaseURL, p.ModelName, p.APIKey,
+		marshalJSONArray(p.Capabilities), marshalJSON(p.Config), p.CreatedAt, p.UpdatedAt,
+	)
+	return err
+}
+
+// GetProvider retrieves a provider by ID.
+func (d *Database) GetProvider(ctx context.Context, id string) (*Provider, error) {
+	row := d.db.QueryRowContext(ctx, providerSelectSQL+` WHERE id=?`, id)
+	p, err := scanProvider(row)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("provider %q not found", id)
+	}
+	return p, err
+}
+
+// ListProviders returns all providers.
+func (d *Database) ListProviders(ctx context.Context) ([]*Provider, error) {
+	rows, err := d.db.QueryContext(ctx, providerSelectSQL+` ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanProviders(rows)
+}
+
+// UpdateProvider updates a provider.
+func (d *Database) UpdateProvider(ctx context.Context, p *Provider) error {
+	p.UpdatedAt = time.Now().UTC()
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE providers SET name=?, type=?, base_url=?, model_name=?, api_key=?,
+		 capabilities=?, config=?, updated_at=? WHERE id=?`,
+		p.Name, p.Type, p.BaseURL, p.ModelName, p.APIKey,
+		marshalJSONArray(p.Capabilities), marshalJSON(p.Config), p.UpdatedAt, p.ID,
+	)
+	return err
+}
+
+// DeleteProvider removes a provider.
+func (d *Database) DeleteProvider(ctx context.Context, id string) error {
+	_, err := d.db.ExecContext(ctx, `DELETE FROM providers WHERE id=?`, id)
+	return err
+}
+
+const providerSelectSQL = `SELECT id, name, type, base_url, model_name, api_key,
+    capabilities, config, created_at, updated_at FROM providers`
+
+func scanProvider(row *sql.Row) (*Provider, error) {
+	var p Provider
+	var capsJSON, cfgJSON, createdAt, updatedAt string
+	err := row.Scan(&p.ID, &p.Name, &p.Type, &p.BaseURL, &p.ModelName, &p.APIKey,
+		&capsJSON, &cfgJSON, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	p.Capabilities = unmarshalJSONStringSlice(capsJSON)
+	p.Config = unmarshalJSONMap(cfgJSON)
+	p.CreatedAt = parseTime(createdAt)
+	p.UpdatedAt = parseTime(updatedAt)
+	return &p, nil
+}
+
+func scanProviders(rows *sql.Rows) ([]*Provider, error) {
+	var providers []*Provider
+	for rows.Next() {
+		var p Provider
+		var capsJSON, cfgJSON, createdAt, updatedAt string
+		if err := rows.Scan(&p.ID, &p.Name, &p.Type, &p.BaseURL, &p.ModelName, &p.APIKey,
+			&capsJSON, &cfgJSON, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		p.Capabilities = unmarshalJSONStringSlice(capsJSON)
+		p.Config = unmarshalJSONMap(cfgJSON)
+		p.CreatedAt = parseTime(createdAt)
+		p.UpdatedAt = parseTime(updatedAt)
+		providers = append(providers, &p)
+	}
+	return providers, rows.Err()
+}

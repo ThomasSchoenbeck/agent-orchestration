@@ -1,0 +1,37 @@
+providers:
+  - name: test-ollama
+    type: ollama
+    base_url: http://localhost:11434
+    model: qwen2.5-coder:7b
+
+models:
+  - name: test-model
+    provider: test-ollama
+    model: qwen2.5-coder:7b
+    roles: [worker, orchestrator, reviewer]
+
+roles:
+  worker: test-model
+  orchestrator: test-model
+  reviewer: test-model
+
+routing:
+  implement: worker
+  plan: orchestrator
+  review: reviewer
+
+prompts:
+  implement: "Execute this task: {payload}"
+  review: "Review this: {payload}"
+
+server:
+  port: 8080
+  host: "0.0.0.0"
+
+database:
+  path: ./data/test.db
+
+agents:
+  heartbeat_interval_sec: 5
+  task_poll_interval_sec: 2
+  task_timeout_sec: 60
