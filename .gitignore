@@ -2,3 +2,4 @@ node_modules
 .task
 */ui/dist
 *.exe
+*.db

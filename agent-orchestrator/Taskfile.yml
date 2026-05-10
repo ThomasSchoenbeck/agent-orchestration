@@ -174,19 +174,12 @@ tasks:
 
   dev:
     desc: |
-      Build server binary, start it in background, then launch the Vite dev
-      server (hot-reload UI with proxy to localhost:8080). Ctrl+C stops both.
-      Prerequisites: build:ui must have run at least once (or use: task build dev)
+      Build server binary then start it together with the Vite dev server
+      (hot-reload UI with proxy to localhost:8080). Ctrl+C stops both.
+      Prerequisites: build:ui must have run at least once (or: task build dev)
     deps: [build:server]
     cmds:
-      - |
-        trap 'echo ""; echo "Stopping…"; kill $(jobs -p) 2>/dev/null; wait 2>/dev/null' INT TERM EXIT
-        echo "▶  Starting server…"
-        ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} server --config {{.CONFIG}} &
-        sleep 1
-        echo "▶  Starting Vite dev server (UI hot-reload on http://localhost:5173)…"
-        cd {{.UI_DIR}} && pnpm dev
-        wait
+      - task: _dev:run
 
   dev:ui:
     desc: Start only the Vite dev server (proxies /api and /ws → http://localhost:8080)
@@ -200,116 +193,72 @@ tasks:
 
   agents:
     desc: |
-      Start N agent processes in background and block until Ctrl+C.
+      Start one agent process (foreground). Open extra terminals and repeat
+      for multi-agent setups, or use: docker compose up
 
       Variables:
-        AGENTS=<n>            Number of agents to launch   (default: 1)
         ROLES=<r1,r2>         Comma-separated roles         (default: worker)
         SERVER_URL=<url>      Orchestrator URL              (default: http://localhost:8080)
         AGENT_CONFIG=<path>   Config YAML for full LLM mode (default: empty = polling only)
 
       Examples:
         task agents
-        task agents AGENTS=3
-        task agents AGENTS=2 ROLES=worker,reviewer
-        task agents AGENTS=4 ROLES=worker AGENT_CONFIG=config.yaml
+        task agents ROLES=worker,reviewer
+        task agents ROLES=worker AGENT_CONFIG=config.yaml
     cmds:
-      - |
-        CONFIG_FLAG=""
-        if [ -n "{{.AGENT_CONFIG}}" ]; then
-          CONFIG_FLAG="--config {{.AGENT_CONFIG}}"
-        fi
-
-        echo "Starting {{.AGENTS}} agent(s):"
-        echo "  roles      : {{.ROLES}}"
-        echo "  server     : {{.SERVER_URL}}"
-        if [ -n "{{.AGENT_CONFIG}}" ]; then
-          echo "  config     : {{.AGENT_CONFIG}} (LLM executor enabled)"
-        else
-          echo "  config     : none (polling-only mode)"
-        fi
-        echo ""
-
-        for i in $(seq 1 {{.AGENTS}}); do
-          ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} agent \
-            --name "agent-$i" \
-            --roles "{{.ROLES}}" \
-            --server "{{.SERVER_URL}}" \
-            $CONFIG_FLAG &
-          echo "  ✓ agent-$i started (PID $!)"
-        done
-
-        echo ""
-        echo "{{.AGENTS}} agent(s) running. Press Ctrl+C to stop all."
-        trap 'kill $(jobs -p) 2>/dev/null' INT TERM
-        wait
+      - task: _proc:agent
 
   start:
     desc: |
-      Build everything then start the full stack: server + N agents.
-      Blocks until Ctrl+C, then cleanly kills all child processes.
+      Build everything then start the full stack: server + 1 agent.
+      Ctrl+C stops both. For multi-agent setups use: docker compose up
 
       Variables:
-        AGENTS=<n>            Agents to launch     (default: 1)
         ROLES=<roles>         Agent roles          (default: worker)
         CONFIG=<path>         Server config        (default: config.yaml)
         AGENT_CONFIG=<path>   Agent config / LLM   (default: empty)
         SERVER_URL=<url>      Override server URL  (default: http://localhost:8080)
 
       Examples:
-        task start                                       # 1 polling-only agent
-        task start AGENTS=3 ROLES=worker                 # 3 agents, no LLM
-        task start AGENTS=2 ROLES=worker,reviewer AGENT_CONFIG=config.yaml
+        task start
+        task start ROLES=worker,reviewer AGENT_CONFIG=config.yaml
     cmds:
       - task: build
-      - |
-        trap 'echo ""; echo "Shutting down all processes…"; kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; exit 0' INT TERM
+      - task: _start:run
 
-        # ── Start server ────────────────────────────────────────────────
-        echo "▶  Starting server  (config: {{.CONFIG}})"
-        ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} server --config {{.CONFIG}} &
-        SERVER_PID=$!
+  # ============================================================
+  # INTERNAL PROCESS HELPERS  (used by dev / agents / start)
+  # These use go-task's native concurrent deps — no shell trap needed,
+  # works identically on Linux, macOS, and Windows.
+  # ============================================================
 
-        # ── Health check — wait up to 20 s ──────────────────────────────
-        echo "   Waiting for server to accept connections…"
-        READY=0
-        for i in $(seq 1 40); do
-          sleep 0.5
-          if curl -sf {{.SERVER_URL}}/health >/dev/null 2>&1; then
-            READY=1
-            break
-          fi
-        done
-        if [ "$READY" -eq 1 ]; then
-          echo "   ✓ Server ready at {{.SERVER_URL}}"
-        else
-          echo "   ⚠  Health-check timed out — continuing anyway"
-        fi
-        echo ""
+  _dev:run:
+    internal: true
+    deps:
+      - task: _proc:server
+      - task: _proc:ui
 
-        # ── Start agents ────────────────────────────────────────────────
-        CONFIG_FLAG=""
-        if [ -n "{{.AGENT_CONFIG}}" ]; then
-          CONFIG_FLAG="--config {{.AGENT_CONFIG}}"
-        fi
+  _start:run:
+    internal: true
+    deps:
+      - task: _proc:server
+      - task: _proc:agent
 
-        echo "▶  Starting {{.AGENTS}} agent(s)  [roles: {{.ROLES}}]"
-        for i in $(seq 1 {{.AGENTS}}); do
-          ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} agent \
-            --name "agent-$i" \
-            --roles "{{.ROLES}}" \
-            --server "{{.SERVER_URL}}" \
-            $CONFIG_FLAG &
-          echo "   ✓ agent-$i started (PID $!)"
-        done
+  _proc:server:
+    internal: true
+    cmds:
+      - ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} server --config {{.CONFIG}}
 
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo " Stack running:  1 server  +  {{.AGENTS}} agent(s)"
-        echo " UI available:   build then open http://localhost:8080"
-        echo " Press Ctrl+C to stop everything."
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        wait
+  _proc:ui:
+    internal: true
+    dir: '{{.UI_DIR}}'
+    cmds:
+      - pnpm dev
+
+  _proc:agent:
+    internal: true
+    cmds:
+      - ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} agent --name "agent-1" --roles "{{.ROLES}}" --server "{{.SERVER_URL}}"{{if .AGENT_CONFIG}} --config {{.AGENT_CONFIG}}{{end}}
 
   # ============================================================
   # CLEAN
