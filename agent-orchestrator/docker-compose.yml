@@ -1,0 +1,108 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent Orchestrator — Docker Compose
+#
+# Services
+#   server    — HTTP API + WebSocket + embedded Svelte UI  (port 8080)
+#   worker-1  — worker agent  (polls for implement/test tasks)
+#   worker-2  — second worker agent for concurrency demos
+#
+# Usage
+#   docker compose up --build
+#   docker compose down -v          # also remove the data volume
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Orchestrator Server ────────────────────────────────────────────────────
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agent-orchestrator:latest
+    container_name: agent-orchestrator-server
+    command:
+      - "--config"
+      - "/app/config.yaml"
+      - "--db"
+      - "/app/data/agent.db"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+    ports:
+      - "8080:8080"
+    volumes:
+      # Persist the SQLite database between restarts.
+      - agent-data:/app/data
+      # Override the bundled config with your own.
+      # Mount your real config.yaml here:
+      # - ./my-config.yaml:/app/config.yaml:ro
+    environment:
+      # LLM provider API keys — set in your shell or a .env file.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # ── Worker Agent 1 ─────────────────────────────────────────────────────────
+  worker-1:
+    image: agent-orchestrator:latest
+    container_name: agent-orchestrator-worker-1
+    command:
+      - "--config"
+      - "/app/config.yaml"
+      - "--db"
+      - "/app/data/agent.db"
+      - "--mode"
+      - "agent"
+      - "--agent-name"
+      - "worker-1"
+      - "--agent-roles"
+      - "worker"
+    volumes:
+      - agent-data:/app/data
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Worker Agent 2 ─────────────────────────────────────────────────────────
+  worker-2:
+    image: agent-orchestrator:latest
+    container_name: agent-orchestrator-worker-2
+    command:
+      - "--config"
+      - "/app/config.yaml"
+      - "--db"
+      - "/app/data/agent.db"
+      - "--mode"
+      - "agent"
+      - "--agent-name"
+      - "worker-2"
+      - "--agent-roles"
+      - "worker"
+    volumes:
+      - agent-data:/app/data
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+# ── Named Volumes ──────────────────────────────────────────────────────────────
+volumes:
+  agent-data:
+    driver: local

@@ -11,6 +11,8 @@ import (
 	"agent-orchestrator/config"
 	"agent-orchestrator/db"
 	"agent-orchestrator/llm"
+	"agent-orchestrator/logging"
+	"agent-orchestrator/router"
 )
 
 // Server holds all dependencies and the HTTP mux.
@@ -18,6 +20,8 @@ type Server struct {
 	cfg     *config.Config
 	db      *db.Database
 	llmReg  *llm.Registry
+	router  *router.Router
+	log     *logging.Logger
 	httpSrv *http.Server
 	mux     *http.ServeMux
 }
@@ -34,9 +38,12 @@ func New(cfg *config.Config, database *db.Database, llmReg *llm.Registry) *Serve
 		cfg:    cfg,
 		db:     database,
 		llmReg: llmReg,
+		router: router.New(cfg, llmReg),
+		log:    logging.New(database, "", "", ""),
 		mux:    http.NewServeMux(),
 	}
 	s.registerHandlers()
+	s.registerStaticHandler() // must come after API routes so "/" is the catch-all
 	return s
 }
 

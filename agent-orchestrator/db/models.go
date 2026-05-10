@@ -114,14 +114,17 @@ type LogFilters struct {
 // --- Metrics ---
 
 type Metric struct {
-	ID         string    `json:"id"`
-	TaskID     string    `json:"task_id,omitempty"`
-	AgentID    string    `json:"agent_id,omitempty"`
-	TokensUsed int       `json:"tokens_used"`
-	Cost       float64   `json:"cost"`
-	DurationMs int       `json:"duration_ms"`
-	Success    bool      `json:"success"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	TaskID       string    `json:"task_id,omitempty"`
+	AgentID      string    `json:"agent_id,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	TokensUsed   int       `json:"tokens_used"`
+	InputTokens  int       `json:"input_tokens"`
+	OutputTokens int       `json:"output_tokens"`
+	Cost         float64   `json:"cost"`
+	DurationMs   int       `json:"duration_ms"`
+	Success      bool      `json:"success"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // --- JSON marshal helpers ---

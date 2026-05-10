@@ -28,7 +28,9 @@ import (
 	"agent-orchestrator/config"
 	"agent-orchestrator/db"
 	"agent-orchestrator/llm"
+	"agent-orchestrator/router"
 	"agent-orchestrator/server"
+	"agent-orchestrator/tools"
 )
 
 func main() {
@@ -138,6 +140,31 @@ func runAgent(args []string) error {
 	}
 
 	a := agent.NewAgent(*name, roles, *serverURL, cfg)
+
+	// If a full config is provided, wire up the LLM router and tool registry
+	// so the agent can actually execute tasks.
+	if *configPath != "" {
+		database, err := db.Open(cfg.Database.Path)
+		if err != nil {
+			log.Printf("agent: could not open database (%v) — running without tool execution", err)
+		} else {
+			defer func() { _ = database.Close() }()
+			llmReg := llm.NewRegistry()
+			if err := llmReg.InitFromConfig(cfg); err != nil {
+				log.Printf("agent: could not init LLM providers (%v) — running without LLM execution", err)
+			} else {
+				defer llmReg.CloseAll()
+				rtr := router.New(cfg, llmReg)
+				toolReg := tools.NewRegistry()
+				_ = tools.RegisterCodeTools(toolReg)
+				_ = tools.RegisterTaskTools(toolReg, database)
+				_ = tools.RegisterPlanTools(toolReg, database)
+				_ = tools.RegisterContextTools(toolReg, database)
+				a.WithExecutor(rtr, toolReg)
+				log.Printf("agent: executor wired (LLM providers: %d)", len(llmReg.List()))
+			}
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

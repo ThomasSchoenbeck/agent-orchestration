@@ -1,0 +1,80 @@
+<script>
+  import { router, toasts } from './lib/stores.js'
+  import Projects  from './pages/Projects.svelte'
+  import Tasks     from './pages/Tasks.svelte'
+  import Agents    from './pages/Agents.svelte'
+  import Providers from './pages/Providers.svelte'
+  import Logs      from './pages/Logs.svelte'
+  import Chat      from './pages/Chat.svelte'
+
+  const pages = [
+    { id: 'projects',  label: 'Projects',  icon: '📁' },
+    { id: 'tasks',     label: 'Tasks',     icon: '✅' },
+    { id: 'agents',    label: 'Agents',    icon: '🤖' },
+    { id: 'providers', label: 'Providers', icon: '🔌' },
+    { id: 'logs',      label: 'Logs',      icon: '📋' },
+    { id: 'chat',      label: 'Chat',      icon: '💬' },
+  ]
+</script>
+
+<div class="flex h-screen bg-surface-900 text-gray-200 overflow-hidden">
+
+  <!-- Sidebar -->
+  <nav class="w-48 shrink-0 bg-surface-800 border-r border-surface-600 flex flex-col">
+    <div class="px-4 py-5 border-b border-surface-600">
+      <span class="text-accent font-semibold text-sm tracking-wide uppercase">Agent Orch.</span>
+    </div>
+    <ul class="flex-1 py-2 list-none m-0 p-0">
+      {#each pages as p}
+        <li>
+          <button
+            class="w-full text-left px-4 py-2 flex items-center gap-3 text-sm transition-colors
+              {$router === p.id
+                ? 'bg-surface-700 text-accent font-medium'
+                : 'text-gray-400 hover:bg-surface-700 hover:text-gray-200'}"
+            onclick={() => router.go(p.id)}
+          >
+            <span class="text-base leading-none">{p.icon}</span>
+            {p.label}
+          </button>
+        </li>
+      {/each}
+    </ul>
+    <div class="px-4 py-3 border-t border-surface-600 text-xs text-gray-500">
+      v0.1.0
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="flex-1 overflow-hidden flex flex-col">
+    {#if $router === 'projects'}
+      <Projects />
+    {:else if $router === 'tasks'}
+      <Tasks />
+    {:else if $router === 'agents'}
+      <Agents />
+    {:else if $router === 'providers'}
+      <Providers />
+    {:else if $router === 'logs'}
+      <Logs />
+    {:else if $router === 'chat'}
+      <Chat />
+    {:else}
+      <div class="flex-1 flex items-center justify-center text-gray-500">Page not found</div>
+    {/if}
+  </main>
+</div>
+
+<!-- Toast notifications -->
+{#if $toasts.length > 0}
+  <div class="fixed bottom-4 right-4 flex flex-col gap-2 z-50" role="status" aria-live="polite">
+    {#each $toasts as t (t.id)}
+      <div class="px-4 py-3 rounded text-sm shadow-lg max-w-xs
+        {t.type === 'success' ? 'bg-green-800 text-green-100' :
+         t.type === 'error'   ? 'bg-red-900  text-red-100'   :
+                                'bg-surface-700 text-gray-200'}">
+        {t.message}
+      </div>
+    {/each}
+  </div>
+{/if}

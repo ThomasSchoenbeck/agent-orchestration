@@ -1,0 +1,330 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+# Agent Orchestrator — go-task task runner
+#
+# Install go-task:  https://taskfile.dev/installation/
+# Run a task:       task <name>
+# List all tasks:   task
+#
+# Shell note: multiline | scripts require bash/sh.
+# On Windows use Git Bash, WSL, or run tasks from a bash-capable terminal.
+version: '3'
+
+# ── Project-wide variables ────────────────────────────────────────────────────
+vars:
+  BINARY:     agent-orchestrator
+  BIN_DIR:    bin
+  UI_DIR:     ui
+  CONFIG:     config.yaml
+  SERVER_URL: http://localhost:8080
+  AGENTS:     '1'
+  ROLES:      worker
+  # Agents can be given a full config path for LLM-executor access.
+  # Leave empty to run lightweight polling-only agents.
+  AGENT_CONFIG: ''
+  # Binary file extension — .exe on Windows, empty on Unix
+  EXT: '{{if eq OS "windows"}}.exe{{end}}'
+
+# ── Default: list available tasks ─────────────────────────────────────────────
+tasks:
+  default:
+    desc: List all available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  # ============================================================
+  # BUILD
+  # ============================================================
+
+  build:
+    desc: "Full build: compile UI → embed into Go binary"
+    cmds:
+      - task: build:ui
+      - task: build:server
+
+  build:ui:
+    desc: Install UI deps and compile Svelte/Vite app (output → ui/dist/)
+    dir: '{{.UI_DIR}}'
+    cmds:
+      - pnpm install --frozen-lockfile
+      - pnpm build
+    sources:
+      - src/**/*.svelte
+      - src/**/*.js
+      - src/**/*.css
+      - index.html
+      - package.json
+      - vite.config.js
+      - vitest.config.js
+      - svelte.config.js
+      - postcss.config.js
+    generates:
+      - dist/index.html
+
+  build:server:
+    desc: Compile the Go binary (ui/dist is embedded; run build:ui first or use build)
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -ldflags="-s -w" -o {{.BIN_DIR}}/{{.BINARY}}{{.EXT}} .
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+      - ui/dist/**
+    generates:
+      - '{{.BIN_DIR}}/{{.BINARY}}{{.EXT}}'
+
+  # ============================================================
+  # TEST
+  # ============================================================
+
+  test:
+    desc: Run all tests — Go unit tests then Vitest UI tests
+    cmds:
+      - task: test:server
+      - task: test:ui
+
+  test:server:
+    desc: Run Go tests with race detector
+    cmds:
+      - go test -v -race -count=1 ./...
+
+  test:ui:
+    desc: Run Vitest unit and component tests (no server required)
+    dir: '{{.UI_DIR}}'
+    cmds:
+      - pnpm test
+
+  test:ui:watch:
+    desc: Run Vitest in interactive watch mode
+    dir: '{{.UI_DIR}}'
+    cmds:
+      - pnpm test:watch
+
+  test:ui:coverage:
+    desc: Run Vitest with V8 coverage report (output → ui/coverage/)
+    dir: '{{.UI_DIR}}'
+    cmds:
+      - pnpm test:coverage
+
+  test:integration:
+    desc: |
+      Run full-stack integration tests against a live server.
+      The server must already be running on {{.SERVER_URL}}.
+      Override the URL: task test:integration SERVER_URL=http://localhost:9090
+    dir: '{{.UI_DIR}}'
+    env:
+      INTEGRATION_URL: '{{.SERVER_URL}}'
+    cmds:
+      - pnpm test:integration
+
+  # ============================================================
+  # LINT
+  # ============================================================
+
+  lint:
+    desc: Lint everything — Go vet/staticcheck + UI svelte-check
+    cmds:
+      - task: lint:server
+      - task: lint:ui
+
+  lint:server:
+    desc: |
+      Run go vet (always) and staticcheck (if installed).
+      Install staticcheck: go install honnef.co/go/tools/cmd/staticcheck@latest
+    cmds:
+      - go vet ./...
+      - cmd: staticcheck ./...
+        ignore_error: true
+
+  lint:ui:
+    desc: |
+      Validate UI code with svelte-check then verify build succeeds.
+      Install svelte-check: cd ui && pnpm add -D svelte-check
+    dir: '{{.UI_DIR}}'
+    cmds:
+      - cmd: pnpm exec svelte-check --output human 2>&1
+        ignore_error: true
+      - pnpm build
+
+  # ============================================================
+  # CI PIPELINE
+  # ============================================================
+
+  ci:
+    desc: |
+      Full CI pipeline: lint → server tests → UI build → UI tests → final binary.
+      Suitable for CI/CD environments.
+    cmds:
+      - task: lint:server
+      - task: test:server
+      - task: build:ui
+      - task: test:ui
+      - task: build:server
+
+  # ============================================================
+  # RUN / DEVELOPMENT
+  # ============================================================
+
+  run:server:
+    desc: Build everything then start the server (Ctrl+C to stop)
+    cmds:
+      - task: build
+      - ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} server --config {{.CONFIG}}
+
+  dev:
+    desc: |
+      Build server binary, start it in background, then launch the Vite dev
+      server (hot-reload UI with proxy to localhost:8080). Ctrl+C stops both.
+      Prerequisites: build:ui must have run at least once (or use: task build dev)
+    deps: [build:server]
+    cmds:
+      - |
+        trap 'echo ""; echo "Stopping…"; kill $(jobs -p) 2>/dev/null; wait 2>/dev/null' INT TERM EXIT
+        echo "▶  Starting server…"
+        ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} server --config {{.CONFIG}} &
+        sleep 1
+        echo "▶  Starting Vite dev server (UI hot-reload on http://localhost:5173)…"
+        cd {{.UI_DIR}} && pnpm dev
+        wait
+
+  dev:ui:
+    desc: Start only the Vite dev server (proxies /api and /ws → http://localhost:8080)
+    dir: '{{.UI_DIR}}'
+    cmds:
+      - pnpm dev
+
+  # ============================================================
+  # AGENTS
+  # ============================================================
+
+  agents:
+    desc: |
+      Start N agent processes in background and block until Ctrl+C.
+
+      Variables:
+        AGENTS=<n>            Number of agents to launch   (default: 1)
+        ROLES=<r1,r2>         Comma-separated roles         (default: worker)
+        SERVER_URL=<url>      Orchestrator URL              (default: http://localhost:8080)
+        AGENT_CONFIG=<path>   Config YAML for full LLM mode (default: empty = polling only)
+
+      Examples:
+        task agents
+        task agents AGENTS=3
+        task agents AGENTS=2 ROLES=worker,reviewer
+        task agents AGENTS=4 ROLES=worker AGENT_CONFIG=config.yaml
+    cmds:
+      - |
+        CONFIG_FLAG=""
+        if [ -n "{{.AGENT_CONFIG}}" ]; then
+          CONFIG_FLAG="--config {{.AGENT_CONFIG}}"
+        fi
+
+        echo "Starting {{.AGENTS}} agent(s):"
+        echo "  roles      : {{.ROLES}}"
+        echo "  server     : {{.SERVER_URL}}"
+        if [ -n "{{.AGENT_CONFIG}}" ]; then
+          echo "  config     : {{.AGENT_CONFIG}} (LLM executor enabled)"
+        else
+          echo "  config     : none (polling-only mode)"
+        fi
+        echo ""
+
+        for i in $(seq 1 {{.AGENTS}}); do
+          ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} agent \
+            --name "agent-$i" \
+            --roles "{{.ROLES}}" \
+            --server "{{.SERVER_URL}}" \
+            $CONFIG_FLAG &
+          echo "  ✓ agent-$i started (PID $!)"
+        done
+
+        echo ""
+        echo "{{.AGENTS}} agent(s) running. Press Ctrl+C to stop all."
+        trap 'kill $(jobs -p) 2>/dev/null' INT TERM
+        wait
+
+  start:
+    desc: |
+      Build everything then start the full stack: server + N agents.
+      Blocks until Ctrl+C, then cleanly kills all child processes.
+
+      Variables:
+        AGENTS=<n>            Agents to launch     (default: 1)
+        ROLES=<roles>         Agent roles          (default: worker)
+        CONFIG=<path>         Server config        (default: config.yaml)
+        AGENT_CONFIG=<path>   Agent config / LLM   (default: empty)
+        SERVER_URL=<url>      Override server URL  (default: http://localhost:8080)
+
+      Examples:
+        task start                                       # 1 polling-only agent
+        task start AGENTS=3 ROLES=worker                 # 3 agents, no LLM
+        task start AGENTS=2 ROLES=worker,reviewer AGENT_CONFIG=config.yaml
+    cmds:
+      - task: build
+      - |
+        trap 'echo ""; echo "Shutting down all processes…"; kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; exit 0' INT TERM
+
+        # ── Start server ────────────────────────────────────────────────
+        echo "▶  Starting server  (config: {{.CONFIG}})"
+        ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} server --config {{.CONFIG}} &
+        SERVER_PID=$!
+
+        # ── Health check — wait up to 20 s ──────────────────────────────
+        echo "   Waiting for server to accept connections…"
+        READY=0
+        for i in $(seq 1 40); do
+          sleep 0.5
+          if curl -sf {{.SERVER_URL}}/health >/dev/null 2>&1; then
+            READY=1
+            break
+          fi
+        done
+        if [ "$READY" -eq 1 ]; then
+          echo "   ✓ Server ready at {{.SERVER_URL}}"
+        else
+          echo "   ⚠  Health-check timed out — continuing anyway"
+        fi
+        echo ""
+
+        # ── Start agents ────────────────────────────────────────────────
+        CONFIG_FLAG=""
+        if [ -n "{{.AGENT_CONFIG}}" ]; then
+          CONFIG_FLAG="--config {{.AGENT_CONFIG}}"
+        fi
+
+        echo "▶  Starting {{.AGENTS}} agent(s)  [roles: {{.ROLES}}]"
+        for i in $(seq 1 {{.AGENTS}}); do
+          ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} agent \
+            --name "agent-$i" \
+            --roles "{{.ROLES}}" \
+            --server "{{.SERVER_URL}}" \
+            $CONFIG_FLAG &
+          echo "   ✓ agent-$i started (PID $!)"
+        done
+
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo " Stack running:  1 server  +  {{.AGENTS}} agent(s)"
+        echo " UI available:   build then open http://localhost:8080"
+        echo " Press Ctrl+C to stop everything."
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        wait
+
+  # ============================================================
+  # CLEAN
+  # ============================================================
+
+  clean:
+    desc: Remove compiled binary and UI dist
+    cmds:
+      - rm -rf {{.BIN_DIR}}
+      - rm -rf {{.UI_DIR}}/dist
+
+  clean:all:
+    desc: Remove all build artifacts including node_modules and the SQLite database
+    deps: [clean]
+    cmds:
+      - rm -rf {{.UI_DIR}}/node_modules
+      - rm -rf data
+      - rm -f *.db

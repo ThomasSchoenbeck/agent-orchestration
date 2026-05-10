@@ -1,0 +1,36 @@
+# Version control
+.git
+.gitignore
+
+# Node / UI build artifacts
+ui/node_modules
+ui/.svelte-kit
+ui/dist
+
+# Go build artifacts
+*.exe
+*.test
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Test data
+testdata/
+*_test.go
+
+# Config with secrets — mount via volume at runtime
+config.yaml
+
+# Docker files (not needed in image)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

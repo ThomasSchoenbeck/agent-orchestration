@@ -1,0 +1,230 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Agent Orchestrator — Example Configuration
+#
+# Copy this file to config.yaml and fill in your API keys.
+# All ${ENV_VAR} references are expanded from the process environment at startup,
+# so secrets never need to be written directly into this file.
+#
+# Run with:   ./agent-orchestrator --config config.yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Server
+# ─────────────────────────────────────────────────────────────────────────────
+server:
+  # TCP port the HTTP server binds to.  Default: 8080
+  port: 8080
+
+  # Network interface to listen on.  "0.0.0.0" = all interfaces.  Default: 0.0.0.0
+  host: "0.0.0.0"
+
+  # Enable TLS (you must supply cert/key files separately).  Default: false
+  tls_enabled: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Database
+# ─────────────────────────────────────────────────────────────────────────────
+database:
+  # Database engine.  Currently only "sqlite" is supported.
+  type: sqlite
+
+  # Path to the SQLite file.  Created automatically on first run.
+  # For Docker: use a named volume path such as /app/data/agent.db
+  path: "./agent.db"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent Defaults
+# ─────────────────────────────────────────────────────────────────────────────
+agents:
+  # How often each agent sends a heartbeat to the server (seconds).  Default: 30
+  heartbeat_interval_sec: 30
+
+  # How often each agent polls for a new task (seconds).  Default: 5
+  task_poll_interval_sec: 5
+
+  # A task that hasn't been updated in this many seconds is considered timed out
+  # and is re-queued by the scheduler.  Default: 300
+  task_timeout_sec: 300
+
+  # Maximum number of times an LLM call is retried on failure before the task
+  # is marked failed.  Default: 3
+  max_retries: 3
+
+  # (Optional) Name of a fallback provider to try when the primary one errors.
+  # Must match a name in the providers list below.
+  fallback_provider: "ollama-local"
+
+  # Number of consecutive LLM failures that trip the circuit breaker.
+  # Once open, the circuit stays open for 60 s before switching to half-open.
+  # Default: 5
+  circuit_breaker_threshold: 5
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM Providers
+#
+# type values:
+#   openai_compatible — any OpenAI-compatible API (OpenAI, local llama.cpp, etc.)
+#   anthropic         — Anthropic Messages API
+#   azure             — Azure OpenAI (deployment-based URLs)
+#   ollama            — local Ollama server
+# ─────────────────────────────────────────────────────────────────────────────
+providers:
+
+  # ── OpenAI ──────────────────────────────────────────────────────────────────
+  - name: openai
+    type: openai_compatible
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+    model: "gpt-4o"
+
+  # ── Anthropic (Claude) ───────────────────────────────────────────────────────
+  - name: anthropic
+    type: anthropic
+    base_url: "https://api.anthropic.com"
+    api_key: "${ANTHROPIC_API_KEY}"
+    model: "claude-sonnet-4-6"
+
+  # ── Azure OpenAI ─────────────────────────────────────────────────────────────
+  # base_url must be your Azure endpoint (no trailing slash).
+  # deployment is the name you gave to the model deployment in Azure Studio.
+  - name: azure-gpt4o
+    type: azure
+    base_url: "https://my-resource.openai.azure.com"
+    api_key: "${AZURE_OPENAI_API_KEY}"
+    model: "gpt-4o"
+    deployment: "gpt4o-prod"
+
+  # ── Ollama (local, no auth) ────────────────────────────────────────────────
+  - name: ollama-local
+    type: ollama
+    base_url: "http://localhost:11434"
+    model: "llama3.2"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Models
+#
+# Named model configurations that bind a provider + model string together
+# and optionally pre-assign roles.
+# ─────────────────────────────────────────────────────────────────────────────
+models:
+  - name: gpt-4o
+    provider: openai
+    model: "gpt-4o"
+    roles: [orchestrator, worker]
+
+  - name: claude-sonnet
+    provider: anthropic
+    model: "claude-sonnet-4-6"
+    roles: [reviewer]
+
+  - name: llama3
+    provider: ollama-local
+    model: "llama3.2"
+    roles: [worker]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Role → Model Mapping
+#
+# Maps an agent role to a named model above.
+# All three roles (orchestrator, worker, reviewer) should be mapped.
+# ─────────────────────────────────────────────────────────────────────────────
+roles:
+  orchestrator: gpt-4o       # plans and coordinates multi-agent tasks
+  worker: gpt-4o             # implements tasks (code, writing, research)
+  reviewer: claude-sonnet    # reviews and approves worker output
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Task Type → Role Routing
+#
+# Maps each task type to the role responsible for it.
+# Defaults (applied when omitted):
+#   plan      → orchestrator
+#   implement → worker
+#   review    → reviewer
+#   test      → worker
+# ─────────────────────────────────────────────────────────────────────────────
+routing:
+  plan:      orchestrator
+  implement: worker
+  review:    reviewer
+  test:      worker
+
+# ─────────────────────────────────────────────────────────────────────────────
+# System Prompt Templates (per role)
+#
+# Use {{.TaskType}}, {{.ProjectName}}, {{.Context}}, {{.RecentTasks}}
+# as template variables.
+# ─────────────────────────────────────────────────────────────────────────────
+prompts:
+  orchestrator: |
+    You are a senior software architect orchestrating a development project.
+    Project: {{.ProjectName}}
+    Your job is to break down requirements into concrete work packages and
+    coordinate worker agents to implement them efficiently.
+
+  worker: |
+    You are a skilled software engineer implementing tasks for project: {{.ProjectName}}.
+    Task type: {{.TaskType}}
+    Project context:
+    {{.Context}}
+    Recent work:
+    {{.RecentTasks}}
+    Complete the assigned task thoroughly and submit your result using the
+    submit_task_result tool.
+
+  reviewer: |
+    You are a senior engineer reviewing code and implementations.
+    Project: {{.ProjectName}}
+    Evaluate the work for correctness, completeness, and code quality.
+    Approve if satisfactory; request changes with specific feedback if not.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Context Rules
+#
+# Controls which context types are injected into each role's system prompt.
+#
+# include values: project_memory | recent_tasks | agent_history
+# exclude overrides include when both are specified.
+# ─────────────────────────────────────────────────────────────────────────────
+context_rules:
+  orchestrator:
+    include: [project_memory, recent_tasks]
+
+  worker:
+    include: [project_memory, recent_tasks, agent_history]
+
+  reviewer:
+    include: [project_memory, recent_tasks]
+    exclude: [agent_history]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Token Pricing  (USD per 1 000 000 tokens)
+#
+# Used by GET /api/metrics/costs to compute cost per LLM call.
+# Keys must exactly match the model string sent to the provider.
+# ─────────────────────────────────────────────────────────────────────────────
+pricing:
+  # OpenAI GPT-4o (as of 2025-05)
+  gpt-4o:
+    input_per_million: 2.50
+    output_per_million: 10.00
+
+  # OpenAI GPT-4o-mini
+  gpt-4o-mini:
+    input_per_million: 0.15
+    output_per_million: 0.60
+
+  # Anthropic Claude Sonnet 4
+  claude-sonnet-4-6:
+    input_per_million: 3.00
+    output_per_million: 15.00
+
+  # Anthropic Claude Haiku 4.5 (fast & cheap)
+  claude-haiku-4-5-20251001:
+    input_per_million: 0.80
+    output_per_million: 4.00
+
+  # Local Ollama models are free — omit or set to 0.
+  # llama3.2:
+  #   input_per_million: 0
+  #   output_per_million: 0

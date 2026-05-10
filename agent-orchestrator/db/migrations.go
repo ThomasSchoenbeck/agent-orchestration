@@ -92,16 +92,27 @@ CREATE TABLE IF NOT EXISTS logs (
 
 -- Execution Metrics table
 CREATE TABLE IF NOT EXISTS metrics (
-    id          TEXT PRIMARY KEY,
-    task_id     TEXT,
-    agent_id    TEXT,
-    tokens_used INTEGER NOT NULL DEFAULT 0,
-    cost        REAL NOT NULL DEFAULT 0,
-    duration_ms INTEGER NOT NULL DEFAULT 0,
-    success     INTEGER NOT NULL DEFAULT 0,
-    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id             TEXT PRIMARY KEY,
+    task_id        TEXT,
+    agent_id       TEXT,
+    model          TEXT NOT NULL DEFAULT '',
+    tokens_used    INTEGER NOT NULL DEFAULT 0,
+    input_tokens   INTEGER NOT NULL DEFAULT 0,
+    output_tokens  INTEGER NOT NULL DEFAULT 0,
+    cost           REAL NOT NULL DEFAULT 0,
+    duration_ms    INTEGER NOT NULL DEFAULT 0,
+    success        INTEGER NOT NULL DEFAULT 0,
+    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (task_id)  REFERENCES tasks(id),
     FOREIGN KEY (agent_id) REFERENCES agents(id)
+);
+
+-- Phase 4: add input/output token columns to existing metrics tables (safe if columns already exist).
+-- SQLite doesn't support IF NOT EXISTS on ALTER TABLE so we use a separate migration approach.
+CREATE TABLE IF NOT EXISTS _schema_migrations (
+    id   INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Indexes for performance

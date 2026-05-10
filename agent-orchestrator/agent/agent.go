@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"agent-orchestrator/config"
+	"agent-orchestrator/db"
+	"agent-orchestrator/router"
+	"agent-orchestrator/tools"
 )
 
 // Agent represents a running agent process.
@@ -17,10 +20,12 @@ type Agent struct {
 	serverURL string
 	cfg       *config.Config
 	client    *ServerClient
+	executor  *Executor
 	done      chan struct{}
 }
 
-// NewAgent creates a new agent (not yet registered).
+// NewAgent creates a new agent (not yet registered). rtr and toolReg are
+// optional; pass nil to run without task execution (useful in tests).
 func NewAgent(name string, roles []string, serverURL string, cfg *config.Config) *Agent {
 	return &Agent{
 		name:      name,
@@ -30,6 +35,17 @@ func NewAgent(name string, roles []string, serverURL string, cfg *config.Config)
 		client:    NewServerClient(serverURL),
 		done:      make(chan struct{}),
 	}
+}
+
+// WithExecutor attaches an LLM router and tool registry so the agent can
+// fully execute tasks. Call before Start.
+func (a *Agent) WithExecutor(rtr *router.Router, toolReg *tools.Registry) *Agent {
+	// executor.agentID will be set in Start once we have a server-assigned ID.
+	a.executor = &Executor{
+		rtr:   rtr,
+		tools: toolReg,
+	}
+	return a
 }
 
 // ID returns the agent's server-assigned ID (empty before Start).
@@ -48,12 +64,18 @@ func (a *Agent) Start(ctx context.Context) error {
 	a.id = id
 	log.Printf("agent %q registered (id=%s)", a.name, a.id)
 
+	// Wire the agent ID into the executor now that we have it.
+	if a.executor != nil {
+		a.executor.client = a.client
+		a.executor.agentID = a.id
+	}
+
 	go a.heartbeatLoop(ctx)
 	go a.pollLoop(ctx)
 	return nil
 }
 
-// Stop signals the agent to stop and deregisters from the server.
+// Stop signals the agent to stop.
 func (a *Agent) Stop() {
 	select {
 	case <-a.done:
@@ -105,21 +127,24 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			}
 
 			// Claim and execute asynchronously so polling continues.
-			go func() {
-				claimed, err := a.client.ClaimTask(ctx, task.ID, a.id)
+			go func(t *db.Task) {
+				claimed, err := a.client.ClaimTask(ctx, t.ID, a.id)
 				if err != nil {
-					log.Printf("agent %q could not claim task %s: %v", a.name, task.ID, err)
+					log.Printf("agent %q could not claim task %s: %v", a.name, t.ID, err)
 					return
 				}
 				a.executeTask(ctx, claimed)
-			}()
+			}(task)
 		}
 	}
 }
 
-// executeTask is the stub execution entry-point. Phase 2 will wire in the
-// real LLM + tool execution here.
-func (a *Agent) executeTask(ctx context.Context, task interface{}) {
-	log.Printf("agent %q: task claimed (full execution wired in Phase 2)", a.name)
-	// Phase 2: call LLM, run tools, submit result.
+// executeTask runs the claimed task via the executor, or logs a warning if no
+// executor is configured.
+func (a *Agent) executeTask(ctx context.Context, task *db.Task) {
+	if a.executor == nil || a.executor.rtr == nil {
+		log.Printf("agent %q: no executor configured — skipping task %s", a.name, task.ID)
+		return
+	}
+	a.executor.Run(ctx, task)
 }

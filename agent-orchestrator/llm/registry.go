@@ -61,6 +61,10 @@ func (r *Registry) InitFromConfig(cfg *config.Config) error {
 			provider = NewOpenAIProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, pcfg.Model)
 		case "ollama":
 			provider = NewOllamaProvider(pcfg.Name, pcfg.BaseURL, pcfg.Model)
+		case "anthropic":
+			provider = NewAnthropicProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, pcfg.Model)
+		case "azure":
+			provider = NewAzureOpenAIProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, pcfg.Model, pcfg.Deployment)
 		default:
 			// Skip unknown providers with a warning; they'll be added in later phases.
 			continue

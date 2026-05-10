@@ -85,15 +85,21 @@ func (d *Database) CreateMetric(ctx context.Context, m *Metric) error {
 	if m.CreatedAt.IsZero() {
 		m.CreatedAt = time.Now().UTC()
 	}
+	// tokens_used = input + output for backward compatibility.
+	if m.TokensUsed == 0 && (m.InputTokens > 0 || m.OutputTokens > 0) {
+		m.TokensUsed = m.InputTokens + m.OutputTokens
+	}
 	success := 0
 	if m.Success {
 		success = 1
 	}
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO metrics (id, task_id, agent_id, tokens_used, cost, duration_ms, success, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.ID, nullableStr(m.TaskID), nullableStr(m.AgentID),
-		m.TokensUsed, m.Cost, m.DurationMs, success, m.CreatedAt,
+		`INSERT INTO metrics
+		 (id, task_id, agent_id, model, tokens_used, input_tokens, output_tokens, cost, duration_ms, success, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, nullableStr(m.TaskID), nullableStr(m.AgentID), m.Model,
+		m.TokensUsed, m.InputTokens, m.OutputTokens,
+		m.Cost, m.DurationMs, success, m.CreatedAt,
 	)
 	return err
 }

@@ -97,10 +97,11 @@ func (d *Database) UpdateTask(ctx context.Context, t *Task) error {
 	return err
 }
 
-// ClaimTask atomically claims a task for an agent.
-// Returns an error if the task is already in_progress.
+// ClaimTask atomically claims a task for an agent using an IMMEDIATE transaction
+// so concurrent agents cannot double-claim the same task.
+// Returns an error if the task is already in_progress, completed, or failed.
 func (d *Database) ClaimTask(ctx context.Context, taskID, agentID string) error {
-	return d.withTx(ctx, func(tx *sql.Tx) error {
+	return d.withImmediateTx(ctx, func(tx *sql.Tx) error {
 		var status, assignedID string
 		err := tx.QueryRowContext(ctx,
 			`SELECT status, COALESCE(assigned_agent_id,'') FROM tasks WHERE id=?`, taskID,
@@ -113,6 +114,9 @@ func (d *Database) ClaimTask(ctx context.Context, taskID, agentID string) error 
 		}
 		if status == "in_progress" {
 			return fmt.Errorf("task %q is already claimed by agent %q", taskID, assignedID)
+		}
+		if status == "completed" || status == "failed" {
+			return fmt.Errorf("task %q cannot be claimed: status is %q", taskID, status)
 		}
 		now := time.Now().UTC()
 		_, err = tx.ExecContext(ctx,

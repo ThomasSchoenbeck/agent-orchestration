@@ -36,6 +36,17 @@ func (s *Server) registerHandlers() {
 	// Logs
 	s.mux.HandleFunc("/api/logs", s.handleLogs)
 
+	// LLM chat
+	s.mux.HandleFunc("/api/llm/chat", s.handleLLMChat)
+
+	// Metrics
+	s.mux.HandleFunc("/api/metrics", s.handleMetrics)
+	s.mux.HandleFunc("/api/metrics/tokens", s.handleMetricsTokens)
+	s.mux.HandleFunc("/api/metrics/costs", s.handleMetricsCosts)
+
+	// WebSocket chat
+	s.mux.HandleFunc("/ws/chat", s.handleWSChat)
+
 	// Health
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		api.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})

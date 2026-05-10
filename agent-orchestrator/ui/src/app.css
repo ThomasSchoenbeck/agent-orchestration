@@ -1,0 +1,33 @@
+/* Tailwind v4: single import replaces the three @tailwind directives */
+@import "tailwindcss";
+
+/* ── Custom design tokens ────────────────────────────────────────────────────
+   In v4, @theme variables are auto-exposed as utility classes:
+   --color-surface-900  →  bg-surface-900 / text-surface-900 / border-surface-900
+   --color-accent       →  bg-accent / text-accent / border-accent
+   --color-accent-hover →  hover:bg-accent-hover / hover:text-accent-hover
+   ──────────────────────────────────────────────────────────────────────── */
+@theme {
+  --color-surface-900:  #0d1117;
+  --color-surface-800:  #161b22;
+  --color-surface-700:  #21262d;
+  --color-surface-600:  #30363d;
+  --color-surface-500:  #484f58;
+  --color-accent:       #58a6ff;
+  --color-accent-hover: #79b8ff;
+}
+
+/* ── Dark scrollbar ──────────────────────────────────────────────────────── */
+::-webkit-scrollbar              { width: 6px; height: 6px; }
+::-webkit-scrollbar-track        { background: #161b22; }
+::-webkit-scrollbar-thumb        { background: #30363d; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover  { background: #484f58; }
+
+/* ── Base reset ──────────────────────────────────────────────────────────── */
+body {
+  margin: 0;
+  padding: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  background-color: #0d1117;
+  color: #e6edf3;
+}

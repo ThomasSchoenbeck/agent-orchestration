@@ -17,6 +17,7 @@ type Config struct {
 	Routing      map[string]string         `yaml:"routing"`      // task type → role
 	Prompts      map[string]string         `yaml:"prompts"`
 	ContextRules map[string]ContextRule    `yaml:"context_rules"`
+	Pricing      map[string]ModelPricing   `yaml:"pricing"`      // model → pricing (Phase 4)
 	Server       ServerConfig              `yaml:"server"`
 	Database     DatabaseConfig            `yaml:"database"`
 	Agents       AgentConfig               `yaml:"agents"`
@@ -24,11 +25,12 @@ type Config struct {
 
 // ProviderConfig defines a single LLM backend.
 type ProviderConfig struct {
-	Name    string `yaml:"name"`
-	Type    string `yaml:"type"`    // openai_compatible | anthropic | ollama | azure
-	BaseURL string `yaml:"base_url"`
-	APIKey  string `yaml:"api_key"`
-	Model   string `yaml:"model"`
+	Name       string `yaml:"name"`
+	Type       string `yaml:"type"`       // openai_compatible | anthropic | ollama | azure
+	BaseURL    string `yaml:"base_url"`
+	APIKey     string `yaml:"api_key"`
+	Model      string `yaml:"model"`
+	Deployment string `yaml:"deployment"` // Azure OpenAI deployment name
 }
 
 // ModelConfig names a provider+model combination and assigns it roles.
@@ -60,9 +62,18 @@ type DatabaseConfig struct {
 
 // AgentConfig holds agent timing defaults.
 type AgentConfig struct {
-	HeartbeatIntervalSec int `yaml:"heartbeat_interval_sec"`
-	TaskPollIntervalSec  int `yaml:"task_poll_interval_sec"`
-	TaskTimeoutSec       int `yaml:"task_timeout_sec"`
+	HeartbeatIntervalSec    int    `yaml:"heartbeat_interval_sec"`
+	TaskPollIntervalSec     int    `yaml:"task_poll_interval_sec"`
+	TaskTimeoutSec          int    `yaml:"task_timeout_sec"`
+	MaxRetries              int    `yaml:"max_retries"`               // max LLM call retries (Phase 4)
+	FallbackProvider        string `yaml:"fallback_provider"`         // provider name to fall back to (Phase 4)
+	CircuitBreakerThreshold int    `yaml:"circuit_breaker_threshold"` // failures before opening circuit (Phase 4)
+}
+
+// ModelPricing holds per-model cost config (USD per 1M tokens).
+type ModelPricing struct {
+	InputPerMillion  float64 `yaml:"input_per_million"`
+	OutputPerMillion float64 `yaml:"output_per_million"`
 }
 
 // Load reads a YAML config file at path, expands environment variables, and validates it.
@@ -165,6 +176,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Agents.TaskTimeoutSec == 0 {
 		c.Agents.TaskTimeoutSec = DefaultTaskTimeoutSec
+	}
+	if c.Agents.MaxRetries == 0 {
+		c.Agents.MaxRetries = DefaultMaxRetries
+	}
+	if c.Agents.CircuitBreakerThreshold == 0 {
+		c.Agents.CircuitBreakerThreshold = DefaultCircuitBreakerThreshold
 	}
 }
 
