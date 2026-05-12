@@ -1,7 +1,17 @@
 package db
 
-// migrate creates all tables and indexes if they do not already exist.
+import "fmt"
+
+// migrate creates all tables and runs incremental column migrations.
 func (d *Database) migrate() error {
+	if err := d.migrateSchema(); err != nil {
+		return err
+	}
+	return d.applyColumnMigrations()
+}
+
+// migrateSchema creates all base tables and indexes (idempotent).
+func (d *Database) migrateSchema() error {
 	schema := `
 -- Projects table
 CREATE TABLE IF NOT EXISTS projects (
@@ -115,6 +125,25 @@ CREATE TABLE IF NOT EXISTS _schema_migrations (
     applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Agent Role Definitions table
+CREATE TABLE IF NOT EXISTS agent_role_definitions (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE,
+    label           TEXT NOT NULL DEFAULT '',
+    description     TEXT NOT NULL DEFAULT '',
+    provider_id     TEXT,
+    model_override  TEXT NOT NULL DEFAULT '',
+    system_prompt   TEXT NOT NULL DEFAULT '',
+    context_include TEXT NOT NULL DEFAULT '[]',
+    context_exclude TEXT NOT NULL DEFAULT '[]',
+    task_types      TEXT NOT NULL DEFAULT '[]',
+    temperature     REAL NOT NULL DEFAULT 0.7,
+    max_tokens      INTEGER NOT NULL DEFAULT 4096,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_agent_status   ON tasks(assigned_agent_id, status);
@@ -131,4 +160,43 @@ CREATE INDEX IF NOT EXISTS idx_metrics_agent        ON metrics(agent_id);
 
 	_, err := d.db.Exec(schema)
 	return err
+}
+
+// applyColumnMigrations runs named ALTER TABLE migrations exactly once,
+// recording each in _schema_migrations so they are never re-applied.
+func (d *Database) applyColumnMigrations() error {
+	migrations := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "add_git_url_to_projects",
+			sql:  "ALTER TABLE projects ADD COLUMN git_url TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			name: "add_enabled_to_providers",
+			sql:  "ALTER TABLE providers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
+		},
+	}
+
+	for _, m := range migrations {
+		var count int
+		if err := d.db.QueryRow(
+			"SELECT COUNT(*) FROM _schema_migrations WHERE name = ?", m.name,
+		).Scan(&count); err != nil {
+			return fmt.Errorf("checking migration %q: %w", m.name, err)
+		}
+		if count > 0 {
+			continue
+		}
+		if _, err := d.db.Exec(m.sql); err != nil {
+			return fmt.Errorf("applying migration %q: %w", m.name, err)
+		}
+		if _, err := d.db.Exec(
+			"INSERT INTO _schema_migrations (name) VALUES (?)", m.name,
+		); err != nil {
+			return fmt.Errorf("recording migration %q: %w", m.name, err)
+		}
+	}
+	return nil
 }

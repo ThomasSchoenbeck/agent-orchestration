@@ -11,11 +11,12 @@ type Project struct {
 	ID          string                 `json:"id"`
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
-	RepoPath    string                 `json:"repo_path"`
-	Status      string                 `json:"status"` // planned | in_progress | completed | failed
+	RepoPath    string                 `json:"repo_path"` // local filesystem path
+	GitURL      string                 `json:"git_url"`   // git remote URL
+	Status      string                 `json:"status"`    // planned | in_progress | completed | failed
 	Config      map[string]interface{} `json:"config"`
 	CreatedAt   time.Time              `json:"created_at"`
-	UpdatedAt   time.Time              `json:"updated_at"`
+	UpdatedAt   time.Time             `json:"updated_at"`
 }
 
 // --- Task ---
@@ -69,10 +70,31 @@ type Provider struct {
 	BaseURL      string                 `json:"base_url"`
 	ModelName    string                 `json:"model_name"`
 	APIKey       string                 `json:"api_key,omitempty"`
+	Enabled      bool                   `json:"enabled"`
 	Capabilities []string               `json:"capabilities"`
 	Config       map[string]interface{} `json:"config"`
 	CreatedAt    time.Time              `json:"created_at"`
 	UpdatedAt    time.Time              `json:"updated_at"`
+}
+
+// --- Agent Role Definition ---
+
+type RoleDefinition struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`           // slug, e.g. "worker"
+	Label          string    `json:"label"`          // display name
+	Description    string    `json:"description"`
+	ProviderID     string    `json:"provider_id,omitempty"`
+	ModelOverride  string    `json:"model_override"` // empty = use provider default
+	SystemPrompt   string    `json:"system_prompt"`
+	ContextInclude []string  `json:"context_include"`
+	ContextExclude []string  `json:"context_exclude"`
+	TaskTypes      []string  `json:"task_types"` // task types routed to this role
+	Temperature    float64   `json:"temperature"`
+	MaxTokens      int       `json:"max_tokens"`
+	Enabled        bool      `json:"enabled"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // --- Context ---

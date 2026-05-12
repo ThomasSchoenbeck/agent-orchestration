@@ -1,15 +1,24 @@
 import { writable, derived } from 'svelte/store'
 
 // ── Current page (hash router) ───────────────────────────────────────────────
+// Route format: #/<page>[/<param1>[/<param2>...]]
+// $router = { page: string, params: string[] }
 function createRouter() {
-  const getPage = () => window.location.hash.replace(/^#\/?/, '') || 'projects'
-  const { subscribe, set } = writable(getPage())
+  function parse() {
+    const raw = window.location.hash.replace(/^#\/?/, '') || 'projects'
+    const [page, ...params] = raw.split('/')
+    return { page: page || 'projects', params }
+  }
 
-  window.addEventListener('hashchange', () => set(getPage()))
+  const { subscribe, set } = writable(parse())
+  window.addEventListener('hashchange', () => set(parse()))
 
   return {
     subscribe,
+    /** Navigate to a top-level page */
     go: (page) => { window.location.hash = '#/' + page },
+    /** Navigate to a page with additional path segments */
+    push: (...segments) => { window.location.hash = '#/' + segments.join('/') },
   }
 }
 export const router = createRouter()

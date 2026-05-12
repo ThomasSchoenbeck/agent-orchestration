@@ -1,13 +1,13 @@
 <script>
   import { onMount } from 'svelte'
   import { listProjects, createProject, deleteProject } from '../lib/api.js'
-  import { toasts } from '../lib/stores.js'
+  import { router, toasts } from '../lib/stores.js'
 
   // ── Svelte 5 runes ────────────────────────────────────────────────────────
   let projects = $state([])
   let loading  = $state(false)
   let showForm = $state(false)
-  let form     = $state({ name: '', description: '' })
+  let form     = $state({ name: '', description: '', repo_path: '', git_url: '' })
 
   // ── Data loading ──────────────────────────────────────────────────────────
   async function load() {
@@ -26,9 +26,14 @@
   async function submit() {
     if (!form.name.trim()) return
     try {
-      await createProject({ name: form.name.trim(), description: form.description.trim() })
+      await createProject({
+        name:        form.name.trim(),
+        description: form.description.trim(),
+        repo_path:   form.repo_path.trim(),
+        git_url:     form.git_url.trim(),
+      })
       toasts.success('Project created')
-      form     = { name: '', description: '' }
+      form     = { name: '', description: '', repo_path: '', git_url: '' }
       showForm = false
       await load()
     } catch (e) {
@@ -37,7 +42,8 @@
   }
 
   // ── Delete ────────────────────────────────────────────────────────────────
-  async function remove(id) {
+  async function remove(e, id) {
+    e.stopPropagation()
     if (!confirm('Delete this project?')) return
     try {
       await deleteProject(id)
@@ -81,6 +87,20 @@
         rows="2"
         bind:value={form.description}
       ></textarea>
+      <div class="grid grid-cols-2 gap-3">
+        <input
+          class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm text-gray-200
+                 font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
+          placeholder="Local path (optional)"
+          bind:value={form.repo_path}
+        />
+        <input
+          class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm text-gray-200
+                 font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
+          placeholder="Git remote URL (optional)"
+          bind:value={form.git_url}
+        />
+      </div>
       <button
         type="submit"
         class="self-end px-4 py-1.5 bg-accent hover:bg-accent-hover text-white text-sm rounded transition-colors"
@@ -97,21 +117,38 @@
   {:else}
     <div class="flex flex-col gap-3">
       {#each projects as p (p.id)}
-        <div class="p-4 bg-surface-800 rounded border border-surface-600 hover:border-surface-500 transition-colors">
-          <div class="flex items-start justify-between gap-4">
-            <div class="flex-1 min-w-0">
-              <div class="font-medium text-gray-100 truncate">{p.name}</div>
-              {#if p.description}
-                <div class="text-sm text-gray-400 mt-1 line-clamp-2">{p.description}</div>
-              {/if}
-              <div class="text-xs text-gray-600 mt-2 font-mono">{p.id}</div>
+        <!-- Card: clickable area + separate delete button, no nested <button> -->
+        <div class="flex items-stretch bg-surface-800 rounded border border-surface-600
+                    hover:border-accent transition-colors">
+          <!-- Clickable main area -->
+          <div
+            role="button"
+            tabindex="0"
+            class="flex-1 p-4 cursor-pointer min-w-0"
+            onclick={() => router.push('projects', p.id)}
+            onkeydown={(e) => e.key === 'Enter' && router.push('projects', p.id)}
+          >
+            <div class="flex items-center gap-2 flex-wrap mb-1">
+              <span class="font-medium text-gray-100">{p.name}</span>
+              <span class="text-xs px-1.5 py-0.5 rounded bg-surface-700 text-gray-400">
+                {p.status}
+              </span>
             </div>
+            {#if p.description}
+              <div class="text-sm text-gray-400 line-clamp-2">{p.description}</div>
+            {/if}
+            <div class="flex gap-3 mt-2 flex-wrap text-xs text-gray-600 font-mono">
+              {#if p.repo_path}<span>📁 {p.repo_path}</span>{/if}
+              {#if p.git_url}<span>🔗 {p.git_url}</span>{/if}
+              <span>{p.id}</span>
+            </div>
+          </div>
+          <!-- Delete button: sibling, not child, of the clickable div -->
+          <div class="flex items-center px-4 border-l border-surface-600">
             <button
-              class="text-xs text-red-400 hover:text-red-300 transition-colors shrink-0"
-              onclick={() => remove(p.id)}
-            >
-              Delete
-            </button>
+              class="text-xs text-red-400 hover:text-red-300 transition-colors"
+              onclick={(e) => remove(e, p.id)}
+            >Delete</button>
           </div>
         </div>
       {/each}

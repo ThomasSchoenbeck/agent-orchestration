@@ -34,11 +34,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // New creates a fully wired Server ready to be started.
 func New(cfg *config.Config, database *db.Database, llmReg *llm.Registry) *Server {
+	rtr := router.New(cfg, llmReg)
+	if err := rtr.LoadFromDB(database); err != nil {
+		log.Printf("server: router.LoadFromDB: %v", err)
+	}
 	s := &Server{
 		cfg:    cfg,
 		db:     database,
 		llmReg: llmReg,
-		router: router.New(cfg, llmReg),
+		router: rtr,
 		log:    logging.New(database, "", "", ""),
 		mux:    http.NewServeMux(),
 	}

@@ -7,6 +7,14 @@ import userEvent from '@testing-library/user-event'
 import Tasks from '../pages/Tasks.svelte'
 
 const PROJECTS = [{ id: 'proj1', name: 'MyProject' }]
+const TASK_TYPES = [
+  { value: 'implement', label: 'Implement', description: 'Write code' },
+  { value: 'review',    label: 'Review',    description: 'Review code' },
+]
+const TASK_ROLES = [
+  { value: 'worker',   label: 'Worker',   description: 'Does the work' },
+  { value: 'reviewer', label: 'Reviewer', description: 'Reviews the work' },
+]
 const TASKS = [
   {
     id: 't1', type: 'implement', role: 'worker', status: 'pending', priority: 5,
@@ -33,9 +41,10 @@ function setupFetch(...responses) {
   }))
 }
 
-// Default: tasks + projects on initial load
+// Default: four parallel responses for initial load() call
+// (listTasks, listProjects, getTaskTypes, getTaskRoles)
 function defaultFetch() {
-  setupFetch(TASKS, PROJECTS, TASKS, PROJECTS)
+  setupFetch(TASKS, PROJECTS, TASK_TYPES, TASK_ROLES)
 }
 
 afterEach(() => vi.unstubAllGlobals())
@@ -144,15 +153,18 @@ describe('Tasks — create form', () => {
     const user = userEvent.setup()
     render(Tasks)
     await user.click(screen.getByText('+ New Task'))
-    expect(screen.getByPlaceholderText(/Task type/i)).toBeInTheDocument()
-    expect(screen.getByPlaceholderText(/Role/i)).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: /Task type/i })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: /Role/i })).toBeInTheDocument()
   })
 
   it('posts task with all required fields', async () => {
-    // load → load projects → POST create → reload tasks → reload projects
+    // initial load: tasks + projects + task-types + task-roles (4 parallel)
+    // then POST create, then reload (4 parallel, fallback [])
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(TASKS) })
       .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(PROJECTS) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(TASK_TYPES) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(TASK_ROLES) })
       .mockResolvedValueOnce({ ok: true, status: 201, json: () => Promise.resolve({ id: 'tnew' }) })
       .mockResolvedValue    ({ ok: true, status: 200, json: () => Promise.resolve([]) })
     )
@@ -162,11 +174,11 @@ describe('Tasks — create form', () => {
     await user.click(screen.getByText('+ New Task'))
 
     // Select project
-    const projectSelect = screen.getByDisplayValue('Select project *')
-    await user.selectOptions(projectSelect, 'proj1')
+    await user.selectOptions(screen.getByDisplayValue('Select project *'), 'proj1')
 
-    await user.type(screen.getByPlaceholderText(/Task type/i), 'implement')
-    await user.type(screen.getByPlaceholderText(/Role/i), 'worker')
+    // Type and role are now <select> elements, not text inputs
+    await user.selectOptions(screen.getByRole('combobox', { name: /Task type/i }), 'implement')
+    await user.selectOptions(screen.getByRole('combobox', { name: /Role/i }), 'worker')
     await user.type(screen.getByPlaceholderText('Title'), 'New task')
 
     await user.click(screen.getByText('Create'))

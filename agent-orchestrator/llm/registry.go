@@ -76,6 +76,39 @@ func (r *Registry) InitFromConfig(cfg *config.Config) error {
 	return nil
 }
 
+// Set adds or replaces a named provider in the registry.
+func (r *Registry) Set(name string, p LLMProvider) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.providers[name] = p
+}
+
+// Remove removes a named provider from the registry.
+func (r *Registry) Remove(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.providers, name)
+}
+
+// NewFromSpec constructs an LLMProvider from raw config values without
+// requiring a database import. extra is provider-specific config
+// (e.g. {"deployment": "my-dep"} for Azure).
+func NewFromSpec(name, provType, baseURL, apiKey, model string, extra map[string]interface{}) (LLMProvider, error) {
+	switch provType {
+	case "openai_compatible":
+		return NewOpenAIProvider(name, baseURL, apiKey, model), nil
+	case "ollama":
+		return NewOllamaProvider(name, baseURL, model), nil
+	case "anthropic":
+		return NewAnthropicProvider(name, baseURL, apiKey, model), nil
+	case "azure":
+		deployment, _ := extra["deployment"].(string)
+		return NewAzureOpenAIProvider(name, baseURL, apiKey, model, deployment), nil
+	default:
+		return nil, fmt.Errorf("unknown provider type %q", provType)
+	}
+}
+
 // CloseAll closes all registered providers.
 func (r *Registry) CloseAll() {
 	r.mu.Lock()

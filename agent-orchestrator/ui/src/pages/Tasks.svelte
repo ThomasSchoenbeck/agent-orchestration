@@ -1,11 +1,13 @@
 <script>
   import { onMount } from 'svelte'
-  import { listTasks, listProjects, createTask, updateTask, deleteTask } from '../lib/api.js'
+  import { listTasks, listProjects, createTask, updateTask, deleteTask, getTaskTypes, getTaskRoles } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
 
   // ── Svelte 5 runes ────────────────────────────────────────────────────────
   let tasks         = $state([])
   let projects      = $state([])
+  let taskTypes     = $state([])
+  let taskRoles     = $state([])
   let loading       = $state(false)
   let showForm      = $state(false)
   let filterStatus  = $state('')
@@ -13,8 +15,8 @@
 
   let form = $state({
     project_id:  '',
-    type:        '',
-    role:        '',
+    type:        'implement',
+    role:        'worker',
     title:       '',
     description: '',
     priority:    5,
@@ -40,9 +42,13 @@
       const params = {}
       if (filterStatus)  params.status     = filterStatus
       if (filterProject) params.project_id = filterProject
-      const [tr, pr] = await Promise.all([listTasks(params), listProjects()])
-      tasks    = Array.isArray(tr) ? tr : (tr.tasks    ?? [])
-      projects = Array.isArray(pr) ? pr : (pr.projects ?? [])
+      const [tr, pr, tt, tr2] = await Promise.all([
+        listTasks(params), listProjects(), getTaskTypes(), getTaskRoles(),
+      ])
+      tasks     = Array.isArray(tr)  ? tr  : (tr.tasks    ?? [])
+      projects  = Array.isArray(pr)  ? pr  : (pr.projects ?? [])
+      taskTypes = Array.isArray(tt)  ? tt  : []
+      taskRoles = Array.isArray(tr2) ? tr2 : []
     } catch (e) {
       toasts.error('Failed to load: ' + e.message)
     } finally {
@@ -52,7 +58,7 @@
 
   // ── Create ────────────────────────────────────────────────────────────────
   async function submit() {
-    if (!form.type.trim() || !form.role.trim()) return
+    if (!form.type || !form.role) return
     if (!form.project_id) { toasts.error('Please select a project'); return }
     try {
       await createTask({
@@ -157,23 +163,37 @@
         <input
           class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm text-gray-200
                  placeholder-gray-500 focus:outline-none focus:border-accent"
-          placeholder="Task type (e.g. implement) *"
-          bind:value={form.type}
-          required
-        />
-        <input
-          class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm text-gray-200
-                 placeholder-gray-500 focus:outline-none focus:border-accent"
-          placeholder="Role (e.g. worker) *"
-          bind:value={form.role}
-          required
-        />
-        <input
-          class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm text-gray-200
-                 placeholder-gray-500 focus:outline-none focus:border-accent"
           placeholder="Title"
           bind:value={form.title}
         />
+        <select
+          aria-label="Task type"
+          class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm text-gray-300
+                 focus:outline-none focus:border-accent"
+          bind:value={form.type}
+          required
+        >
+          {#each taskTypes as tt}
+            <option value={tt.value} title={tt.description}>{tt.label}</option>
+          {/each}
+          {#if taskTypes.length === 0}
+            <option value="implement">Implement</option>
+          {/if}
+        </select>
+        <select
+          aria-label="Role"
+          class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm text-gray-300
+                 focus:outline-none focus:border-accent"
+          bind:value={form.role}
+          required
+        >
+          {#each taskRoles as tr}
+            <option value={tr.value} title={tr.description}>{tr.label}</option>
+          {/each}
+          {#if taskRoles.length === 0}
+            <option value="worker">Worker</option>
+          {/if}
+        </select>
       </div>
       <textarea
         class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm text-gray-200
@@ -183,8 +203,8 @@
         bind:value={form.description}
       ></textarea>
       <div class="flex items-center gap-3">
-        <label class="text-xs text-gray-400 shrink-0">Priority</label>
-        <input type="range" min="1" max="10" bind:value={form.priority} class="flex-1" />
+        <label for="task-priority" class="text-xs text-gray-400 shrink-0">Priority</label>
+        <input id="task-priority" type="range" min="1" max="10" bind:value={form.priority} class="flex-1" />
         <span class="text-xs text-gray-300 w-4 text-right">{form.priority}</span>
       </div>
       <button

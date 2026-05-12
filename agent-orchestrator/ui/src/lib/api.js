@@ -36,9 +36,13 @@ export const updateProject  = (id, d)  => put(`/api/projects/${id}`, d)
 export const deleteProject  = (id)     => del(`/api/projects/${id}`)
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
-export const listTasks  = (params = {}) => {
+export const listTasks        = (params = {}) => {
   const qs = new URLSearchParams(params).toString()
   return get(`/api/tasks${qs ? '?' + qs : ''}`)
+}
+export const listProjectTasks = (projectId, params = {}) => {
+  const qs = new URLSearchParams(params).toString()
+  return get(`/api/projects/${projectId}/tasks${qs ? '?' + qs : ''}`)
 }
 export const getTask    = (id)    => get(`/api/tasks/${id}`)
 export const createTask = (data)  => post('/api/tasks', data)
@@ -50,7 +54,22 @@ export const listAgents  = () => get('/api/agents')
 export const getAgent    = (id) => get(`/api/agents/${id}`)
 
 // ── Providers ────────────────────────────────────────────────────────────────
-export const listProviders = () => get('/api/providers')
+export const listProviders   = ()        => get('/api/providers')
+export const getProvider     = (id)      => get(`/api/providers/${id}`)
+export const createProvider  = (data)    => post('/api/providers', data)
+export const updateProvider  = (id, d)   => put(`/api/providers/${id}`, d)
+export const deleteProvider  = (id)      => del(`/api/providers/${id}`)
+export const testProvider    = (id)      => post(`/api/providers/${id}/test`)
+export const seedProviders   = ()        => post('/api/providers/seed')
+
+// ── Roles ────────────────────────────────────────────────────────────────────
+export const listRoles        = ()        => get('/api/roles')
+export const getRole          = (id)      => get(`/api/roles/${id}`)
+export const createRole       = (data)    => post('/api/roles', data)
+export const updateRole       = (id, d)   => put(`/api/roles/${id}`, d)
+export const deleteRole       = (id)      => del(`/api/roles/${id}`)
+export const seedRoles        = ()        => post('/api/roles/seed')
+export const previewRolePrompt = (id, vars) => post(`/api/roles/${id}/preview-prompt`, vars)
 
 // ── Logs ─────────────────────────────────────────────────────────────────────
 export const listLogs = (params = {}) => {
@@ -60,6 +79,10 @@ export const listLogs = (params = {}) => {
 
 // ── Metrics ──────────────────────────────────────────────────────────────────
 export const getMetrics = () => get('/api/metrics')
+
+// ── Meta (enumerations) ──────────────────────────────────────────────────────
+export const getTaskTypes = () => get('/api/meta/task-types')
+export const getTaskRoles = () => get('/api/meta/task-roles')
 
 // ── LLM Chat (one-shot, non-WS) ──────────────────────────────────────────────
 export const llmChat = (data) => post('/api/llm/chat', data)

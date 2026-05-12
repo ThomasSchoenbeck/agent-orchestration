@@ -5,9 +5,11 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"agent-orchestrator/api"
 	"agent-orchestrator/db"
+	"agent-orchestrator/llm"
 )
 
 // registerHandlers wires all routes onto the ServeMux.
@@ -29,6 +31,10 @@ func (s *Server) registerHandlers() {
 	s.mux.HandleFunc("/api/providers", s.handleProviders)
 	s.mux.HandleFunc("/api/providers/", s.handleProviderDetail)
 
+	// Roles
+	s.mux.HandleFunc("/api/roles", s.handleRoles)
+	s.mux.HandleFunc("/api/roles/", s.handleRoleDetail)
+
 	// Context
 	s.mux.HandleFunc("/api/context/save", s.handleContextSave)
 	s.mux.HandleFunc("/api/context/query", s.handleContextQuery)
@@ -38,6 +44,10 @@ func (s *Server) registerHandlers() {
 
 	// LLM chat
 	s.mux.HandleFunc("/api/llm/chat", s.handleLLMChat)
+
+	// Meta (enumerations)
+	s.mux.HandleFunc("/api/meta/task-types", s.handleMetaTaskTypes)
+	s.mux.HandleFunc("/api/meta/task-roles", s.handleMetaTaskRoles)
 
 	// Metrics
 	s.mux.HandleFunc("/api/metrics", s.handleMetrics)
@@ -83,6 +93,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			Name:        req.Name,
 			Description: req.Description,
 			RepoPath:    req.RepoPath,
+			GitURL:      req.GitURL,
 			Config:      req.Config,
 		}
 		if err := s.db.CreateProject(r.Context(), p); err != nil {
@@ -144,6 +155,9 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.RepoPath != nil {
 			p.RepoPath = *req.RepoPath
+		}
+		if req.GitURL != nil {
+			p.GitURL = *req.GitURL
 		}
 		if req.Status != nil {
 			p.Status = *req.Status
@@ -494,10 +508,14 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 		if providers == nil {
 			providers = []*db.Provider{}
 		}
+		// Strip API keys from list response.
+		for _, p := range providers {
+			p.APIKey = ""
+		}
 		api.WriteJSON(w, http.StatusOK, providers)
 
 	case http.MethodPost:
-		var p db.Provider
+		p := db.Provider{Enabled: true} // default to enabled
 		if !s.decodeJSON(w, r, &p) {
 			return
 		}
@@ -508,6 +526,12 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 		if err := s.db.CreateProvider(r.Context(), &p); err != nil {
 			s.internalError(w, err)
 			return
+		}
+		// Sync new provider into in-memory registry.
+		if p.Enabled {
+			if prov, err := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config); err == nil {
+				s.llmReg.Set(p.Name, prov)
+			}
 		}
 		p.APIKey = "" // don't echo back
 		api.WriteJSON(w, http.StatusCreated, p)
@@ -521,6 +545,27 @@ func (s *Server) handleProviderDetail(w http.ResponseWriter, r *http.Request) {
 	id := pathSegment(r.URL.Path, "/api/providers/", 0)
 	if id == "" {
 		http.NotFound(w, r)
+		return
+	}
+	sub := pathSegment(r.URL.Path, "/api/providers/", 1)
+
+	// POST /api/providers/seed
+	if id == "seed" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		s.handleProviderSeed(w, r)
+		return
+	}
+
+	// POST /api/providers/:id/test
+	if sub == "test" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		s.handleProviderTest(w, r, id)
 		return
 	}
 
@@ -540,27 +585,134 @@ func (s *Server) handleProviderDetail(w http.ResponseWriter, r *http.Request) {
 			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
 			return
 		}
+		savedKey := p.APIKey
 		if !s.decodeJSON(w, r, p) {
 			return
 		}
 		p.ID = id
+		if p.APIKey == "" {
+			p.APIKey = savedKey // preserve existing key if not supplied
+		}
 		if err := s.db.UpdateProvider(r.Context(), p); err != nil {
 			s.internalError(w, err)
 			return
+		}
+		// Sync registry: replace if enabled, remove if disabled.
+		if p.Enabled {
+			if prov, err := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config); err == nil {
+				s.llmReg.Set(p.Name, prov)
+			}
+		} else {
+			s.llmReg.Remove(p.Name)
 		}
 		p.APIKey = ""
 		api.WriteJSON(w, http.StatusOK, p)
 
 	case http.MethodDelete:
+		p, err := s.db.GetProvider(r.Context(), id)
+		if err != nil {
+			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+			return
+		}
 		if err := s.db.DeleteProvider(r.Context(), id); err != nil {
 			s.internalError(w, err)
 			return
 		}
+		s.llmReg.Remove(p.Name)
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+// handleProviderSeed imports providers from the loaded config into the DB
+// (idempotent — skips any provider whose name already exists).
+func (s *Server) handleProviderSeed(w http.ResponseWriter, r *http.Request) {
+	existing, err := s.db.ListProviders(r.Context())
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	existingNames := make(map[string]struct{}, len(existing))
+	for _, p := range existing {
+		existingNames[p.Name] = struct{}{}
+	}
+
+	var toSeed []*db.Provider
+	for _, pcfg := range s.cfg.Providers {
+		if _, ok := existingNames[pcfg.Name]; ok {
+			continue
+		}
+		toSeed = append(toSeed, &db.Provider{
+			Name:      pcfg.Name,
+			Type:      pcfg.Type,
+			BaseURL:   pcfg.BaseURL,
+			APIKey:    pcfg.APIKey,
+			ModelName: pcfg.Model,
+			Enabled:   true,
+		})
+	}
+
+	n, err := s.db.SeedProviders(r.Context(), toSeed)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+
+	// Load any newly seeded providers into the in-memory registry.
+	if n > 0 {
+		if all, err := s.db.ListProviders(r.Context()); err == nil {
+			for _, p := range all {
+				if p.Enabled {
+					if prov, err := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config); err == nil {
+						s.llmReg.Set(p.Name, prov)
+					}
+				}
+			}
+		}
+	}
+
+	log.Printf("provider seed: inserted %d new provider(s)", n)
+	api.WriteJSON(w, http.StatusOK, map[string]int{"seeded": n})
+}
+
+// handleProviderTest instantiates a provider on-the-fly and makes a minimal
+// "Say hi" chat request to verify the connection.
+func (s *Server) handleProviderTest(w http.ResponseWriter, r *http.Request, id string) {
+	p, err := s.db.GetProvider(r.Context(), id)
+	if err != nil {
+		api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+		return
+	}
+
+	prov, err := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config)
+	if err != nil {
+		api.WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"ok": false, "latency_ms": 0, "error": err.Error(),
+		})
+		return
+	}
+	defer prov.Close()
+
+	start := time.Now()
+	resp, chatErr := prov.Chat(r.Context(), llm.ChatRequest{
+		Model:     p.ModelName,
+		Messages:  []llm.Message{{Role: "user", Content: "Say hi"}},
+		MaxTokens: 10,
+	})
+	latencyMs := time.Since(start).Milliseconds()
+
+	if chatErr != nil {
+		api.WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"ok": false, "latency_ms": latencyMs, "error": chatErr.Error(),
+		})
+		return
+	}
+
+	api.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"ok": true, "latency_ms": latencyMs, "reply": resp.Content,
+	})
 }
 
 // =========================================================================

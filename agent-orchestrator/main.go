@@ -90,11 +90,87 @@ func runServer(args []string) error {
 	}
 	defer func() { _ = database.Close() }()
 
+	// #55b — seed providers from config on first run
+	startCtx := context.Background()
+	if count, _ := database.CountProviders(startCtx); count == 0 && len(cfg.Providers) > 0 {
+		var toSeed []*db.Provider
+		for _, pcfg := range cfg.Providers {
+			toSeed = append(toSeed, &db.Provider{
+				Name:      pcfg.Name,
+				Type:      pcfg.Type,
+				BaseURL:   pcfg.BaseURL,
+				APIKey:    pcfg.APIKey,
+				ModelName: pcfg.Model,
+				Enabled:   true,
+			})
+		}
+		if n, serr := database.SeedProviders(startCtx, toSeed); serr != nil {
+			log.Printf("warning: seed providers: %v", serr)
+		} else if n > 0 {
+			log.Printf("seeded %d providers from config into database", n)
+		}
+	}
+
+	// #55c — init LLM registry from DB; fall back to config if DB is empty
 	llmReg := llm.NewRegistry()
-	if err := llmReg.InitFromConfig(cfg); err != nil {
-		return fmt.Errorf("init LLM providers: %w", err)
+	if dbProviders, perr := database.ListProviders(startCtx); perr == nil && len(dbProviders) > 0 {
+		for _, p := range dbProviders {
+			if !p.Enabled {
+				continue
+			}
+			prov, perr2 := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config)
+			if perr2 != nil {
+				log.Printf("warning: init provider %q: %v", p.Name, perr2)
+				continue
+			}
+			llmReg.Set(p.Name, prov)
+		}
+		log.Printf("loaded %d LLM provider(s) from database", len(dbProviders))
+	} else {
+		log.Printf("no DB providers found — loading from config")
+		if err := llmReg.InitFromConfig(cfg); err != nil {
+			return fmt.Errorf("init LLM providers: %w", err)
+		}
 	}
 	defer llmReg.CloseAll()
+
+	// Seed role definitions from config on first run.
+	if count, _ := database.CountRoleDefinitions(startCtx); count == 0 && len(cfg.Roles) > 0 {
+		dbProvs, _ := database.ListProviders(startCtx)
+		provByName := make(map[string]*db.Provider, len(dbProvs))
+		for _, p := range dbProvs {
+			provByName[p.Name] = p
+		}
+		// Inverse routing: role → task types
+		roleTaskTypes := make(map[string][]string)
+		for tt, role := range cfg.Routing {
+			roleTaskTypes[role] = append(roleTaskTypes[role], tt)
+		}
+		var rolesToSeed []*db.RoleDefinition
+		for roleName, modelName := range cfg.Roles {
+			label := strings.ToUpper(roleName[:1]) + roleName[1:]
+			rd := &db.RoleDefinition{
+				Name:        roleName,
+				Label:       label,
+				TaskTypes:   roleTaskTypes[roleName],
+				Enabled:     true,
+				Temperature: 0.7,
+				MaxTokens:   4096,
+			}
+			if model, merr := cfg.ModelByName(modelName); merr == nil {
+				if prov, ok := provByName[model.Provider]; ok {
+					rd.ProviderID = prov.ID
+					rd.ModelOverride = model.Model
+				}
+			}
+			rolesToSeed = append(rolesToSeed, rd)
+		}
+		if n, serr := database.SeedRoleDefinitions(startCtx, rolesToSeed); serr != nil {
+			log.Printf("warning: seed role definitions: %v", serr)
+		} else if n > 0 {
+			log.Printf("seeded %d role definition(s) from config", n)
+		}
+	}
 
 	srv := server.New(cfg, database, llmReg)
 

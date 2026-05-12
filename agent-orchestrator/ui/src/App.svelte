@@ -1,16 +1,19 @@
 <script>
   import { router, toasts } from './lib/stores.js'
-  import Projects  from './pages/Projects.svelte'
-  import Tasks     from './pages/Tasks.svelte'
-  import Agents    from './pages/Agents.svelte'
-  import Providers from './pages/Providers.svelte'
-  import Logs      from './pages/Logs.svelte'
-  import Chat      from './pages/Chat.svelte'
+  import Projects      from './pages/Projects.svelte'
+  import ProjectDetail from './pages/ProjectDetail.svelte'
+  import Tasks         from './pages/Tasks.svelte'
+  import Agents        from './pages/Agents.svelte'
+  import Roles         from './pages/Roles.svelte'
+  import Providers     from './pages/Providers.svelte'
+  import Logs          from './pages/Logs.svelte'
+  import Chat          from './pages/Chat.svelte'
 
   const pages = [
     { id: 'projects',  label: 'Projects',  icon: '📁' },
     { id: 'tasks',     label: 'Tasks',     icon: '✅' },
     { id: 'agents',    label: 'Agents',    icon: '🤖' },
+    { id: 'roles',     label: 'Roles',     icon: '🎭' },
     { id: 'providers', label: 'Providers', icon: '🔌' },
     { id: 'logs',      label: 'Logs',      icon: '📋' },
     { id: 'chat',      label: 'Chat',      icon: '💬' },
@@ -29,7 +32,7 @@
         <li>
           <button
             class="w-full text-left px-4 py-2 flex items-center gap-3 text-sm transition-colors
-              {$router === p.id
+              {$router.page === p.id
                 ? 'bg-surface-700 text-accent font-medium'
                 : 'text-gray-400 hover:bg-surface-700 hover:text-gray-200'}"
             onclick={() => router.go(p.id)}
@@ -47,17 +50,21 @@
 
   <!-- Main content -->
   <main class="flex-1 overflow-hidden flex flex-col">
-    {#if $router === 'projects'}
+    {#if $router.page === 'projects' && $router.params.length > 0}
+      <ProjectDetail projectId={$router.params[0]} />
+    {:else if $router.page === 'projects'}
       <Projects />
-    {:else if $router === 'tasks'}
+    {:else if $router.page === 'tasks'}
       <Tasks />
-    {:else if $router === 'agents'}
+    {:else if $router.page === 'agents'}
       <Agents />
-    {:else if $router === 'providers'}
+    {:else if $router.page === 'roles'}
+      <Roles />
+    {:else if $router.page === 'providers'}
       <Providers />
-    {:else if $router === 'logs'}
+    {:else if $router.page === 'logs'}
       <Logs />
-    {:else if $router === 'chat'}
+    {:else if $router.page === 'chat'}
       <Chat />
     {:else}
       <div class="flex-1 flex items-center justify-center text-gray-500">Page not found</div>

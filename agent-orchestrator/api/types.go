@@ -5,7 +5,8 @@ package api
 type CreateProjectRequest struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
-	RepoPath    string                 `json:"repo_path"`
+	RepoPath    string                 `json:"repo_path"` // local filesystem path
+	GitURL      string                 `json:"git_url"`   // git remote URL
 	Config      map[string]interface{} `json:"config"`
 }
 
@@ -13,6 +14,7 @@ type UpdateProjectRequest struct {
 	Name        *string                `json:"name,omitempty"`
 	Description *string                `json:"description,omitempty"`
 	RepoPath    *string                `json:"repo_path,omitempty"`
+	GitURL      *string                `json:"git_url,omitempty"`
 	Status      *string                `json:"status,omitempty"`
 	Config      map[string]interface{} `json:"config,omitempty"`
 }

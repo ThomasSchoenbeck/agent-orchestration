@@ -21,13 +21,13 @@ describe('router store', () => {
   it('defaults to "projects" when hash is empty', async () => {
     window.location.hash = ''
     const { router } = await import('../lib/stores.js')
-    expect(get(router)).toBe('projects')
+    expect(get(router)).toMatchObject({ page: 'projects', params: [] })
   })
 
   it('reads page from hash on init', async () => {
     window.location.hash = '#/tasks'
     const { router } = await import('../lib/stores.js')
-    expect(get(router)).toBe('tasks')
+    expect(get(router)).toMatchObject({ page: 'tasks', params: [] })
   })
 
   it('router.go() sets the hash and updates the store', async () => {
@@ -40,7 +40,7 @@ describe('router store', () => {
     const { router } = await import('../lib/stores.js')
     window.location.hash = '#/logs'
     window.dispatchEvent(new HashChangeEvent('hashchange'))
-    expect(get(router)).toBe('logs')
+    expect(get(router)).toMatchObject({ page: 'logs' })
   })
 })
 

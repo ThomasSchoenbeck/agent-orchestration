@@ -10,7 +10,7 @@ import (
 // ListProjects returns all projects ordered by created_at desc.
 func (d *Database) ListProjects(ctx context.Context) ([]*Project, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT id, name, description, repo_path, status, config, created_at, updated_at
+		`SELECT id, name, description, repo_path, git_url, status, config, created_at, updated_at
 		 FROM projects ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -22,7 +22,7 @@ func (d *Database) ListProjects(ctx context.Context) ([]*Project, error) {
 // GetProject retrieves a project by ID.
 func (d *Database) GetProject(ctx context.Context, id string) (*Project, error) {
 	row := d.db.QueryRowContext(ctx,
-		`SELECT id, name, description, repo_path, status, config, created_at, updated_at
+		`SELECT id, name, description, repo_path, git_url, status, config, created_at, updated_at
 		 FROM projects WHERE id = ?`, id)
 	p, err := scanProject(row)
 	if err == sql.ErrNoRows {
@@ -44,9 +44,9 @@ func (d *Database) CreateProject(ctx context.Context, p *Project) error {
 	}
 
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO projects (id, name, description, repo_path, status, config, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.ID, p.Name, p.Description, p.RepoPath, p.Status,
+		`INSERT INTO projects (id, name, description, repo_path, git_url, status, config, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.Name, p.Description, p.RepoPath, p.GitURL, p.Status,
 		marshalJSON(p.Config), p.CreatedAt, p.UpdatedAt,
 	)
 	return err
@@ -56,9 +56,9 @@ func (d *Database) CreateProject(ctx context.Context, p *Project) error {
 func (d *Database) UpdateProject(ctx context.Context, p *Project) error {
 	p.UpdatedAt = time.Now().UTC()
 	_, err := d.db.ExecContext(ctx,
-		`UPDATE projects SET name=?, description=?, repo_path=?, status=?, config=?, updated_at=?
+		`UPDATE projects SET name=?, description=?, repo_path=?, git_url=?, status=?, config=?, updated_at=?
 		 WHERE id=?`,
-		p.Name, p.Description, p.RepoPath, p.Status,
+		p.Name, p.Description, p.RepoPath, p.GitURL, p.Status,
 		marshalJSON(p.Config), p.UpdatedAt, p.ID,
 	)
 	return err
@@ -76,7 +76,7 @@ func scanProject(row *sql.Row) (*Project, error) {
 	var p Project
 	var configJSON string
 	var createdAt, updatedAt string
-	err := row.Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.Status,
+	err := row.Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.GitURL, &p.Status,
 		&configJSON, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
@@ -92,7 +92,7 @@ func scanProjects(rows *sql.Rows) ([]*Project, error) {
 	for rows.Next() {
 		var p Project
 		var configJSON, createdAt, updatedAt string
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.Status,
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.GitURL, &p.Status,
 			&configJSON, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
