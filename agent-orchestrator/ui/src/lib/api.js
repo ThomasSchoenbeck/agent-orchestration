@@ -34,6 +34,7 @@ export const getProject     = (id)     => get(`/api/projects/${id}`)
 export const createProject  = (data)   => post('/api/projects', data)
 export const updateProject  = (id, d)  => put(`/api/projects/${id}`, d)
 export const deleteProject  = (id)     => del(`/api/projects/${id}`)
+export const projectChat = (projectId, data) => post(`/api/projects/${projectId}/chat`, data)
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
 export const listTasks        = (params = {}) => {
@@ -84,6 +85,23 @@ export const getMetrics = () => get('/api/metrics')
 // ── Meta (enumerations) ──────────────────────────────────────────────────────
 export const getTaskTypes = () => get('/api/meta/task-types')
 export const getTaskRoles = () => get('/api/meta/task-roles')
+
+// ── Conversations ───────────────────────────────────────────────────────────
+export const listConversations = (params = {}) => {
+  const qs = new URLSearchParams(params).toString()
+  return get(`/api/conversations${qs ? '?' + qs : ''}`)
+}
+export const getConversation = (id, messageLimit = 50) =>
+  get(`/api/conversations/${id}?message_limit=${messageLimit}`)
+export const createConversation = (data) => post('/api/conversations', data)
+export const updateConversation = (id, d) => put(`/api/conversations/${id}`, d)
+export const deleteConversation = (id) => del(`/api/conversations/${id}`)
+export const listMessages = (conversationId, params = {}) => {
+  const qs = new URLSearchParams(params).toString()
+  return get(`/api/conversations/${conversationId}/messages${qs ? '?' + qs : ''}`)
+}
+export const addMessage = (conversationId, data) =>
+  post(`/api/conversations/${conversationId}/messages`, data)
 
 // ── LLM Chat (one-shot, non-WS) ──────────────────────────────────────────────
 export const llmChat = (data) => post('/api/llm/chat', data)

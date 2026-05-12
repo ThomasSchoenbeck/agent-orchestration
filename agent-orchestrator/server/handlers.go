@@ -45,6 +45,10 @@ func (s *Server) registerHandlers() {
 	// LLM chat
 	s.mux.HandleFunc("/api/llm/chat", s.handleLLMChat)
 
+	// Conversations
+	s.mux.HandleFunc("/api/conversations", s.handleConversations)
+	s.mux.HandleFunc("/api/conversations/", s.handleConversationDetail)
+
 	// Meta (enumerations)
 	s.mux.HandleFunc("/api/meta/task-types", s.handleMetaTaskTypes)
 	s.mux.HandleFunc("/api/meta/task-roles", s.handleMetaTaskRoles)
@@ -114,8 +118,10 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle sub-resource: /api/projects/{id}/tasks
-	if sub := pathSegment(r.URL.Path, "/api/projects/", 1); sub == "tasks" {
+	// Handle sub-resources
+	sub := pathSegment(r.URL.Path, "/api/projects/", 1)
+
+	if sub == "tasks" {
 		tasks, err := s.db.ListTasks(r.Context(), db.TaskFilters{ProjectID: id})
 		if err != nil {
 			s.internalError(w, err)
@@ -125,6 +131,11 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 			tasks = []*db.Task{}
 		}
 		api.WriteJSON(w, http.StatusOK, tasks)
+		return
+	}
+
+	if sub == "chat" {
+		s.handleProjectChat(w, r, id)
 		return
 	}
 

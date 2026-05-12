@@ -200,11 +200,21 @@ describe('Tasks — create form', () => {
 // ── Queue action ──────────────────────────────────────────────────────────────
 describe('Tasks — queue action', () => {
   it('PUTs status=queued when Queue is clicked', async () => {
+    // Initial load: tasks + projects + task-types + task-roles
+    // Then: PUT update, then: reload (4 parallel calls again)
     vi.stubGlobal('fetch', vi.fn()
+      // Initial load
       .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(TASKS) })
       .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(PROJECTS) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(TASK_TYPES) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(TASK_ROLES) })
+      // PUT /api/tasks/t1
       .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...TASKS[0], status: 'queued' }) })
-      .mockResolvedValue    ({ ok: true, status: 200, json: () => Promise.resolve([]) })
+      // Reload after update
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(TASKS) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(PROJECTS) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(TASK_TYPES) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(TASK_ROLES) })
     )
     const user = userEvent.setup()
     render(Tasks)

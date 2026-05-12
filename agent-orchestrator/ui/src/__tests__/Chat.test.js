@@ -5,11 +5,28 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
-import { MockWebSocket } from './setup.js'
+import { MockWebSocket, mockFetch } from './setup.js'
 import Chat from '../pages/Chat.svelte'
+
+const MOCK_CONVERSATION = {
+  id: 'conv1', title: 'Test Conversation', provider_id: 'provider1',
+  created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
+}
+
+const MOCK_PROVIDER = {
+  id: 'provider1', name: 'Test Provider', enabled: true,
+}
 
 beforeEach(() => {
   MockWebSocket.instances = []
+  // Mock API calls: listConversations returns one conversation, listProviders returns one provider,
+  // getConversation returns the conversation with empty messages
+  vi.stubGlobal('fetch', vi.fn()
+    .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve([MOCK_CONVERSATION]) })
+    .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve([MOCK_PROVIDER]) })
+    .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ conversation: MOCK_CONVERSATION, messages: [] }) })
+    .mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}) })
+  )
 })
 afterEach(() => vi.clearAllMocks())
 
@@ -47,19 +64,22 @@ describe('Chat — rendering', () => {
     )
   })
 
-  it('shows empty-state prompt before any messages', () => {
+  it('shows empty-state prompt before any messages', async () => {
     render(Chat)
-    expect(screen.getByText(/Send a message/i)).toBeInTheDocument()
+    await waitFor(() => screen.getByText(/Start a conversation with the orchestrator/i))
+    expect(screen.getByText(/Start a conversation with the orchestrator/i)).toBeInTheDocument()
   })
 
-  it('Send button is disabled when disconnected', () => {
+  it('Send button is disabled when disconnected', async () => {
     render(Chat)
+    await waitFor(() => screen.getByPlaceholderText(/Message/i))
     const btn = screen.getByRole('button', { name: /send/i })
     expect(btn).toBeDisabled()
   })
 
   it('Send button is disabled when input is empty', async () => {
     render(Chat)
+    await waitFor(() => screen.getByPlaceholderText(/Message/i))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     const btn = screen.getByRole('button', { name: /send/i })
@@ -69,6 +89,7 @@ describe('Chat — rendering', () => {
   it('Send button is enabled when connected and input has text', async () => {
     const user = userEvent.setup()
     render(Chat)
+    await waitFor(() => screen.getByPlaceholderText(/Message/i))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     await user.type(screen.getByPlaceholderText(/Message/i), 'Hello')
@@ -81,13 +102,17 @@ describe('Chat — sending messages', () => {
   it('sends user message to the WebSocket', async () => {
     const user = userEvent.setup()
     render(Chat)
+    await waitFor(() => screen.getByPlaceholderText(/Message/i))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     await user.type(screen.getByPlaceholderText(/Message/i), 'Hello world')
     await user.click(screen.getByRole('button', { name: /send/i }))
 
     expect(getSocket().sent).toHaveLength(1)
-    expect(JSON.parse(getSocket().sent[0])).toMatchObject({
+    // Parse sent data (it's a stringified JSON object)
+    const sent = getSocket().sent[0]
+    const parsed = typeof sent === 'string' ? JSON.parse(sent) : sent
+    expect(parsed).toMatchObject({
       role: 'user', content: 'Hello world',
     })
   })
@@ -95,6 +120,7 @@ describe('Chat — sending messages', () => {
   it('appends user message to the chat log', async () => {
     const user = userEvent.setup()
     render(Chat)
+    await waitFor(() => screen.getByPlaceholderText(/Message/i))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     await user.type(screen.getByPlaceholderText(/Message/i), 'Ping')
@@ -105,6 +131,7 @@ describe('Chat — sending messages', () => {
   it('clears the input after sending', async () => {
     const user = userEvent.setup()
     render(Chat)
+    await waitFor(() => screen.getByPlaceholderText(/Message/i))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     const textarea = screen.getByPlaceholderText(/Message/i)
@@ -116,6 +143,7 @@ describe('Chat — sending messages', () => {
   it('sends via Enter key', async () => {
     const user = userEvent.setup()
     render(Chat)
+    await waitFor(() => screen.getByPlaceholderText(/Message/i))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     await user.type(screen.getByPlaceholderText(/Message/i), 'Hi{Enter}')
@@ -125,6 +153,7 @@ describe('Chat — sending messages', () => {
   it('does NOT send via Shift+Enter (newline)', async () => {
     const user = userEvent.setup()
     render(Chat)
+    await waitFor(() => screen.getByPlaceholderText(/Message/i))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     await user.type(screen.getByPlaceholderText(/Message/i), 'line1{Shift>}{Enter}{/Shift}line2')
@@ -136,6 +165,7 @@ describe('Chat — sending messages', () => {
 describe('Chat — receiving messages', () => {
   it('displays assistant message from JSON payload', async () => {
     render(Chat)
+    await waitFor(() => screen.getByPlaceholderText(/Message/i))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     getSocket().simulateMessage({ role: 'assistant', content: 'Hello there!' })
@@ -146,6 +176,7 @@ describe('Chat — receiving messages', () => {
 
   it('displays assistant message from plain-string response', async () => {
     render(Chat)
+    await waitFor(() => screen.getByPlaceholderText(/Message/i))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     // Plain string — not JSON
@@ -158,6 +189,7 @@ describe('Chat — receiving messages', () => {
   it('clears sending indicator when response arrives', async () => {
     const user = userEvent.setup()
     render(Chat)
+    await waitFor(() => screen.getByPlaceholderText(/Message/i))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     await user.type(screen.getByPlaceholderText(/Message/i), 'Hi{Enter}')

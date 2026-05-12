@@ -8,6 +8,7 @@
     getTaskTypes, getTaskRoles,
   } from '../lib/api.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
+  import AssistantSidebar from '../components/AssistantSidebar.svelte'
 
   let { projectId } = $props()
 
@@ -20,9 +21,35 @@
   let editing      = $state(false)
   let showTaskForm = $state(false)
   let filterStatus = $state('')
+  let showAssistant = $state(false)
 
   // Edit buffer — populated when editing starts
   let editBuf = $state({})
+
+  // Load sidebar visibility from localStorage
+  function loadSidebarState() {
+    if (projectId) {
+      const key = `sidebar_${projectId}`
+      const stored = localStorage.getItem(key)
+      showAssistant = stored === 'true'
+    }
+  }
+
+  function toggleSidebar() {
+    showAssistant = !showAssistant
+    if (projectId) {
+      localStorage.setItem(`sidebar_${projectId}`, String(showAssistant))
+    }
+  }
+
+  function applyAssistantToDescription(content) {
+    if (editing) {
+      editBuf.description = content
+    } else {
+      startEdit()
+      editBuf.description = content
+    }
+  }
 
   // New task form
   let taskForm = $state({ type: 'implement', role: 'worker', title: '', description: '', priority: 5 })
@@ -143,20 +170,31 @@
     }
   }
 
-  onMount(loadAll)
+  onMount(() => {
+    loadSidebarState()
+    loadAll()
+  })
 </script>
 
-<div class="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full">
-
-  <!-- Breadcrumb -->
-  <nav class="mb-5 text-sm text-gray-500 flex items-center gap-2">
-    <button
-      class="hover:text-gray-300 transition-colors"
-      onclick={() => router.go('projects')}
-    >Projects</button>
-    <span>›</span>
-    <span class="text-gray-300">{project?.name ?? '…'}</span>
-  </nav>
+<div class="flex-1 flex overflow-hidden">
+  <!-- Main content -->
+  <div class="flex-1 overflow-y-auto p-6 flex flex-col {showAssistant ? 'max-w-4xl' : 'max-w-5xl'} mx-auto w-full">
+    <!-- Breadcrumb -->
+    <nav class="mb-5 text-sm text-gray-500 flex items-center gap-2 justify-between">
+      <div class="flex items-center gap-2">
+        <button
+          class="hover:text-gray-300 transition-colors"
+          onclick={() => router.go('projects')}
+        >Projects</button>
+        <span>›</span>
+        <span class="text-gray-300">{project?.name ?? '…'}</span>
+      </div>
+      <button
+        class="text-xs px-2 py-1 border border-surface-500 text-gray-400 hover:border-accent hover:text-gray-200 rounded transition-colors"
+        onclick={toggleSidebar}
+        title="Toggle assistant sidebar"
+      >💬 {showAssistant ? 'Hide' : 'Show'}</button>
+    </nav>
 
   {#if loading}
     <p class="text-gray-500 text-sm">Loading…</p>
@@ -403,5 +441,11 @@
         </div>
       {/if}
     </div>
+  {/if}
+  </div>
+
+  <!-- Assistant sidebar -->
+  {#if showAssistant && project}
+    <AssistantSidebar projectId={project.id} onApplyToDescription={applyAssistantToDescription} />
   {/if}
 </div>

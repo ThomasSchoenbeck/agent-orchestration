@@ -249,7 +249,7 @@
               {/if}
             </div>
             <div class="flex items-center gap-2 shrink-0">
-              {#if t.status === 'planned' || t.status === 'failed'}
+              {#if t.status === 'pending' || t.status === 'failed'}
                 <button
                   class="text-xs text-yellow-400 hover:text-yellow-300 transition-colors"
                   onclick={(e) => { e.stopPropagation(); setStatus(t.id, 'queued') }}

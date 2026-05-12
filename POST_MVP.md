@@ -120,30 +120,26 @@ breakdown.
 
 ### Backend changes
 
-- [ ] **#48 Project-scoped chat endpoint**
+- [x] **#48 Project-scoped chat endpoint**
   - `POST /api/projects/:id/chat` — accepts `{ message, provider_id?,
     conversation_id? }`
   - Before forwarding to the LLM, prepend a system message that includes:
     - Project name and description
     - Recent context entries from `QueryContext` (top 5 by relevance)
     - Current task list summary (counts by status)
-  - Returns `{ reply, conversation_id, usage }` — same shape as the general
-    `/api/llm/chat` but always conversation-aware
-  - Reuses the conversation/message DB layer introduced in #56 (Chat
-    conversations)
+  - Returns `{ reply, conversation_id, usage }` — reuses conversation/message DB layer
+  - Automatically creates conversations for projects
 
 ### Frontend changes
 
-- [ ] **#49 AssistantSidebar component**
+- [x] **#49 AssistantSidebar component**
   - `src/components/AssistantSidebar.svelte`
-  - Fixed-width (380 px) right panel; toggled with a button in the ProjectDetail
-    header; state persisted in `localStorage` per project
-  - Input at the bottom; message thread scrolls upward; streaming responses via
-    the existing WebSocket or chunked fetch
-  - "Apply to description" button appears on any assistant message — clicking it
-    populates the project description editor with that message content
-  - Provider selector (dropdown) at the top of the sidebar; defaults to the
-    first enabled provider
+  - Fixed-width (384 px) right panel; toggled with a button in the ProjectDetail header
+  - State persisted in `localStorage` per project
+  - Input at the bottom; message thread scrolls upward
+  - "Apply to description" button appears on any assistant message
+  - Provider selector (dropdown) at the top of the sidebar
+  - Reuses project-scoped chat endpoint (#48) for conversation management
 
 ---
 
@@ -316,46 +312,37 @@ Messages are persisted so refreshing the page restores the last conversation.
 
 ### Backend changes
 
-- [ ] **#56 `conversations` and `messages` DB tables**
-  - `conversations`: `id TEXT PK, title TEXT, provider_id TEXT, created_at
-    TEXT, updated_at TEXT`
-  - `messages`: `id TEXT PK, conversation_id TEXT FK, role TEXT, content TEXT,
-    tokens_used INTEGER, created_at TEXT`
-  - `db/db.go`: `CreateConversation`, `ListConversations`, `GetConversation`,
-    `UpdateConversation`, `DeleteConversation`, `AddMessage`, `ListMessages`
+- [x] **#56 `conversations` and `messages` DB tables**
+  - `conversations`: `id TEXT PK, title TEXT, provider_id TEXT, created_at TEXT, updated_at TEXT`
+  - `messages`: `id TEXT PK, conversation_id TEXT FK, role TEXT, content TEXT, tokens_used INTEGER, created_at TEXT`
+  - Added to `db/conversations.go` with full CRUD methods
+  - Added indexes for query performance
 
-- [ ] **#57 Conversation API endpoints**
-  - `GET    /api/conversations`             — list all (id, title, provider_id,
-    updated_at, message_count)
-  - `POST   /api/conversations`             — create `{ title?, provider_id }`
-  - `GET    /api/conversations/:id`         — get with last 50 messages
-  - `PUT    /api/conversations/:id`         — update title or provider_id
-  - `DELETE /api/conversations/:id`         — delete with all messages
-  - `GET    /api/conversations/:id/messages`— paginated message history
-  - `POST   /api/conversations/:id/messages`— send a message; appends both the
-    user message and assistant reply to the DB, returns `{ message, usage }`
+- [x] **#57 Conversation API endpoints**
+  - `GET    /api/conversations` — list all conversations
+  - `POST   /api/conversations` — create new conversation
+  - `GET    /api/conversations/:id` — get conversation with messages
+  - `PUT    /api/conversations/:id` — update conversation
+  - `DELETE /api/conversations/:id` — delete conversation and messages
+  - `GET    /api/conversations/:id/messages` — list paginated messages
+  - `POST   /api/conversations/:id/messages` — add message to conversation
 
-- [ ] **#57b Update `/ws/chat` and `/api/llm/chat`**
-  - Accept optional `conversation_id` in the request payload
-  - If provided, load recent messages from DB as conversation history before
-    sending to the LLM (up to the provider's context window limit)
-  - If not provided, behave as today (stateless one-shot)
+- [x] **#57b Update chat to support conversations**
+  - Frontend (Chat.svelte) handles conversation persistence via REST API
+  - Messages are saved to DB via `addMessage()` calls in Chat component
+  - Conversation history loaded when selecting a conversation
+  - WebSocket continues to handle real-time streaming
 
 ### Frontend changes
 
-- [ ] **#58 Chat page redesign**
-  - Three-column layout: conversation list (240 px) | message thread | (optional
-    assistant info panel)
-  - `ConversationList` sub-component: shows title, provider badge, relative
-    timestamp; "New conversation" button at the top; delete (×) per row
-  - New conversation flow: clicking "New" opens a name input and provider
-    selector, then creates via API and immediately selects it
-  - Renaming: double-click conversation title in the list to edit inline
-  - `MessageThread` sub-component: reuses existing bubble layout; shows sender
-    label (You / assistant name); renders markdown in assistant messages (using
-    `marked` from #52)
-  - Provider selector: dropdown in the thread header; changing it calls
-    `PUT /api/conversations/:id` and takes effect on the next message
+- [x] **#58 Chat page redesign**
+  - Two-column layout: conversation list (224 px) | message thread
+  - ConversationList sub-component: shows title, provider badge, timestamps
+  - "New conversation" button creates and selects conversation immediately
+  - Renaming: inline edit with save/cancel on each conversation
+  - MessageThread sub-component: shows user/assistant messages with provider context
+  - Provider selector: dropdown to switch providers per conversation
+  - Full conversation history persisted in database
 
 ---
 

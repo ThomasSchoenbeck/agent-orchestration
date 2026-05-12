@@ -133,6 +133,27 @@ type LogFilters struct {
 	Offset    int
 }
 
+// --- Conversation ---
+
+type Conversation struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	ProviderID string   `json:"provider_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// --- Message ---
+
+type Message struct {
+	ID             string    `json:"id"`
+	ConversationID string    `json:"conversation_id"`
+	Role           string    `json:"role"` // "user" or "assistant"
+	Content        string    `json:"content"`
+	TokensUsed     int       `json:"tokens_used,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
 // --- Metrics ---
 
 type Metric struct {
