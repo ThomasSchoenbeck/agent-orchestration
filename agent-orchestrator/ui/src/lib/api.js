@@ -48,6 +48,7 @@ export const getTask    = (id)    => get(`/api/tasks/${id}`)
 export const createTask = (data)  => post('/api/tasks', data)
 export const updateTask = (id, d) => put(`/api/tasks/${id}`, d)
 export const deleteTask = (id)    => del(`/api/tasks/${id}`)
+export const unqueueTask = (id)  => post(`/api/tasks/${id}/unqueue`)
 
 // ── Agents ───────────────────────────────────────────────────────────────────
 export const listAgents  = () => get('/api/agents')

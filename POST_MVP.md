@@ -74,39 +74,39 @@ reusable markdown editor component for consistency with project descriptions.
 
 ### Backend changes
 
-- [ ] **#48a Unqueue task endpoint**
+- [x] **#48a Unqueue task endpoint**
   - `POST /api/tasks/:id/unqueue` — removes a task from the queue (sets status
-    to `unqueued` or similar non-active state; exact state TBD based on task
-    lifecycle)
+    to `planned`; validates task is queued or planned before allowing)
   - Returns the updated task object
   - Only permit this action on queued/pending tasks; return 400 if task is
     already completed or running
 
 ### Frontend changes
 
-- [ ] **#48b Routing: task detail navigation**
-  - Add a client-side route `/tasks/:id` — alongside the existing Projects router
-  - Task rows in both the Tasks page and ProjectDetail page become clickable
-    links to the detail view; context menu (⋯) button or similar for bulk actions
+- [x] **#48b Routing: task detail navigation**
+  - Client-side route `/tasks/:id` added to App.svelte
+  - Task rows in both Tasks page and ProjectDetail page are clickable
+    links to the detail view
 
-- [ ] **#48c TaskDetail page — metadata panel**
+- [x] **#48c TaskDetail page — metadata panel**
   - Shows: title (inline-editable), status badge, project name (link), role,
     type, created_at, updated_at
   - Edit button reveals a form; `PUT /api/tasks/:id` on save
-  - Breadcrumb: `Projects › <project name> › Tasks › <task title>` or similar
+  - Breadcrumb: `Projects › <project name> › Tasks › <task title>`
 
-- [ ] **#48d TaskDetail page — description editor**
+- [x] **#48d TaskDetail page — description editor**
   - Full-width MarkdownEditor component (from #52) for the task description /
     payload.description field
   - "Preview only" mode for read-only display when task is not being edited
   - Emits `PUT /api/tasks/:id` on save with updated description
 
-- [ ] **#48e TaskDetail page — queue controls**
+- [x] **#48e TaskDetail page — queue controls**
   - Status-dependent action buttons:
-    - Queued → "Unqueue" button calls `POST /api/tasks/:id/unqueue`
+    - Status 'planned' or 'failed' → "Queue" button calls `PUT /api/tasks/:id` with status='queued'
+    - Status 'queued' or 'planned' → "Unqueue" button calls `POST /api/tasks/:id/unqueue`
     - Any status → "Delete" button (with confirmation)
-  - Success feedback (toast) after unqueue
-  - Refresh the task details (or navigate back to task list) after state change
+  - Success feedback (toast) after queue/unqueue actions
+  - Queue button also available in main Tasks list and ProjectDetail view
 
 ---
 
@@ -235,7 +235,7 @@ stack vertically with a tab toggle.
 - [~] **#53 Wire MarkdownEditor into existing pages**
   - `Projects.svelte` — project description field — pending
   - `ProjectDetail.svelte` — description editor panel (from #46) — done
-  - `TaskDetail.svelte` — task description / payload.description field (from #48d) — pending
+  - `TaskDetail.svelte` — task description / payload.description field (from #48d) — done
   - `Chat.svelte` — message input (render markdown in sent messages) — pending
 
 ---

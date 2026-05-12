@@ -299,6 +299,28 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		t, _ := s.db.GetTask(r.Context(), id)
 		api.WriteJSON(w, http.StatusOK, t)
 
+	case "unqueue":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		t, err := s.db.GetTask(r.Context(), id)
+		if err != nil {
+			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+			return
+		}
+		if t.Status != "queued" && t.Status != "planned" {
+			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput,
+				"can only unqueue tasks with status 'queued' or 'planned'")
+			return
+		}
+		t.Status = "planned"
+		if err := s.db.UpdateTask(r.Context(), t); err != nil {
+			s.internalError(w, err)
+			return
+		}
+		api.WriteJSON(w, http.StatusOK, t)
+
 	default:
 		switch r.Method {
 		case http.MethodGet:

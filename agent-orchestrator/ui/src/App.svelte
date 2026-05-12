@@ -3,6 +3,7 @@
   import Projects      from './pages/Projects.svelte'
   import ProjectDetail from './pages/ProjectDetail.svelte'
   import Tasks         from './pages/Tasks.svelte'
+  import TaskDetail    from './pages/TaskDetail.svelte'
   import Agents        from './pages/Agents.svelte'
   import Roles         from './pages/Roles.svelte'
   import Providers     from './pages/Providers.svelte'
@@ -54,6 +55,8 @@
       <ProjectDetail projectId={$router.params[0]} />
     {:else if $router.page === 'projects'}
       <Projects />
+    {:else if $router.page === 'tasks' && $router.params.length > 0}
+      <TaskDetail taskId={$router.params[0]} />
     {:else if $router.page === 'tasks'}
       <Tasks />
     {:else if $router.page === 'agents'}

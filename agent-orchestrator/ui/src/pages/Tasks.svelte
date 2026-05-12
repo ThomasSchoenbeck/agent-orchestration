@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { listTasks, listProjects, createTask, updateTask, deleteTask, getTaskTypes, getTaskRoles } from '../lib/api.js'
-  import { toasts } from '../lib/stores.js'
+  import { toasts, router } from '../lib/stores.js'
 
   // ── Svelte 5 runes ────────────────────────────────────────────────────────
   let tasks         = $state([])
@@ -33,6 +33,10 @@
 
   function taskTitle(t) {
     return t.payload?.title ?? t.type ?? t.id
+  }
+
+  function projectName(projectId) {
+    return projects.find(p => p.id === projectId)?.name ?? 'Unknown'
   }
 
   // ── Data loading ──────────────────────────────────────────────────────────
@@ -223,7 +227,10 @@
   {:else}
     <div class="flex flex-col gap-2">
       {#each tasks as t (t.id)}
-        <div class="p-3 bg-surface-800 rounded border border-surface-600 hover:border-surface-500 transition-colors">
+        <div
+          class="p-3 bg-surface-800 rounded border border-surface-600 hover:border-surface-500 transition-colors cursor-pointer"
+          onclick={() => router.push('tasks', t.id)}
+        >
           <div class="flex items-start justify-between gap-3">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 flex-wrap">
@@ -233,21 +240,24 @@
                 </span>
                 <span class="text-xs text-gray-500 font-mono">{t.type}</span>
                 <span class="text-xs text-gray-600">{t.role}</span>
+                {#if t.project_id}
+                  <span class="text-xs text-gray-500 bg-surface-700 px-1.5 py-0.5 rounded">📁 {projectName(t.project_id)}</span>
+                {/if}
               </div>
               {#if t.payload?.description}
                 <p class="text-xs text-gray-400 mt-1 line-clamp-2">{t.payload.description}</p>
               {/if}
             </div>
             <div class="flex items-center gap-2 shrink-0">
-              {#if t.status === 'pending' || t.status === 'failed'}
+              {#if t.status === 'planned' || t.status === 'failed'}
                 <button
                   class="text-xs text-yellow-400 hover:text-yellow-300 transition-colors"
-                  onclick={() => setStatus(t.id, 'queued')}
+                  onclick={(e) => { e.stopPropagation(); setStatus(t.id, 'queued') }}
                 >Queue</button>
               {/if}
               <button
                 class="text-xs text-red-400 hover:text-red-300 transition-colors"
-                onclick={() => remove(t.id)}
+                onclick={(e) => { e.stopPropagation(); remove(t.id) }}
               >Del</button>
             </div>
           </div>

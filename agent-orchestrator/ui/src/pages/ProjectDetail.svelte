@@ -367,7 +367,10 @@
       {:else}
         <div class="flex flex-col gap-2">
           {#each tasks as t (t.id)}
-            <div class="p-3 bg-surface-800 rounded border border-surface-600 hover:border-surface-500 transition-colors">
+            <div
+              class="p-3 bg-surface-800 rounded border border-surface-600 hover:border-surface-500 transition-colors cursor-pointer"
+              onclick={() => router.push('tasks', t.id)}
+            >
               <div class="flex items-start justify-between gap-3">
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2 flex-wrap">
@@ -386,12 +389,12 @@
                   {#if t.status === 'planned' || t.status === 'failed'}
                     <button
                       class="text-xs text-yellow-400 hover:text-yellow-300 transition-colors"
-                      onclick={() => setTaskStatus(t.id, 'queued')}
+                      onclick={(e) => { e.stopPropagation(); setTaskStatus(t.id, 'queued') }}
                     >Queue</button>
                   {/if}
                   <button
                     class="text-xs text-red-400 hover:text-red-300 transition-colors"
-                    onclick={() => removeTask(t.id)}
+                    onclick={(e) => { e.stopPropagation(); removeTask(t.id) }}
                   >Del</button>
                 </div>
               </div>
