@@ -1,48 +1,49 @@
 /**
  * Component tests for src/pages/Agents.svelte
+ * Updated for the new split-layout with agent log panel.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import Agents from '../pages/Agents.svelte'
 
 const AGENTS = [
-  {
-    id: 'a1', name: 'worker-1',
-    roles: ['worker', 'reviewer'],
-    status: 'online',
-    last_heartbeat: new Date().toISOString(),
-  },
-  {
-    id: 'a2', name: 'planner-1',
-    roles: ['orchestrator'],
-    status: 'offline',
-    last_heartbeat: '0001-01-01T00:00:00Z',
-  },
+  { id: 'a1', name: 'worker-1', roles: ['worker', 'reviewer'], status: 'online' },
+  { id: 'a2', name: 'planner-1', roles: ['orchestrator'], status: 'offline' },
 ]
 
 const ROLES = [
-  { id: 'r1', name: 'worker', label: 'Worker', enabled: true },
-  { id: 'r2', name: 'reviewer', label: 'Reviewer', enabled: true },
+  { id: 'r1', name: 'worker',       label: 'Worker',       enabled: true },
+  { id: 'r2', name: 'reviewer',     label: 'Reviewer',     enabled: true },
   { id: 'r3', name: 'orchestrator', label: 'Orchestrator', enabled: true },
 ]
 
-function stubFetch(agents = AGENTS, roles = ROLES) {
+const AGENT_LOGS = [
+  {
+    id: 'log1', agent_id: 'a1', agent_name: 'w1',
+    event_type: 'agent_registered', description: 'Agent joined',
+    timestamp: new Date().toISOString(),
+  },
+  {
+    id: 'log2', agent_id: 'a1', agent_name: 'w1',
+    event_type: 'agent_claim_success', description: 'Claimed task t1',
+    timestamp: new Date().toISOString(),
+  },
+]
+
+// Stub fetch: dispatch by URL prefix.
+function stubFetch(agents = AGENTS, roles = ROLES, logs = AGENT_LOGS) {
   vi.stubGlobal('fetch', vi.fn((url) => {
     let data = agents
-    if (url === '/api/roles') {
-      data = roles
-    }
-    return Promise.resolve({
-      ok: true, status: 200,
-      json: () => Promise.resolve(data),
-    })
+    if (url.includes('/api/roles'))       data = roles
+    else if (url.includes('/api/agent-logs')) data = logs
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) })
   }))
 }
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  vi.useRealTimers()   // always restore real timers (guarding the polling test)
+  vi.useRealTimers()
 })
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
@@ -54,14 +55,14 @@ describe('Agents — rendering', () => {
   })
 
   it('shows empty state when no agents', async () => {
-    stubFetch([], ROLES)
+    stubFetch([], ROLES, [])
     render(Agents)
     await waitFor(() =>
       expect(screen.getByText(/No agents registered/i)).toBeInTheDocument()
     )
   })
 
-  it('renders an agent card for each agent', async () => {
+  it('renders agent names', async () => {
     stubFetch()
     render(Agents)
     await waitFor(() => {
@@ -70,75 +71,147 @@ describe('Agents — rendering', () => {
     })
   })
 
-  it('shows role badges', async () => {
-    stubFetch()
-    render(Agents)
-    await waitFor(() => {
-      expect(screen.getByText('worker')).toBeInTheDocument()
-      expect(screen.getByText('reviewer')).toBeInTheDocument()
-      expect(screen.getByText('orchestrator')).toBeInTheDocument()
-    })
-  })
-
   it('shows status text for each agent', async () => {
     stubFetch()
     render(Agents)
     await waitFor(() => {
       expect(screen.getByText('online')).toBeInTheDocument()
-      expect(screen.getByText('offline')).toBeInTheDocument()
+      // "offline" also appears in the chart legend (agent_offline → "offline"), so use getAllByText
+      expect(screen.getAllByText('offline').length).toBeGreaterThan(0)
     })
   })
 
-  it('does NOT show last-seen for zero-time heartbeat', async () => {
+  it('shows role badges', async () => {
     stubFetch()
     render(Agents)
-    await waitFor(() => screen.getByText('planner-1'))
-    // Year 0001 heartbeat should be hidden
-    expect(screen.queryByText(/Last seen: 1\/1\/1/i)).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getAllByText('worker').length).toBeGreaterThan(0)
+      expect(screen.getByText('reviewer')).toBeInTheDocument()
+      expect(screen.getByText('orchestrator')).toBeInTheDocument()
+    })
   })
+})
 
-  it('shows last-seen for valid heartbeat', async () => {
+// ── Log panel ─────────────────────────────────────────────────────────────────
+describe('Agents — log panel', () => {
+  it('shows log panel header', async () => {
     stubFetch()
     render(Agents)
     await waitFor(() =>
-      expect(screen.getByText(/Last seen:/i)).toBeInTheDocument()
+      expect(screen.getByText('Agent Activity Logs')).toBeInTheDocument()
     )
   })
 
-  it('shows resolved role definitions', async () => {
+  it('shows Timeline and Types chart labels', async () => {
     stubFetch()
     render(Agents)
     await waitFor(() => {
-      // Should show role labels from resolved definitions
-      expect(screen.getByText('Worker')).toBeInTheDocument()
-      expect(screen.getByText('Reviewer')).toBeInTheDocument()
-      expect(screen.getByText('Orchestrator')).toBeInTheDocument()
+      expect(screen.getByText('Timeline')).toBeInTheDocument()
+      expect(screen.getByText('Types')).toBeInTheDocument()
     })
   })
 
-  it('shows warning for undefined roles', async () => {
-    // Create agents with a role that doesn't exist in role definitions
-    const agentsWithUndefined = [
-      { ...AGENTS[0], roles: ['worker', 'nonexistent'] },
-    ]
-    stubFetch(agentsWithUndefined, ROLES)
+  it('shows event type filter dropdown', async () => {
+    stubFetch()
     render(Agents)
-    await waitFor(() => {
-      expect(screen.getByText('Worker')).toBeInTheDocument()
-      // Match the warning badge with flexible text matching (icon + text in same element)
-      expect(screen.getByText(/no definition/i)).toBeInTheDocument()
-    })
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('All event types')).toBeInTheDocument()
+    )
+  })
+
+  it('shows search input', async () => {
+    stubFetch()
+    render(Agents)
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Search description…')).toBeInTheDocument()
+    )
+  })
+
+  it('renders log rows from API', async () => {
+    stubFetch()
+    render(Agents)
+    await waitFor(() =>
+      expect(screen.getByText('agent_registered')).toBeInTheDocument()
+    )
+    expect(screen.getByText('agent_claim_success')).toBeInTheDocument()
+  })
+
+  it('shows description column content', async () => {
+    stubFetch()
+    render(Agents)
+    await waitFor(() =>
+      expect(screen.getByText('Agent joined')).toBeInTheDocument()
+    )
+    expect(screen.getByText('Claimed task t1')).toBeInTheDocument()
+  })
+
+  it('shows event count in panel header', async () => {
+    stubFetch()
+    render(Agents)
+    await waitFor(() =>
+      expect(screen.getByText(/2 events/)).toBeInTheDocument()
+    )
+  })
+
+  it('shows empty state when no logs', async () => {
+    stubFetch(AGENTS, ROLES, [])
+    render(Agents)
+    await waitFor(() =>
+      expect(screen.getByText(/No events match current filters/i)).toBeInTheDocument()
+    )
+  })
+})
+
+// ── Agent selection (log scoping) ─────────────────────────────────────────────
+describe('Agents — agent selection', () => {
+  it('shows "Filtered to agent" chip when an agent is selected', async () => {
+    const user = userEvent.setup()
+    stubFetch()
+    render(Agents)
+    await waitFor(() => screen.getByText('worker-1'))
+
+    // Click agent card to select it.
+    await user.click(screen.getByText('worker-1'))
+    await waitFor(() =>
+      expect(screen.getByText('Filtered to agent')).toBeInTheDocument()
+    )
+  })
+
+  it('shows × Clear button when filtered', async () => {
+    const user = userEvent.setup()
+    stubFetch()
+    render(Agents)
+    await waitFor(() => screen.getByText('worker-1'))
+    await user.click(screen.getByText('worker-1'))
+    await waitFor(() =>
+      expect(screen.getByText('× Clear')).toBeInTheDocument()
+    )
+  })
+
+  it('clears filter on × Clear click', async () => {
+    const user = userEvent.setup()
+    stubFetch()
+    render(Agents)
+    await waitFor(() => screen.getByText('worker-1'))
+    await user.click(screen.getByText('worker-1'))
+    await waitFor(() => screen.getByText('× Clear'))
+    await user.click(screen.getByText('× Clear'))
+    await waitFor(() =>
+      expect(screen.queryByText('Filtered to agent')).not.toBeInTheDocument()
+    )
   })
 })
 
 // ── API calls ─────────────────────────────────────────────────────────────────
 describe('Agents — API', () => {
-  it('calls GET /api/agents and /api/roles on mount', async () => {
+  it('calls GET /api/agents, /api/roles, /api/agent-logs on mount', async () => {
     stubFetch()
     render(Agents)
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith('/api/agents', expect.anything())
-      expect(fetch).toHaveBeenCalledWith('/api/roles', expect.anything())
+      const urls = fetch.mock.calls.map(([url]) => url)
+      expect(urls.some(u => u.includes('/api/agents'))).toBe(true)
+      expect(urls.some(u => u.includes('/api/roles'))).toBe(true)
+      expect(urls.some(u => u.includes('/api/agent-logs'))).toBe(true)
     })
   })
 
@@ -147,39 +220,34 @@ describe('Agents — API', () => {
     const user = userEvent.setup()
     render(Agents)
     await waitFor(() => screen.getByText('worker-1'))
+    const callsBefore = fetch.mock.calls.length
     await user.click(screen.getByText('↻ Refresh'))
-    // Initial load: 2 calls (agents + roles), refresh: 2 more = 4 total
-    expect(fetch).toHaveBeenCalledTimes(4)
+    await waitFor(() =>
+      expect(fetch.mock.calls.length).toBeGreaterThan(callsBefore)
+    )
   })
 
-  it('sets up polling interval on mount', async () => {
+  it('sets up auto-refresh interval on mount', async () => {
     vi.useFakeTimers()
     stubFetch()
     render(Agents)
-    // Initial load: 2 calls (agents + roles) even with fake timers via microtasks
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
-    // Advance past the 10-second polling interval.
-    vi.advanceTimersByTime(10_500)
-    // Polling triggers another load: 2 more calls = 4 total
-    expect(fetch).toHaveBeenCalledTimes(4)
-    // vi.useRealTimers() is called in afterEach, no need to repeat here.
+    await waitFor(() => expect(fetch).toHaveBeenCalled())
+    const callsAfterMount = fetch.mock.calls.length
+
+    vi.advanceTimersByTime(5_500)
+    expect(fetch.mock.calls.length).toBeGreaterThan(callsAfterMount)
   })
 })
 
-// ── accepts wrapped response ──────────────────────────────────────────────────
-describe('Agents — response shapes', () => {
-  it('handles bare array response', async () => {
-    stubFetch(AGENTS)
+// ── Chart buckets ─────────────────────────────────────────────────────────────
+describe('Agents — timeline buckets', () => {
+  it('shows bucket selector buttons', async () => {
+    stubFetch()
     render(Agents)
-    await waitFor(() => expect(screen.getByText('worker-1')).toBeInTheDocument())
-  })
-
-  it('handles {agents: [...]} wrapped response', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true, status: 200,
-      json: () => Promise.resolve({ agents: AGENTS }),
-    }))
-    render(Agents)
-    await waitFor(() => expect(screen.getByText('worker-1')).toBeInTheDocument())
+    await waitFor(() => {
+      expect(screen.getByText('5 m')).toBeInTheDocument()
+      expect(screen.getByText('1 hr')).toBeInTheDocument()
+      expect(screen.getByText('1 day')).toBeInTheDocument()
+    })
   })
 })

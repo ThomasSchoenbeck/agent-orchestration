@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -217,5 +218,150 @@ func TestExecutor_ExecuteJSON(t *testing.T) {
 	}
 	if result == "" {
 		t.Error("expected non-empty JSON result")
+	}
+}
+
+// TestRouter_LoadFromDB_ProviderResolution verifies that LoadFromDB wires the
+// correct provider name to a role, so RouteByRole returns that provider.
+func TestRouter_LoadFromDB_ProviderResolution(t *testing.T) {
+	// Build an in-memory DB with a provider + role definition.
+	dbPath := filepath.Join(t.TempDir(), "router_test.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Create provider.
+	prov := &db.Provider{
+		Name:      "mock",
+		Type:      "ollama",
+		BaseURL:   "http://localhost:11434",
+		ModelName: "mock-v1",
+		Enabled:   true,
+	}
+	if err := database.CreateProvider(ctx, prov); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+
+	// Create role definition pointing at that provider.
+	role := &db.RoleDefinition{
+		Name:          "worker",
+		Label:         "Worker",
+		ProviderID:    prov.ID,
+		ModelOverride: "mock-v1",
+		TaskTypes:     []string{"implement"},
+		Enabled:       true,
+	}
+	if err := database.CreateRoleDefinition(ctx, role); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
+	}
+
+	// Build registry and register the mock provider.
+	cfg := buildExecutorConfig()
+	reg := llm.NewRegistry()
+	mockProv := &mockLLMProvider{name: "mock"}
+	_ = reg.Register("mock", mockProv)
+
+	rtr := router.New(cfg, reg)
+	if err := rtr.LoadFromDB(database); err != nil {
+		t.Fatalf("LoadFromDB: %v", err)
+	}
+
+	// RouteByRole("worker") must resolve to the mock provider.
+	result, err := rtr.RouteByRole("worker")
+	if err != nil {
+		t.Fatalf("RouteByRole: %v", err)
+	}
+	if result.Provider == nil {
+		t.Fatal("expected non-nil provider")
+	}
+	if result.Provider.Name() != "mock" {
+		t.Errorf("expected provider name mock, got %s", result.Provider.Name())
+	}
+}
+
+// TestRouter_LoadFromDB_TaskTypeMapping verifies that task type → role mapping
+// loaded from the DB is honoured by RouteByTaskType.
+func TestRouter_LoadFromDB_TaskTypeMapping(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "router_tt_test.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+
+	prov := &db.Provider{Name: "mock", Type: "ollama", BaseURL: "http://x", ModelName: "m", Enabled: true}
+	_ = database.CreateProvider(ctx, prov)
+
+	role := &db.RoleDefinition{
+		Name:       "reviewer",
+		Label:      "Reviewer",
+		ProviderID: prov.ID,
+		TaskTypes:  []string{"review", "audit"},
+		Enabled:    true,
+	}
+	_ = database.CreateRoleDefinition(ctx, role)
+
+	cfg := buildExecutorConfig()
+	reg := llm.NewRegistry()
+	_ = reg.Register("mock", &mockLLMProvider{name: "mock"})
+
+	rtr := router.New(cfg, reg)
+	_ = rtr.LoadFromDB(database)
+
+	result, err := rtr.RouteByTaskType("review")
+	if err != nil {
+		t.Fatalf("RouteByTaskType(review): %v", err)
+	}
+	if result.Role != "reviewer" {
+		t.Errorf("expected role reviewer, got %s", result.Role)
+	}
+
+	result2, err := rtr.RouteByTaskType("audit")
+	if err != nil {
+		t.Fatalf("RouteByTaskType(audit): %v", err)
+	}
+	if result2.Role != "reviewer" {
+		t.Errorf("expected role reviewer for audit, got %s", result2.Role)
+	}
+}
+
+// TestRouter_LoadFromDB_DisabledRoleSkipped ensures disabled roles are not
+// added to the routing cache.
+func TestRouter_LoadFromDB_DisabledRoleSkipped(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "disabled_role_test.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	ctx := context.Background()
+	prov := &db.Provider{Name: "mock", Type: "ollama", BaseURL: "http://x", ModelName: "m", Enabled: true}
+	_ = database.CreateProvider(ctx, prov)
+	role := &db.RoleDefinition{
+		Name:       "disabled-role",
+		Label:      "Disabled",
+		ProviderID: prov.ID,
+		TaskTypes:  []string{"special"},
+		Enabled:    false, // disabled!
+	}
+	_ = database.CreateRoleDefinition(ctx, role)
+
+	cfg := buildExecutorConfig()
+	reg := llm.NewRegistry()
+	_ = reg.Register("mock", &mockLLMProvider{name: "mock"})
+
+	rtr := router.New(cfg, reg)
+	_ = rtr.LoadFromDB(database)
+
+	_, err = rtr.RouteByRole("disabled-role")
+	if err == nil {
+		t.Error("expected error routing to disabled role, got nil")
 	}
 }

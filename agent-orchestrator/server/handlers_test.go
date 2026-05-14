@@ -249,3 +249,144 @@ func TestGetNextTask(t *testing.T) {
 		t.Error("expected non-empty task")
 	}
 }
+
+// --- DELETE /api/tasks/:id ---
+
+func TestDeleteTask(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	// Create a task.
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	if tw.Code != http.StatusCreated {
+		t.Fatalf("create task: expected 201, got %d", tw.Code)
+	}
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	// Delete it.
+	dw := do(t, srv, http.MethodDelete, "/api/tasks/"+task.ID, nil)
+	if dw.Code != http.StatusNoContent {
+		t.Fatalf("delete: expected 204, got %d: %s", dw.Code, dw.Body.String())
+	}
+
+	// Subsequent GET should 404.
+	gw := do(t, srv, http.MethodGet, "/api/tasks/"+task.ID, nil)
+	if gw.Code != http.StatusNotFound {
+		t.Errorf("get after delete: expected 404, got %d", gw.Code)
+	}
+}
+
+func TestDeleteTask_NotFound(t *testing.T) {
+	srv, _ := newTestServer(t)
+	w := do(t, srv, http.MethodDelete, "/api/tasks/nonexistent", nil)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestDeleteTask_RemovedFromList(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	// Create two tasks.
+	tw1 := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	tw2 := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "review", "role": "worker",
+	})
+	var t1, t2 db.Task
+	_ = json.Unmarshal(tw1.Body.Bytes(), &t1)
+	_ = json.Unmarshal(tw2.Body.Bytes(), &t2)
+
+	// Delete t1.
+	do(t, srv, http.MethodDelete, "/api/tasks/"+t1.ID, nil)
+
+	// List should contain only t2.
+	lw := do(t, srv, http.MethodGet, "/api/tasks", nil)
+	var tasks []db.Task
+	_ = json.Unmarshal(lw.Body.Bytes(), &tasks)
+	for _, tk := range tasks {
+		if tk.ID == t1.ID {
+			t.Errorf("deleted task %s still appears in list", t1.ID)
+		}
+	}
+}
+
+// --- Agent poll-status ---
+
+func TestAgentPollStatus(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	// Register an agent.
+	aw := do(t, srv, http.MethodPost, "/api/agents/register", map[string]interface{}{
+		"name": "poll-agent", "roles": []string{"worker"},
+	})
+	var regResp map[string]string
+	_ = json.Unmarshal(aw.Body.Bytes(), &regResp)
+	agentID := regResp["agent_id"]
+
+	// poll-status endpoint should return 200.
+	pw := do(t, srv, http.MethodGet, "/api/agents/"+agentID+"/poll-status", nil)
+	if pw.Code != http.StatusOK {
+		t.Fatalf("poll-status: expected 200, got %d: %s", pw.Code, pw.Body.String())
+	}
+	var status map[string]interface{}
+	_ = json.Unmarshal(pw.Body.Bytes(), &status)
+	if _, ok := status["last_polled_at"]; !ok {
+		t.Error("expected last_polled_at in poll-status response")
+	}
+}
+
+// --- Settings ---
+
+func TestListSettings(t *testing.T) {
+	srv, _ := newTestServer(t)
+	w := do(t, srv, http.MethodGet, "/api/settings", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateSetting(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	// Seed a setting first via PUT.
+	w := do(t, srv, http.MethodPut, "/api/settings/test.key", map[string]string{"value": "42"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT setting: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// GET should return the updated value.
+	gw := do(t, srv, http.MethodGet, "/api/settings/test.key", nil)
+	if gw.Code != http.StatusOK {
+		t.Fatalf("GET setting: expected 200, got %d", gw.Code)
+	}
+	var s db.Setting
+	_ = json.Unmarshal(gw.Body.Bytes(), &s)
+	if s.Value != "42" {
+		t.Errorf("expected value 42, got %s", s.Value)
+	}
+}
+
+// --- Agent + Task logs endpoints ---
+
+func TestListAgentLogs_Empty(t *testing.T) {
+	srv, _ := newTestServer(t)
+	// LogDB is nil in test server, so endpoint should return empty array.
+	w := do(t, srv, http.MethodGet, "/api/agent-logs", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestListTaskLogs_Empty(t *testing.T) {
+	srv, _ := newTestServer(t)
+	w := do(t, srv, http.MethodGet, "/api/task-logs", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}

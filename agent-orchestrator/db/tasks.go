@@ -28,6 +28,9 @@ func (d *Database) CreateTask(ctx context.Context, t *Task) error {
 		nullableStr(t.AssignedAgentID), marshalJSON(t.Payload), t.Attempts,
 		t.CreatedAt, t.UpdatedAt,
 	)
+	if err == nil {
+		d.logTaskEvent(ctx, t.ID, t.ProjectID, "", "task_created", "", t.Status, "Task created")
+	}
 	return err
 }
 
@@ -94,6 +97,9 @@ func (d *Database) UpdateTask(ctx context.Context, t *Task) error {
 		t.UpdatedAt, nullableTime(t.StartedAt), nullableTime(t.CompletedAt),
 		t.ID,
 	)
+	if err == nil {
+		d.logTaskEvent(ctx, t.ID, t.ProjectID, t.AssignedAgentID, "task_updated", "", t.Status, "Task updated")
+	}
 	return err
 }
 
@@ -101,7 +107,7 @@ func (d *Database) UpdateTask(ctx context.Context, t *Task) error {
 // so concurrent agents cannot double-claim the same task.
 // Returns an error if the task is already in_progress, completed, or failed.
 func (d *Database) ClaimTask(ctx context.Context, taskID, agentID string) error {
-	return d.withImmediateTx(ctx, func(tx *sql.Tx) error {
+	if err := d.withImmediateTx(ctx, func(tx *sql.Tx) error {
 		var status, assignedID string
 		err := tx.QueryRowContext(ctx,
 			`SELECT status, COALESCE(assigned_agent_id,'') FROM tasks WHERE id=?`, taskID,
@@ -125,7 +131,11 @@ func (d *Database) ClaimTask(ctx context.Context, taskID, agentID string) error 
 			agentID, now, now, taskID,
 		)
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+	d.logTaskEvent(ctx, taskID, "", agentID, "task_claimed", "planned", "in_progress", "Task claimed by agent")
+	return nil
 }
 
 // SubmitTaskResult stores the result and updates task status.
@@ -135,6 +145,13 @@ func (d *Database) SubmitTaskResult(ctx context.Context, taskID string, result m
 		`UPDATE tasks SET result=?, status=?, completed_at=?, updated_at=? WHERE id=?`,
 		marshalJSON(result), status, now, now, taskID,
 	)
+	if err == nil {
+		eventType := "task_completed"
+		if status == "failed" {
+			eventType = "task_failed"
+		}
+		d.logTaskEvent(ctx, taskID, "", "", eventType, "in_progress", status, "Task result submitted")
+	}
 	return err
 }
 
@@ -275,4 +292,17 @@ func nullableJSON(m map[string]interface{}) interface{} {
 		return nil
 	}
 	return marshalJSON(m)
+}
+
+// DeleteTask removes a task by ID. Returns an error if not found.
+func (d *Database) DeleteTask(ctx context.Context, id string) error {
+	res, err := d.db.ExecContext(ctx, `DELETE FROM tasks WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("task %q not found", id)
+	}
+	return nil
 }

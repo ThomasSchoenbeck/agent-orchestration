@@ -12,6 +12,10 @@ import {
   listLogs,
   getMetrics,
   llmChat,
+  listAgentLogs,
+  listAllTaskLogs,
+  listSettings,
+  updateSetting,
 } from '../lib/api.js'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -197,5 +201,93 @@ describe('llmChat', () => {
     expect(opts.method).toBe('POST')
     const body = JSON.parse(opts.body)
     expect(body.role).toBe('orchestrator')
+  })
+})
+
+// ── Agent logs ────────────────────────────────────────────────────────────────
+describe('listAgentLogs', () => {
+  it('GET /api/agent-logs with no params', async () => {
+    stubFetch([])
+    await listAgentLogs()
+    const [url] = fetch.mock.calls[0]
+    expect(url).toBe('/api/agent-logs')
+  })
+
+  it('appends agent_id param when provided', async () => {
+    stubFetch([])
+    await listAgentLogs({ agent_id: 'a1' })
+    const [url] = fetch.mock.calls[0]
+    expect(url).toContain('agent_id=a1')
+  })
+
+  it('appends event_type param when provided', async () => {
+    stubFetch([])
+    await listAgentLogs({ event_type: 'agent_registered', limit: 100 })
+    const [url] = fetch.mock.calls[0]
+    expect(url).toContain('event_type=agent_registered')
+    expect(url).toContain('limit=100')
+  })
+})
+
+// ── Task logs (collection) ────────────────────────────────────────────────────
+describe('listAllTaskLogs', () => {
+  it('GET /api/task-logs with no params', async () => {
+    stubFetch([])
+    await listAllTaskLogs()
+    const [url] = fetch.mock.calls[0]
+    expect(url).toBe('/api/task-logs')
+  })
+
+  it('appends task_id param when provided', async () => {
+    stubFetch([])
+    await listAllTaskLogs({ task_id: 't1', limit: 50 })
+    const [url] = fetch.mock.calls[0]
+    expect(url).toContain('task_id=t1')
+    expect(url).toContain('limit=50')
+  })
+})
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+describe('listSettings', () => {
+  it('GET /api/settings', async () => {
+    stubFetch([{ key: 'foo', value: '1', description: '' }])
+    const result = await listSettings()
+    expect(fetch).toHaveBeenCalledWith('/api/settings', expect.anything())
+    expect(Array.isArray(result)).toBe(true)
+  })
+
+  it('throws on non-ok response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      text: () => Promise.resolve('Internal Server Error'),
+    }))
+    await expect(listSettings()).rejects.toThrow()
+  })
+})
+
+describe('updateSetting', () => {
+  it('PUT /api/settings/:key with value', async () => {
+    stubFetch({ key: 'log.retention.agent.default_days', value: '30' })
+    await updateSetting('log.retention.agent.default_days', '30')
+    const [url, opts] = fetch.mock.calls[0]
+    expect(url).toContain('/api/settings/log.retention.agent.default_days')
+    expect(opts.method).toBe('PUT')
+    const body = JSON.parse(opts.body)
+    expect(body.value).toBe('30')
+  })
+
+  it('encodes key in URL', async () => {
+    stubFetch({ key: 'a.b', value: 'x' })
+    await updateSetting('a.b', 'x')
+    const [url] = fetch.mock.calls[0]
+    expect(url).toContain('/api/settings/a.b')
+  })
+
+  it('throws on non-ok response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      text: () => Promise.resolve('not found'),
+    }))
+    await expect(updateSetting('missing', '1')).rejects.toThrow()
   })
 })

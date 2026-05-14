@@ -178,6 +178,15 @@ CREATE INDEX IF NOT EXISTS idx_metrics_task         ON metrics(task_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_agent        ON metrics(agent_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at ASC);
+
+-- Platform settings table (key/value store for UI-configurable settings)
+CREATE TABLE IF NOT EXISTS platform_settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_platform_settings_key ON platform_settings(key);
 `
 
 	_, err := d.db.Exec(schema)

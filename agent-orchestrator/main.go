@@ -21,6 +21,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -89,6 +90,15 @@ func runServer(args []string) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer func() { _ = database.Close() }()
+
+	// Open the separate log database (data/logs.db).
+	logDBPath := filepath.Join(filepath.Dir(cfg.Database.Path), "logs.db")
+	logDB, err := db.OpenLogDB(logDBPath)
+	if err != nil {
+		return fmt.Errorf("open log database: %w", err)
+	}
+	defer func() { _ = logDB.Close() }()
+	database.LogDB = logDB
 
 	// #55b — seed providers from config on first run
 	startCtx := context.Background()
@@ -170,6 +180,20 @@ func runServer(args []string) error {
 		} else if n > 0 {
 			log.Printf("seeded %d role definition(s) from config", n)
 		}
+	}
+
+	// Seed default log retention settings (only if keys don't already exist).
+	if err := database.SeedDefaultRetentionSettings(startCtx); err != nil {
+		log.Printf("warning: seed retention settings: %v", err)
+	}
+	if err := database.SeedRetentionFromConfig(
+		startCtx,
+		cfg.LogRetention.AgentDefaultDays,
+		cfg.LogRetention.TaskDefaultDays,
+		cfg.LogRetention.SystemDefaultDays,
+		cfg.LogRetention.Overrides,
+	); err != nil {
+		log.Printf("warning: seed retention config: %v", err)
 	}
 
 	srv := server.New(cfg, database, llmReg)

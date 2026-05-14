@@ -3,17 +3,19 @@
   import { router, toasts } from '../lib/stores.js'
   import {
     getTask, updateTask, deleteTask, unqueueTask,
-    getProject,
+    getProject, listTaskLogs,
   } from '../lib/api.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
 
   let { taskId } = $props()
 
   // ── State ─────────────────────────────────────────────────────────────────
-  let task       = $state(null)
-  let project    = $state(null)
-  let loading    = $state(true)
-  let editing    = $state(false)
+  let task        = $state(null)
+  let project     = $state(null)
+  let loading     = $state(true)
+  let editing     = $state(false)
+  let taskLogs    = $state([])
+  let logsLoading = $state(false)
 
   // Edit buffer
   let editBuf = $state({})
@@ -35,6 +37,18 @@
   }
 
   // ── Data loading ──────────────────────────────────────────────────────────
+  async function loadLogs(id) {
+    logsLoading = true
+    try {
+      const data = await listTaskLogs(id)
+      taskLogs = Array.isArray(data) ? data : []
+    } catch (e) {
+      taskLogs = []
+    } finally {
+      logsLoading = false
+    }
+  }
+
   async function loadAll() {
     loading = true
     try {
@@ -43,6 +57,7 @@
       if (t.project_id) {
         project = await getProject(t.project_id)
       }
+      loadLogs(taskId)
     } catch (e) {
       toasts.error('Failed to load task: ' + e.message)
     } finally {
@@ -244,6 +259,70 @@
           >Edit</button>
         </div>
       {/if}
+    </div>
+
+    <!-- ── Agent / timestamps / result / events ─────────────────────────────── -->
+    <div class="mb-6 p-5 bg-surface-800 rounded border border-surface-600 flex flex-col gap-3">
+
+      {#if task.assigned_agent_id}
+        <div class="flex items-center gap-2 text-sm">
+          <span class="text-gray-400">Agent:</span>
+          <span class="font-mono text-accent">{task.assigned_agent_id}</span>
+        </div>
+      {/if}
+
+      {#if task.started_at}
+        <div class="flex gap-4 text-xs text-gray-500">
+          <span>Started: {new Date(task.started_at).toLocaleString()}</span>
+          {#if task.completed_at}
+            <span>Completed: {new Date(task.completed_at).toLocaleString()}</span>
+          {/if}
+        </div>
+      {/if}
+
+      {#if task.result && Object.keys(task.result).length > 0}
+        <div class="mt-4">
+          <h3 class="text-sm font-semibold text-gray-300 mb-2">Result</h3>
+          <pre class="bg-surface-800 rounded p-3 text-xs text-gray-300 overflow-x-auto whitespace-pre-wrap">{JSON.stringify(task.result, null, 2)}</pre>
+        </div>
+      {/if}
+
+      <div class="mt-6">
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">Task Events</h3>
+        {#if logsLoading}
+          <p class="text-xs text-gray-500">Loading events…</p>
+        {:else if taskLogs.length === 0}
+          <p class="text-xs text-gray-500">No events yet.</p>
+        {:else}
+          <div class="flex flex-col gap-2">
+            {#each taskLogs as log (log.id)}
+              <div class="flex items-start gap-3 text-xs">
+                <span class="shrink-0 text-gray-500 font-mono w-36">
+                  {new Date(log.timestamp).toLocaleTimeString()}
+                </span>
+                <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium
+                  {log.event_type.includes('failed') || log.event_type.includes('error')
+                    ? 'bg-red-900 text-red-300'
+                    : log.event_type.includes('complet')
+                      ? 'bg-green-900 text-green-300'
+                      : 'bg-surface-700 text-gray-400'}">
+                  {log.event_type}
+                </span>
+                {#if log.old_status && log.new_status}
+                  <span class="text-gray-500">{log.old_status} → {log.new_status}</span>
+                {/if}
+                {#if log.agent_id}
+                  <span class="text-gray-600 font-mono truncate">{log.agent_id.slice(0,8)}</span>
+                {/if}
+                {#if log.description}
+                  <span class="text-gray-400 truncate">{log.description}</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
     </div>
 
     <!-- ── Queue controls ─────────────────────────────────────────────────── -->

@@ -184,6 +184,7 @@
     }
 
     sock.send({
+      type: 'chat',
       role: 'user',
       content: text,
       conversation_id: activeConvID,

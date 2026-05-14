@@ -96,6 +96,10 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 	}
 
 	log.Printf("router: loaded %d role definition(s) from database", len(roles))
+	for name, cr := range r.rolesByName {
+		log.Printf("router: role %q → provider=%q model=%q task_types=%v",
+			name, cr.providerName, cr.def.ModelOverride, cr.def.TaskTypes)
+	}
 	return nil
 }
 
@@ -186,7 +190,8 @@ func (r *Router) routeFromCache(cr *cachedRole) (*RouteResult, error) {
 	}
 	prov, err := r.registry.Get(cr.providerName)
 	if err != nil {
-		return nil, fmt.Errorf("role %q: %w", def.Name, err)
+		return nil, fmt.Errorf("role %q: provider %q not in registry (is the provider enabled?): %w",
+			def.Name, cr.providerName, err)
 	}
 	model := def.ModelOverride
 	if model == "" {

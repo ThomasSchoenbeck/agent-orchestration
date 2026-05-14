@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"agent-orchestrator/config"
@@ -13,17 +14,28 @@ import (
 	"agent-orchestrator/llm"
 	"agent-orchestrator/logging"
 	"agent-orchestrator/router"
+	"agent-orchestrator/workflow"
 )
+
+// AgentPollStatus tracks the last poll activity for an agent.
+type AgentPollStatus struct {
+	LastPolledAt    time.Time  `json:"last_polled_at"`
+	Roles           []string   `json:"roles"`
+	LastTaskFoundID string     `json:"last_task_found_id"`
+	LastTaskFoundAt *time.Time `json:"last_task_found_at"`
+}
 
 // Server holds all dependencies and the HTTP mux.
 type Server struct {
-	cfg     *config.Config
-	db      *db.Database
-	llmReg  *llm.Registry
-	router  *router.Router
-	log     *logging.Logger
-	httpSrv *http.Server
-	mux     *http.ServeMux
+	cfg        *config.Config
+	db         *db.Database
+	llmReg     *llm.Registry
+	router     *router.Router
+	log        *logging.Logger
+	httpSrv    *http.Server
+	mux        *http.ServeMux
+	pollMu     sync.RWMutex
+	pollStatus map[string]*AgentPollStatus
 }
 
 // ServeHTTP implements http.Handler — delegates to the internal mux.
@@ -39,12 +51,13 @@ func New(cfg *config.Config, database *db.Database, llmReg *llm.Registry) *Serve
 		log.Printf("server: router.LoadFromDB: %v", err)
 	}
 	s := &Server{
-		cfg:    cfg,
-		db:     database,
-		llmReg: llmReg,
-		router: rtr,
-		log:    logging.New(database, "", "", ""),
-		mux:    http.NewServeMux(),
+		cfg:        cfg,
+		db:         database,
+		llmReg:     llmReg,
+		router:     rtr,
+		log:        logging.New(database, "", "", ""),
+		mux:        http.NewServeMux(),
+		pollStatus: make(map[string]*AgentPollStatus),
 	}
 	s.registerHandlers()
 	s.registerStaticHandler() // must come after API routes so "/" is the catch-all
@@ -75,11 +88,52 @@ func (s *Server) Start(ctx context.Context) error {
 	// Background goroutine to perform periodic maintenance.
 	go s.runMaintenance(ctx)
 
+	// Background log retention cleanup.
+	go func() {
+		intervalMin := 60
+		if s.cfg.LogRetention.CleanupIntervalMins > 0 {
+			intervalMin = s.cfg.LogRetention.CleanupIntervalMins
+		}
+		job := workflow.NewRetentionJob(s.db, intervalMin)
+		job.Run(ctx)
+	}()
+
 	log.Printf("server: listening on http://%s", addr)
 	if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil
+}
+
+// recordPoll updates the poll status for an agent (called from tasks/next handler).
+func (s *Server) recordPoll(agentID string, roles []string, taskFoundID string) {
+	now := time.Now().UTC()
+	s.pollMu.Lock()
+	defer s.pollMu.Unlock()
+	ps, ok := s.pollStatus[agentID]
+	if !ok {
+		ps = &AgentPollStatus{}
+		s.pollStatus[agentID] = ps
+	}
+	ps.LastPolledAt = now
+	ps.Roles = roles
+	if taskFoundID != "" {
+		ps.LastTaskFoundID = taskFoundID
+		ps.LastTaskFoundAt = &now
+	}
+}
+
+// getPollStatus returns a copy of the current poll status for an agent.
+func (s *Server) getPollStatus(agentID string) *AgentPollStatus {
+	s.pollMu.RLock()
+	defer s.pollMu.RUnlock()
+	ps, ok := s.pollStatus[agentID]
+	if !ok {
+		return &AgentPollStatus{}
+	}
+	// Return a copy to avoid races.
+	copy := *ps
+	return &copy
 }
 
 // runMaintenance performs periodic tasks: marking stale agents offline and

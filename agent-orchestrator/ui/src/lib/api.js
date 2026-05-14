@@ -50,6 +50,7 @@ export const createTask = (data)  => post('/api/tasks', data)
 export const updateTask = (id, d) => put(`/api/tasks/${id}`, d)
 export const deleteTask = (id)    => del(`/api/tasks/${id}`)
 export const unqueueTask = (id)  => post(`/api/tasks/${id}/unqueue`)
+export const listTaskLogs = (taskId) => get(`/api/tasks/${taskId}/logs`)
 
 // ── Agents ───────────────────────────────────────────────────────────────────
 export const listAgents  = () => get('/api/agents')
@@ -105,3 +106,32 @@ export const addMessage = (conversationId, data) =>
 
 // ── LLM Chat (one-shot, non-WS) ──────────────────────────────────────────────
 export const llmChat = (data) => post('/api/llm/chat', data)
+
+// ── Agent logs ────────────────────────────────────────────────────────────────
+export const listAgentLogs = (params = {}) => {
+  const qs = new URLSearchParams(params).toString()
+  return get(`/api/agent-logs${qs ? '?' + qs : ''}`)
+}
+
+// ── Task logs (collection endpoint, distinct from per-task /api/tasks/:id/logs) ─
+export const listAllTaskLogs = (params = {}) => {
+  const qs = new URLSearchParams(params).toString()
+  return get(`/api/task-logs${qs ? '?' + qs : ''}`)
+}
+
+// ── Settings ─────────────────────────────────────────────────────────────────
+export async function listSettings() {
+  const r = await fetch('/api/settings', { method: 'GET' })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function updateSetting(key, value) {
+  const r = await fetch(`/api/settings/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value: String(value) }),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}

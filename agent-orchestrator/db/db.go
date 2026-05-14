@@ -13,7 +13,8 @@ import (
 
 // Database wraps a *sql.DB with convenience helpers.
 type Database struct {
-	db *sql.DB
+	db    *sql.DB
+	LogDB *LogDatabase // separate logs.db; may be nil
 }
 
 // Open opens (or creates) the SQLite database at path and runs migrations.
@@ -30,6 +31,17 @@ func Open(path string) (*Database, error) {
 
 	// SQLite works best with a single writer connection.
 	sqlDB.SetMaxOpenConns(1)
+
+	// Explicit WAL tuning pragmas (supplement the connection-string params).
+	for _, pragma := range []string{
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA cache_size=-32000",
+	} {
+		if _, err := sqlDB.Exec(pragma); err != nil {
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("pragma: %w", err)
+		}
+	}
 
 	d := &Database{db: sqlDB}
 	if err := d.migrate(); err != nil {
@@ -90,4 +102,41 @@ func (d *Database) withImmediateTx(ctx context.Context, fn func(*sql.Tx) error) 
 		return err
 	}
 	return tx.Commit()
+}
+
+// LogDatabase wraps the separate logs.db for high-volume agent/task log tables.
+type LogDatabase struct {
+	db *sql.DB
+}
+
+// OpenLogDB opens (or creates) the log SQLite database at path with WAL mode.
+func OpenLogDB(path string) (*LogDatabase, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, fmt.Errorf("create log db dir: %w", err)
+	}
+	sqlDB, err := sql.Open("sqlite", path+"?_fk=false")
+	if err != nil {
+		return nil, fmt.Errorf("open log sqlite: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA cache_size=-32000",
+		"PRAGMA busy_timeout=5000",
+	} {
+		if _, err := sqlDB.Exec(pragma); err != nil {
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("log db pragma: %w", err)
+		}
+	}
+	return &LogDatabase{db: sqlDB}, nil
+}
+
+// Close closes the log database.
+func (ld *LogDatabase) Close() error { return ld.db.Close() }
+
+// RawDB exposes the underlying *sql.DB of the log database.
+func (ld *LogDatabase) RawDB() *sql.DB {
+	return ld.db
 }

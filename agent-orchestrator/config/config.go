@@ -20,7 +20,8 @@ type Config struct {
 	Pricing      map[string]ModelPricing   `yaml:"pricing"`      // model → pricing (Phase 4)
 	Server       ServerConfig              `yaml:"server"`
 	Database     DatabaseConfig            `yaml:"database"`
-	Agents       AgentConfig               `yaml:"agents"`
+	Agents        AgentConfig               `yaml:"agents"`
+	LogRetention  LogRetentionConfig         `yaml:"log_retention"`
 }
 
 // ProviderConfig defines a single LLM backend.
@@ -74,6 +75,17 @@ type AgentConfig struct {
 type ModelPricing struct {
 	InputPerMillion  float64 `yaml:"input_per_million"`
 	OutputPerMillion float64 `yaml:"output_per_million"`
+}
+
+
+// LogRetentionConfig holds default and per-type retention settings.
+// These values seed the platform_settings table at startup (DB wins on conflict).
+type LogRetentionConfig struct {
+	AgentDefaultDays    int            `yaml:"agent_default_days"`
+	TaskDefaultDays     int            `yaml:"task_default_days"`
+	SystemDefaultDays   int            `yaml:"system_default_days"`
+	CleanupIntervalMins int            `yaml:"cleanup_interval_minutes"`
+	Overrides           map[string]int `yaml:"overrides"`
 }
 
 // Load reads a YAML config file at path, expands environment variables, and validates it.
@@ -182,6 +194,18 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Agents.CircuitBreakerThreshold == 0 {
 		c.Agents.CircuitBreakerThreshold = DefaultCircuitBreakerThreshold
+	}
+	if c.LogRetention.AgentDefaultDays == 0 {
+		c.LogRetention.AgentDefaultDays = 14
+	}
+	if c.LogRetention.TaskDefaultDays == 0 {
+		c.LogRetention.TaskDefaultDays = 30
+	}
+	if c.LogRetention.SystemDefaultDays == 0 {
+		c.LogRetention.SystemDefaultDays = 7
+	}
+	if c.LogRetention.CleanupIntervalMins == 0 {
+		c.LogRetention.CleanupIntervalMins = 60
 	}
 }
 

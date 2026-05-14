@@ -228,3 +228,38 @@ pricing:
   # llama3.2:
   #   input_per_million: 0
   #   output_per_million: 0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Log retention configuration.
+# These values seed platform_settings at startup. Changes made via the UI
+# (PUT /api/settings/:key) persist and take precedence over config values.
+# ─────────────────────────────────────────────────────────────────────────────
+log_retention:
+  agent_default_days: 14      # default for all agent event types
+  task_default_days: 30       # default for all task event types
+  system_default_days: 7      # default for the general logs table
+  cleanup_interval_minutes: 60
+
+  # Per-type overrides (override takes precedence over category default):
+  overrides:
+    agent_poll_task_found: 7
+    agent_llm_call: 7
+    agent_tool_call: 7
+    agent_tool_error: 30
+    agent_claim_attempt: 3
+    agent_claim_success: 14
+    agent_claim_failed: 7
+    agent_execute_start: 14
+    agent_context_overflow: 14
+    agent_reasoning_step: 7
+    agent_retry_backoff: 7
+    agent_human_approval_req: 90
+    agent_execute_complete: 30
+    agent_execute_failed: 30
+    agent_registered: 90
+    agent_offline: 90
+    task_created: 90
+    task_completed: 90
+    task_failed: 90
+    task_llm_round: 3
+    task_tool_call: 3

@@ -73,15 +73,18 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 	// Resolve the provider for this task.
 	route, err := e.rtr.RouteByTaskType(task.Type)
 	if err != nil {
-		// Fall back to routing by role.
+		log.Printf("executor: task %s RouteByTaskType(%q) failed (%v); trying RouteByRole(%q)",
+			task.ID, task.Type, err, task.Role)
 		route, err = e.rtr.RouteByRole(task.Role)
 		if err != nil {
-			return nil, "failed", 0, fmt.Errorf("route task: %w", err)
+			return nil, "failed", 0, fmt.Errorf("route task (type=%s role=%s): %w", task.Type, task.Role, err)
 		}
 	}
 	if route.Provider == nil {
 		return nil, "failed", 0, fmt.Errorf("no provider for role %q", route.Role)
 	}
+	log.Printf("executor: task %s resolved to role=%q provider=%q model=%q",
+		task.ID, route.Role, route.Provider.Name(), route.Model)
 
 	// Build the initial system + user message.
 	systemMsg := e.buildSystemMessage(task, route)

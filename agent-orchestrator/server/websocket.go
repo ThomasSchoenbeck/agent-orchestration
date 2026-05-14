@@ -44,10 +44,11 @@ func (c *wsConn) Close() error { return c.conn.Close() }
 
 // WSMessage is the JSON envelope exchanged over /ws/chat.
 type WSMessage struct {
-	Type    string      `json:"type"`    // "chat" | "ping" | "pong" | "error"
-	Role    string      `json:"role"`    // LLM role: "worker" | "orchestrator" | ...
-	Content string      `json:"content"` // user message or assistant reply
-	Data    interface{} `json:"data,omitempty"`
+	Type       string      `json:"type"`                // "chat" | "ping" | "pong" | "error"
+	Role       string      `json:"role"`                // LLM role: "worker" | "orchestrator" | ...
+	Content    string      `json:"content"`             // user message or assistant reply
+	ProviderID string      `json:"provider_id,omitempty"`
+	Data       interface{} `json:"data,omitempty"`
 }
 
 // handleWSChat handles GET /ws/chat — upgrades to WebSocket, then runs a
@@ -105,8 +106,8 @@ func (s *Server) handleWSChat(w http.ResponseWriter, r *http.Request) {
 			mu.Unlock()
 
 			// Route to LLM in a goroutine so the read loop continues.
-			go func(history []llm.Message, role string) {
-				reply, err := s.chatWithLLM(r.Context(), role, history)
+			go func(history []llm.Message, role, providerID string) {
+				reply, err := s.chatWithLLM(r.Context(), role, providerID, history)
 				if err != nil {
 					_ = wsSendJSON(wsc, WSMessage{Type: "error", Content: err.Error()})
 					return
@@ -115,7 +116,7 @@ func (s *Server) handleWSChat(w http.ResponseWriter, r *http.Request) {
 				messages = append(messages, llm.Message{Role: "assistant", Content: reply})
 				mu.Unlock()
 				_ = wsSendJSON(wsc, WSMessage{Type: "chat", Role: "assistant", Content: reply})
-			}(snap, env.Role)
+			}(snap, env.Role, env.ProviderID)
 
 		default:
 			_ = wsSendJSON(wsc, WSMessage{Type: "error", Content: fmt.Sprintf("unknown type %q", env.Type)})
@@ -124,9 +125,29 @@ func (s *Server) handleWSChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // chatWithLLM resolves the role to a provider and runs a single chat turn.
-func (s *Server) chatWithLLM(ctx context.Context, role string, messages []llm.Message) (string, error) {
+func (s *Server) chatWithLLM(ctx context.Context, role, providerID string, messages []llm.Message) (string, error) {
 	if s.router == nil {
 		return "", fmt.Errorf("router not configured")
+	}
+
+	// If a specific provider ID was requested, look it up directly.
+	if providerID != "" {
+		p, err := s.db.GetProvider(ctx, providerID)
+		if err == nil {
+			prov, err := s.llmReg.Get(p.Name)
+			if err == nil {
+				resp, err := prov.Chat(ctx, llm.ChatRequest{
+					Model:     p.ModelName,
+					Messages:  messages,
+					MaxTokens: 4096,
+				})
+				if err != nil {
+					return "", fmt.Errorf("llm error: %w", err)
+				}
+				return resp.Content, nil
+			}
+		}
+		// Fall through to role-based routing if provider lookup fails.
 	}
 
 	targetRole := role

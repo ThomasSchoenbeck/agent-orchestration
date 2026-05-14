@@ -2,5 +2,10 @@ node_modules
 .task
 */ui/dist
 *.exe
+
+## database
 *.db
+*.db-wal
+*.db-shm
+
 *.log

@@ -42,6 +42,12 @@ func (s *Server) registerHandlers() {
 	// Logs
 	s.mux.HandleFunc("/api/logs", s.handleLogs)
 
+	// Agent logs
+	s.mux.HandleFunc("/api/agent-logs", s.handleAgentLogs)
+
+	// Task Logs
+	s.mux.HandleFunc("/api/task-logs", s.handleTaskLogs)
+
 	// LLM chat
 	s.mux.HandleFunc("/api/llm/chat", s.handleLLMChat)
 
@@ -60,6 +66,10 @@ func (s *Server) registerHandlers() {
 
 	// WebSocket chat
 	s.mux.HandleFunc("/ws/chat", s.handleWSChat)
+
+	// Settings
+	s.mux.HandleFunc("/api/settings", s.handleSettings)
+	s.mux.HandleFunc("/api/settings/", s.handleSettingDetail)
 
 	// Health
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -332,6 +342,21 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		api.WriteJSON(w, http.StatusOK, t)
 
+	case "logs":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		logs, err := s.db.ListTaskLogs(r.Context(), db.TaskLogFilters{TaskID: id, Limit: 200})
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		if logs == nil {
+			logs = []*db.TaskLog{}
+		}
+		api.WriteJSON(w, http.StatusOK, logs)
+
 	default:
 		switch r.Method {
 		case http.MethodGet:
@@ -366,6 +391,13 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			api.WriteJSON(w, http.StatusOK, t)
+
+		case http.MethodDelete:
+			if err := s.db.DeleteTask(r.Context(), id); err != nil {
+				api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 
 		default:
 			methodNotAllowed(w)
@@ -423,6 +455,12 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = s.db.UpdateHeartbeat(r.Context(), existing.ID)
 		api.WriteJSON(w, http.StatusOK, api.RegisterAgentResponse{AgentID: existing.ID})
+		_ = s.db.CreateAgentLog(r.Context(), &db.AgentLog{
+			AgentID:     existing.ID,
+			AgentName:   existing.Name,
+			EventType:   "agent_registered",
+			Description: "Agent re-registered",
+		})
 		return
 	}
 
@@ -437,6 +475,12 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.WriteJSON(w, http.StatusCreated, api.RegisterAgentResponse{AgentID: a.ID})
+	_ = s.db.CreateAgentLog(r.Context(), &db.AgentLog{
+		AgentID:     a.ID,
+		AgentName:   a.Name,
+		EventType:   "agent_registered",
+		Description: "Agent registered",
+	})
 }
 
 func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
@@ -496,11 +540,45 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, err)
 			return
 		}
+		taskFoundID := ""
+		if task != nil {
+			taskFoundID = task.ID
+		}
+		s.recordPoll(agentID, roles, taskFoundID)
 		if task == nil {
 			api.WriteJSON(w, http.StatusOK, nil)
 			return
 		}
 		api.WriteJSON(w, http.StatusOK, task)
+		return
+	}
+
+	// /api/agents/{id}/poll-status
+	if len(parts) == 2 && parts[1] == "poll-status" {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		ps := s.getPollStatus(agentID)
+		api.WriteJSON(w, http.StatusOK, ps)
+		return
+	}
+
+	// /api/agents/{id}/logs
+	if len(parts) == 2 && parts[1] == "logs" {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		logs, err := s.db.ListAgentLogs(r.Context(), db.AgentLogFilters{AgentID: agentID, Limit: 200})
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		if logs == nil {
+			logs = []*db.AgentLog{}
+		}
+		api.WriteJSON(w, http.StatusOK, logs)
 		return
 	}
 
@@ -841,6 +919,81 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 // =========================================================================
+// Task Logs
+// =========================================================================
+
+func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	f := db.TaskLogFilters{
+		TaskID:    r.URL.Query().Get("task_id"),
+		ProjectID: r.URL.Query().Get("project_id"),
+		AgentID:   r.URL.Query().Get("agent_id"),
+		EventType: r.URL.Query().Get("event_type"),
+		Limit:     500,
+	}
+	if since := r.URL.Query().Get("since"); since != "" {
+		if t, err := time.Parse(time.RFC3339, since); err == nil {
+			f.Since = t
+		}
+	}
+	if until := r.URL.Query().Get("until"); until != "" {
+		if t, err := time.Parse(time.RFC3339, until); err == nil {
+			f.Until = t
+		}
+	}
+	logs, err := s.db.ListTaskLogs(r.Context(), f)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if logs == nil {
+		logs = []*db.TaskLog{}
+	}
+	api.WriteJSON(w, http.StatusOK, logs)
+}
+
+// =========================================================================
+// Agent Logs
+// =========================================================================
+
+func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	f := db.AgentLogFilters{
+		AgentID:     r.URL.Query().Get("agent_id"),
+		EventType:   r.URL.Query().Get("event_type"),
+		TaskID:      r.URL.Query().Get("task_id"),
+		ExecutionID: r.URL.Query().Get("execution_id"),
+		Search:      r.URL.Query().Get("search"),
+		Limit:       500,
+	}
+	if since := r.URL.Query().Get("since"); since != "" {
+		if t, err := time.Parse(time.RFC3339, since); err == nil {
+			f.Since = t
+		}
+	}
+	if until := r.URL.Query().Get("until"); until != "" {
+		if t, err := time.Parse(time.RFC3339, until); err == nil {
+			f.Until = t
+		}
+	}
+	logs, err := s.db.ListAgentLogs(r.Context(), f)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if logs == nil {
+		logs = []*db.AgentLog{}
+	}
+	api.WriteJSON(w, http.StatusOK, logs)
+}
+
+// =========================================================================
 // Helpers
 // =========================================================================
 
@@ -863,7 +1016,8 @@ func methodNotAllowed(w http.ResponseWriter) {
 
 // pathSegment extracts path components after a prefix.
 // e.g. pathSegment("/api/projects/abc/tasks", "/api/projects/", 0) → "abc"
-//      pathSegment("/api/projects/abc/tasks", "/api/projects/", 1) → "tasks"
+//
+//	pathSegment("/api/projects/abc/tasks", "/api/projects/", 1) → "tasks"
 func pathSegment(path, prefix string, index int) string {
 	trimmed := strings.TrimPrefix(path, prefix)
 	parts := strings.Split(strings.TrimSuffix(trimmed, "/"), "/")

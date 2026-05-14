@@ -103,3 +103,13 @@ func (d *Database) CreateMetric(ctx context.Context, m *Metric) error {
 	)
 	return err
 }
+
+// DeleteOldLogs removes system log entries older than cutoff.
+func (d *Database) DeleteOldLogs(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := d.db.ExecContext(ctx,
+		`DELETE FROM logs WHERE timestamp < ?`, cutoff.UTC())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

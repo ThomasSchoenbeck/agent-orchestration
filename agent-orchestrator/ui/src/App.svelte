@@ -9,6 +9,7 @@
   import Providers     from './pages/Providers.svelte'
   import Logs          from './pages/Logs.svelte'
   import Chat          from './pages/Chat.svelte'
+  import Settings      from './pages/Settings.svelte'
 
   const pages = [
     { id: 'projects',  label: 'Projects',  icon: '📁' },
@@ -18,6 +19,7 @@
     { id: 'providers', label: 'Providers', icon: '🔌' },
     { id: 'logs',      label: 'Logs',      icon: '📋' },
     { id: 'chat',      label: 'Chat',      icon: '💬' },
+    { id: 'settings',  label: 'Settings',  icon: '⚙️' },
   ]
 </script>
 
