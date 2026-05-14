@@ -151,9 +151,16 @@ func (r *Router) BuildPrompt(taskType string, vars map[string]interface{}) strin
 	return r.prompter.Render(taskType, vars)
 }
 
-// BuildContext assembles a context string for the given role.
+// BuildContext assembles a context string for the given role (config-backed fallback).
+// Deprecated: use BuildContextForRole instead for DB-backed rules.
 func (r *Router) BuildContext(role string, entries []ContextEntry) string {
 	return r.ctxBuild.Build(role, entries)
+}
+
+// BuildContextForRole assembles a context string using a DB-backed role definition's
+// include/exclude rules.
+func (r *Router) BuildContextForRole(role *db.RoleDefinition, entries []ContextEntry) string {
+	return r.ctxBuild.BuildWithRules(entries, role.ContextInclude, role.ContextExclude)
 }
 
 // RoleForTaskType returns the role string for a task type (without fully routing).

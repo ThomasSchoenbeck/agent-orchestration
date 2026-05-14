@@ -21,10 +21,22 @@ const AGENTS = [
   },
 ]
 
-function stubFetch(data = AGENTS) {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-    ok: true, status: 200,
-    json: () => Promise.resolve(data),
+const ROLES = [
+  { id: 'r1', name: 'worker', label: 'Worker', enabled: true },
+  { id: 'r2', name: 'reviewer', label: 'Reviewer', enabled: true },
+  { id: 'r3', name: 'orchestrator', label: 'Orchestrator', enabled: true },
+]
+
+function stubFetch(agents = AGENTS, roles = ROLES) {
+  vi.stubGlobal('fetch', vi.fn((url) => {
+    let data = agents
+    if (url === '/api/roles') {
+      data = roles
+    }
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: () => Promise.resolve(data),
+    })
   }))
 }
 
@@ -42,7 +54,7 @@ describe('Agents — rendering', () => {
   })
 
   it('shows empty state when no agents', async () => {
-    stubFetch([])
+    stubFetch([], ROLES)
     render(Agents)
     await waitFor(() =>
       expect(screen.getByText(/No agents registered/i)).toBeInTheDocument()
@@ -92,16 +104,42 @@ describe('Agents — rendering', () => {
       expect(screen.getByText(/Last seen:/i)).toBeInTheDocument()
     )
   })
+
+  it('shows resolved role definitions', async () => {
+    stubFetch()
+    render(Agents)
+    await waitFor(() => {
+      // Should show role labels from resolved definitions
+      expect(screen.getByText('Worker')).toBeInTheDocument()
+      expect(screen.getByText('Reviewer')).toBeInTheDocument()
+      expect(screen.getByText('Orchestrator')).toBeInTheDocument()
+    })
+  })
+
+  it('shows warning for undefined roles', async () => {
+    // Create agents with a role that doesn't exist in role definitions
+    const agentsWithUndefined = [
+      { ...AGENTS[0], roles: ['worker', 'nonexistent'] },
+    ]
+    stubFetch(agentsWithUndefined, ROLES)
+    render(Agents)
+    await waitFor(() => {
+      expect(screen.getByText('Worker')).toBeInTheDocument()
+      // Match the warning badge with flexible text matching (icon + text in same element)
+      expect(screen.getByText(/no definition/i)).toBeInTheDocument()
+    })
+  })
 })
 
 // ── API calls ─────────────────────────────────────────────────────────────────
 describe('Agents — API', () => {
-  it('calls GET /api/agents on mount', async () => {
+  it('calls GET /api/agents and /api/roles on mount', async () => {
     stubFetch()
     render(Agents)
-    await waitFor(() =>
+    await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith('/api/agents', expect.anything())
-    )
+      expect(fetch).toHaveBeenCalledWith('/api/roles', expect.anything())
+    })
   })
 
   it('Refresh button triggers reload', async () => {
@@ -110,18 +148,20 @@ describe('Agents — API', () => {
     render(Agents)
     await waitFor(() => screen.getByText('worker-1'))
     await user.click(screen.getByText('↻ Refresh'))
-    expect(fetch).toHaveBeenCalledTimes(2)
+    // Initial load: 2 calls (agents + roles), refresh: 2 more = 4 total
+    expect(fetch).toHaveBeenCalledTimes(4)
   })
 
   it('sets up polling interval on mount', async () => {
     vi.useFakeTimers()
     stubFetch()
     render(Agents)
-    // Initial load resolves via microtasks even with fake timers.
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    // Initial load: 2 calls (agents + roles) even with fake timers via microtasks
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
     // Advance past the 10-second polling interval.
     vi.advanceTimersByTime(10_500)
-    expect(fetch).toHaveBeenCalledTimes(2)
+    // Polling triggers another load: 2 more calls = 4 total
+    expect(fetch).toHaveBeenCalledTimes(4)
     // vi.useRealTimers() is called in afterEach, no need to repeat here.
   })
 })

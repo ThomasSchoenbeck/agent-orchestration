@@ -1,10 +1,11 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { listAgents } from '../lib/api.js'
+  import { listAgents, listRoles } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
 
   // ── Svelte 5 runes ────────────────────────────────────────────────────────
   let agents   = $state([])
+  let roles    = $state([])
   let loading  = $state(false)
   let interval = $state(null)
 
@@ -18,13 +19,21 @@
   async function load() {
     loading = true
     try {
-      const res = await listAgents()
-      agents   = Array.isArray(res) ? res : (res.agents ?? [])
+      const [agentsRes, rolesRes] = await Promise.all([
+        listAgents(),
+        listRoles(),
+      ])
+      agents = Array.isArray(agentsRes) ? agentsRes : (agentsRes.agents ?? [])
+      roles = Array.isArray(rolesRes) ? rolesRes : (rolesRes.roles ?? [])
     } catch (e) {
       toasts.error('Failed to load agents: ' + e.message)
     } finally {
       loading = false
     }
+  }
+
+  function resolveRole(roleName) {
+    return roles.find(r => r.name === roleName)
   }
 
   onMount(() => {
@@ -56,11 +65,39 @@
             <span class="font-medium text-gray-100">{a.name}</span>
             <span class="text-xs text-gray-500 capitalize">{a.status}</span>
           </div>
-          <div class="flex flex-wrap gap-1 mb-2">
+          <div class="flex flex-wrap gap-1 mb-3">
             {#each (a.roles ?? []) as role}
               <span class="text-xs px-2 py-0.5 bg-surface-700 text-gray-300 rounded-full">{role}</span>
             {/each}
           </div>
+
+          {#if (a.roles ?? []).length > 0}
+            <div class="mb-3">
+              <div class="text-xs text-gray-500 font-semibold mb-1">Resolved definitions:</div>
+              <div class="flex flex-wrap gap-1">
+                {#each (a.roles ?? []) as role}
+                  {@const def = resolveRole(role)}
+                  {#if def}
+                    <a
+                      href="/roles/{def.id}/edit"
+                      class="text-xs px-2 py-0.5 bg-green-900 text-green-200 rounded-full hover:bg-green-800 transition-colors"
+                      title="Click to edit role definition"
+                    >
+                      {def.label || def.name}
+                    </a>
+                  {:else}
+                    <span
+                      class="text-xs px-2 py-0.5 bg-red-900 text-red-200 rounded-full"
+                      title="No definition found for role '{role}'"
+                    >
+                      ⚠ no definition
+                    </span>
+                  {/if}
+                {/each}
+              </div>
+            </div>
+          {/if}
+
           <div class="text-xs text-gray-600 font-mono">{a.id}</div>
           {#if a.last_heartbeat && a.last_heartbeat !== '0001-01-01T00:00:00Z'}
             <div class="text-xs text-gray-600 mt-1">

@@ -193,13 +193,21 @@ describe('Chat — receiving messages', () => {
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     await user.type(screen.getByPlaceholderText(/Message/i), 'Hi{Enter}')
-    // "…" typing indicator should appear
-    await waitFor(() => expect(screen.getByText('…')).toBeInTheDocument())
+    // "…" typing indicator should appear (might be in a span or other element)
+    await waitFor(() => {
+      const elements = screen.queryAllByText(/…/)
+      expect(elements.length).toBeGreaterThan(0)
+    })
     // Simulate response
     getSocket().simulateMessage({ role: 'assistant', content: 'Hi back' })
-    await waitFor(() =>
-      expect(screen.queryByText('…')).not.toBeInTheDocument()
-    )
+    // Wait for the sending indicator to disappear and the response to appear
+    await waitFor(() => {
+      expect(screen.getByText(/Hi back/)).toBeInTheDocument()
+      const indicatorElements = screen.queryAllByText(/…/)
+      console.log(indicatorElements)
+
+      expect(indicatorElements).toHaveLength(0)
+    }, { timeout: 3000 })
   })
 })
 

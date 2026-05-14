@@ -228,11 +228,11 @@ stack vertically with a tab toggle.
   - Emits `change` event on every keystroke (debounced 150 ms)
   - Respects the page's dark/light mode via CSS variables
 
-- [~] **#53 Wire MarkdownEditor into existing pages**
-  - `Projects.svelte` — project description field — pending
+- [x] **#53 Wire MarkdownEditor into existing pages**
+  - `Projects.svelte` — project description field — done
   - `ProjectDetail.svelte` — description editor panel (from #46) — done
   - `TaskDetail.svelte` — task description / payload.description field (from #48d) — done
-  - `Chat.svelte` — message input (render markdown in sent messages) — pending
+  - `Chat.svelte` — message input (render markdown in sent messages) — done
 
 ---
 
@@ -459,7 +459,7 @@ exactly matches the task's `role` field.
   - Fallback: if DB returns no roles (e.g. during migration), fall back to
     config-driven behaviour and log a warning
 
-- [ ] **#66 Agent executor uses DB-backed roles**
+- [x] **#66 Agent executor uses DB-backed roles**
   - `agent/executor.go`: replace all direct reads of `config.Roles`,
     `config.Prompts`, `config.ContextRules`, `config.Routing` with calls to
     the router's new DB-backed methods
@@ -540,7 +540,7 @@ exactly matches the task's `role` field.
   - `agent_history` shows a note: "Useful for worker roles; can add noise for
     orchestrator and reviewer roles"
 
-- [ ] **#74 Agents page — show resolved role definition**
+- [x] **#74 Agents page — show resolved role definition**
   - Currently the Agents page lists each agent with its self-reported role
     strings
   - Add a "Resolved definition" column: for each role string, look up the

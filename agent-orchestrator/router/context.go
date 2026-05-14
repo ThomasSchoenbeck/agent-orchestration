@@ -27,18 +27,27 @@ func NewContextBuilder(cfg *config.Config) *ContextBuilder {
 
 // Build filters entries by the include/exclude rules for role and formats
 // them into a single context block ready to inject into a prompt.
+// Deprecated: use BuildWithRules instead for DB-backed rules.
 func (b *ContextBuilder) Build(role string, entries []ContextEntry) string {
 	rule, hasRule := b.cfg.ContextRules[role]
+	var include, exclude []string
+	if hasRule {
+		include = rule.Include
+		exclude = rule.Exclude
+	}
+	return b.BuildWithRules(entries, include, exclude)
+}
 
+// BuildWithRules filters entries by explicit include/exclude rules and formats
+// them into a single context block. This is used by DB-backed role definitions.
+func (b *ContextBuilder) BuildWithRules(entries []ContextEntry, include, exclude []string) string {
 	var kept []ContextEntry
 	for _, e := range entries {
-		if hasRule {
-			if len(rule.Include) > 0 && !containsStr(rule.Include, e.Type) {
-				continue // not in include list
-			}
-			if containsStr(rule.Exclude, e.Type) {
-				continue // explicitly excluded
-			}
+		if len(include) > 0 && !containsStr(include, e.Type) {
+			continue // not in include list
+		}
+		if containsStr(exclude, e.Type) {
+			continue // explicitly excluded
 		}
 		kept = append(kept, e)
 	}

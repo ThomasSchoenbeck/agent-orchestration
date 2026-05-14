@@ -1,5 +1,7 @@
 <script>
   import { onDestroy, onMount, tick } from 'svelte'
+  import { marked } from 'marked'
+  import DOMPurify from 'dompurify'
   import { createChatSocket } from '../lib/ws.js'
   import { toasts } from '../lib/stores.js'
   import {
@@ -7,6 +9,7 @@
     updateConversation, deleteConversation, addMessage,
     listProviders,
   } from '../lib/api.js'
+  import MarkdownEditor from '../components/MarkdownEditor.svelte'
 
   // ── State ─────────────────────────────────────────────────────────────────
   let conversations  = $state([])
@@ -195,6 +198,13 @@
     }
   }
 
+  // Render markdown content to HTML
+  function renderMarkdown(content) {
+    return DOMPurify.sanitize(
+      marked.parse(content || '', { breaks: true, gfm: true })
+    )
+  }
+
   async function scrollBottom() {
     await tick()
     if (chatEl) chatEl.scrollTop = chatEl.scrollHeight
@@ -203,6 +213,54 @@
   onMount(loadAll)
   onDestroy(() => sock.close())
 </script>
+
+<style>
+  /* Prose styles for rendered markdown in messages */
+  .prose :global(h1), .prose :global(h2), .prose :global(h3) {
+    color: #e5e7eb;
+    font-weight: 600;
+    margin: 0.75em 0 0.5em;
+    line-height: 1.3;
+  }
+  .prose :global(h1) { font-size: 1.1rem; }
+  .prose :global(h2) { font-size: 1rem; }
+  .prose :global(h3) { font-size: 0.95rem; }
+  .prose :global(p)  { margin: 0.35em 0; }
+  .prose :global(ul), .prose :global(ol) { margin: 0.35em 0; padding-left: 1.25em; }
+  .prose :global(li) { margin: 0.1em 0; }
+  .prose :global(code) {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+    font-size: 0.85em;
+    font-family: monospace;
+  }
+  .prose :global(pre) {
+    background: rgba(0, 0, 0, 0.4);
+    padding: 0.75em 1em;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 0.35em 0;
+  }
+  .prose :global(pre code) { background: none; padding: 0; }
+  .prose :global(blockquote) {
+    border-left: 3px solid rgba(255, 255, 255, 0.2);
+    padding-left: 0.75em;
+    color: rgba(255, 255, 255, 0.7);
+    margin: 0.35em 0;
+  }
+  .prose :global(a) { color: #60a5fa; text-decoration: underline; }
+  .prose :global(hr) { border-color: rgba(255, 255, 255, 0.15); margin: 0.75em 0; }
+  .prose :global(strong) { color: #f3f4f6; font-weight: 600; }
+  .prose :global(em) { font-style: italic; color: #d1d5db; }
+  .prose :global(table) { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+  .prose :global(th), .prose :global(td) {
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 0.3em 0.6em;
+    text-align: left;
+  }
+  .prose :global(th) { background: rgba(0, 0, 0, 0.2); }
+</style>
 
 <div class="flex h-full gap-0">
   <!-- ── Conversation list ────────────────────────────────────────────────── -->
@@ -320,14 +378,26 @@
         {:else}
           {#each messages as m, i (i)}
             <div class="flex {m.role === 'user' ? 'justify-end' : 'justify-start'}">
-              <div class="max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap
+              <div class="max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed
                 {m.role === 'user'
                   ? 'bg-accent text-white rounded-br-sm'
                   : m.role === 'error'
                     ? 'bg-red-900 text-red-200 rounded-bl-sm'
                     : 'bg-surface-700 text-gray-200 rounded-bl-sm'}"
               >
-                {m.content}
+                {#if m.role === 'user'}
+                  <!-- User messages: render as markdown -->
+                  <div class="prose prose-invert prose-sm max-w-none">
+                    <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                    {@html renderMarkdown(m.content)}
+                  </div>
+                {:else}
+                  <!-- Assistant/error messages: render as markdown -->
+                  <div class="prose prose-invert prose-sm max-w-none">
+                    <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                    {@html renderMarkdown(m.content)}
+                  </div>
+                {/if}
               </div>
             </div>
           {/each}
@@ -342,27 +412,25 @@
       </div>
 
       <!-- Input -->
-      <div class="shrink-0 px-6 py-4 border-t border-surface-600">
+      <div class="shrink-0 px-6 py-4 border-t border-surface-600" onkeydown={handleKey}>
         <form class="flex gap-3" onsubmit={(e) => { e.preventDefault(); send() }}>
-          <textarea
-            class="flex-1 bg-surface-700 border border-surface-500 rounded-xl px-4 py-2.5 text-sm text-gray-200
-                   placeholder-gray-500 focus:outline-none focus:border-accent resize-none leading-relaxed"
-            placeholder="Message the orchestrator…"
-            rows="1"
-            bind:value={input}
-            onkeydown={handleKey}
-            disabled={!connected || !activeConv}
-          ></textarea>
+          <div class="flex-1 relative">
+            <MarkdownEditor
+              bind:value={input}
+              placeholder="Message the orchestrator…"
+              minHeight="100px"
+            />
+          </div>
           <button
             type="submit"
-            class="px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm rounded-xl transition-colors
+            class="self-end px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm rounded-xl transition-colors
                    disabled:opacity-40 disabled:cursor-not-allowed"
             disabled={!connected || sending || !input.trim() || !activeConv}
           >
             Send
           </button>
         </form>
-        <p class="text-xs text-gray-600 mt-1.5">Enter to send · Shift+Enter for newline</p>
+        <p class="text-xs text-gray-600 mt-1.5">Supports markdown · Shift+Enter for newline</p>
       </div>
     {/if}
   </div>

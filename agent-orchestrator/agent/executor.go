@@ -150,23 +150,18 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 }
 
 // buildSystemMessage assembles the system prompt for the task.
+// Uses the DB-backed role definition's system prompt, or a generic fallback.
 func (e *Executor) buildSystemMessage(task *db.Task, route *router.RouteResult) string {
+	// Prefer DB-backed system prompt from the resolved role definition.
 	if route.SystemPrompt != "" {
 		return route.SystemPrompt
 	}
 
-	vars := map[string]interface{}{
-		"agent_id":  e.agentID,
-		"task_id":   task.ID,
-		"task_type": task.Type,
-		"role":      task.Role,
-	}
-	// Merge task payload into vars for prompt templating.
-	for k, v := range task.Payload {
-		vars[k] = v
-	}
-
-	return e.rtr.BuildPrompt(task.Type, vars)
+	// Generic fallback if no system prompt is defined (should rarely happen with DB-backed roles).
+	return fmt.Sprintf(
+		"You are an agent executing a task.\nTask ID: %s\nType: %s\nRole: %s\n\nExecution payload:\n%v",
+		task.ID, task.Type, task.Role, task.Payload,
+	)
 }
 
 // buildUserMessage constructs the initial user message from the task payload.

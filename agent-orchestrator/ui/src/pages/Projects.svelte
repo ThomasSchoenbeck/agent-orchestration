@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { listProjects, createProject, deleteProject } from '../lib/api.js'
   import { router, toasts } from '../lib/stores.js'
+  import MarkdownEditor from '../components/MarkdownEditor.svelte'
 
   // ── Svelte 5 runes ────────────────────────────────────────────────────────
   let projects = $state([])
@@ -80,13 +81,11 @@
         bind:value={form.name}
         required
       />
-      <textarea
-        class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm text-gray-200
-               placeholder-gray-500 focus:outline-none focus:border-accent resize-none"
-        placeholder="Description (optional)"
-        rows="2"
+      <MarkdownEditor
         bind:value={form.description}
-      ></textarea>
+        placeholder="Description (optional)"
+        minHeight="120px"
+      />
       <div class="grid grid-cols-2 gap-3">
         <input
           class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm text-gray-200
