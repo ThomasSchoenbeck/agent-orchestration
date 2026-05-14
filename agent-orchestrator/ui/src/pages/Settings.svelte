@@ -142,7 +142,7 @@
   onMount(load)
 </script>
 
-<div class="p-6 max-w-4xl mx-auto">
+<div class="overflow-y-auto p-6 max-w-4xl mx-auto">
   <h1 class="text-xl font-semibold text-gray-100 mb-6">Settings</h1>
 
   {#if loading}

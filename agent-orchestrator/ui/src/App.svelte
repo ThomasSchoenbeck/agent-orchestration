@@ -71,6 +71,8 @@
       <Logs />
     {:else if $router.page === 'chat'}
       <Chat />
+    {:else if $router.page === 'settings'}
+      <Settings />
     {:else}
       <div class="flex-1 flex items-center justify-center text-gray-500">Page not found</div>
     {/if}
