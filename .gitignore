@@ -9,3 +9,5 @@ node_modules
 *.db-shm
 
 *.log
+# Added by code-review-graph
+.code-review-graph/
