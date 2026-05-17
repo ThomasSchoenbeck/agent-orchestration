@@ -137,8 +137,8 @@ func TestCreateTask(t *testing.T) {
 	}
 	var task db.Task
 	_ = json.Unmarshal(w.Body.Bytes(), &task)
-	if task.Status != "planned" {
-		t.Errorf("expected status planned, got %s", task.Status)
+	if task.Status != db.TaskStatusBacklog {
+		t.Errorf("expected status %s, got %s", db.TaskStatusBacklog, task.Status)
 	}
 }
 
@@ -238,15 +238,17 @@ func TestGetNextTask(t *testing.T) {
 		"project_id": projectID, "type": "implement", "role": "worker",
 	})
 
-	// Now should return a task
+	// Now should return a task wrapped in ClaimTaskResponse.
 	w2 := do(t, srv, http.MethodGet, "/api/agents/"+agentID+"/tasks/next", nil)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w2.Code, w2.Body.String())
 	}
-	var task db.Task
-	_ = json.Unmarshal(w2.Body.Bytes(), &task)
-	if task.ID == "" {
-		t.Error("expected non-empty task")
+	var resp struct {
+		Task map[string]interface{} `json:"task"`
+	}
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp)
+	if resp.Task == nil || resp.Task["id"] == "" {
+		t.Error("expected non-empty task in response")
 	}
 }
 
@@ -388,5 +390,178 @@ func TestListTaskLogs_Empty(t *testing.T) {
 	w := do(t, srv, http.MethodGet, "/api/task-logs", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// --- State transitions ---
+
+func TestListStateTransitions_Empty(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	w := do(t, srv, http.MethodGet, "/api/tasks/"+task.ID+"/transitions", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var transitions []db.StateTransition
+	_ = json.Unmarshal(w.Body.Bytes(), &transitions)
+	if len(transitions) != 0 {
+		t.Errorf("expected 0 transitions, got %d", len(transitions))
+	}
+}
+
+func TestListStateTransitions_AfterClaim(t *testing.T) {
+	srv, database := newTestServer(t)
+	ctx := t.Context()
+	projectID := createTestProject(t, srv)
+
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	// Record a transition directly via DB.
+	_ = database.TransitionTaskState(ctx, task.ID,
+		db.TaskStatusBacklog, db.TaskStatusDeveloping, "agent-1", "claimed")
+
+	w := do(t, srv, http.MethodGet, "/api/tasks/"+task.ID+"/transitions", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var transitions []db.StateTransition
+	_ = json.Unmarshal(w.Body.Bytes(), &transitions)
+	if len(transitions) != 1 {
+		t.Fatalf("expected 1 transition, got %d", len(transitions))
+	}
+	if transitions[0].ToState != db.TaskStatusDeveloping {
+		t.Errorf("to_state = %q, want %q", transitions[0].ToState, db.TaskStatusDeveloping)
+	}
+}
+
+// --- Task reviews ---
+
+func TestListReviews_Empty(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	w := do(t, srv, http.MethodGet, "/api/tasks/"+task.ID+"/reviews", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var reviews []db.TaskReview
+	_ = json.Unmarshal(w.Body.Bytes(), &reviews)
+	if len(reviews) != 0 {
+		t.Errorf("expected 0 reviews, got %d", len(reviews))
+	}
+}
+
+func TestCreateAndListReviews(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+		"status": db.TaskStatusReviewing,
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	// Post a review.
+	rw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/reviews", map[string]interface{}{
+		"author_type": "agent",
+		"author_role": "reviewer",
+		"author_id":   "agent-rev-1",
+		"status":      "changes_requested",
+		"body":        "Please fix error handling.",
+	})
+	if rw.Code != http.StatusCreated {
+		t.Fatalf("POST review: expected 201, got %d: %s", rw.Code, rw.Body.String())
+	}
+	var rev db.TaskReview
+	_ = json.Unmarshal(rw.Body.Bytes(), &rev)
+	if rev.ID == "" {
+		t.Error("expected non-empty review ID")
+	}
+
+	// List should return it.
+	lw := do(t, srv, http.MethodGet, "/api/tasks/"+task.ID+"/reviews", nil)
+	if lw.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", lw.Code)
+	}
+	var reviews []db.TaskReview
+	_ = json.Unmarshal(lw.Body.Bytes(), &reviews)
+	if len(reviews) != 1 {
+		t.Fatalf("expected 1 review, got %d", len(reviews))
+	}
+	if reviews[0].Status != "changes_requested" {
+		t.Errorf("status = %q, want changes_requested", reviews[0].Status)
+	}
+}
+
+func TestCreateReview_MissingFields(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	// Missing status.
+	w := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/reviews", map[string]interface{}{
+		"body": "some feedback",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("missing status: expected 400, got %d", w.Code)
+	}
+
+	// Missing body.
+	w2 := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/reviews", map[string]interface{}{
+		"status": "approved",
+	})
+	if w2.Code != http.StatusBadRequest {
+		t.Errorf("missing body: expected 400, got %d", w2.Code)
+	}
+}
+
+func TestGetReviewByID(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	rw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/reviews", map[string]interface{}{
+		"status": "approved",
+		"body":   "LGTM",
+	})
+	var rev db.TaskReview
+	_ = json.Unmarshal(rw.Body.Bytes(), &rev)
+
+	gw := do(t, srv, http.MethodGet, "/api/tasks/"+task.ID+"/reviews/"+rev.ID, nil)
+	if gw.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", gw.Code, gw.Body.String())
+	}
+	var got db.TaskReview
+	_ = json.Unmarshal(gw.Body.Bytes(), &got)
+	if got.Body != "LGTM" {
+		t.Errorf("body = %q, want LGTM", got.Body)
 	}
 }

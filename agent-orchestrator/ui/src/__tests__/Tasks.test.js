@@ -1,6 +1,6 @@
 /**
  * Component tests for src/pages/Tasks.svelte
- * Updated for the split-layout with task log panel.
+ * Updated for the new state vocabulary (BACKLOG, DEVELOPING, etc.)
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/svelte'
@@ -18,33 +18,31 @@ const TASK_ROLES = [
 ]
 const TASKS = [
   {
-    id: 't1', type: 'implement', role: 'worker', status: 'pending', priority: 5,
+    id: 't1', type: 'implement', role: 'worker', status: 'BACKLOG', priority: 5,
     payload: { title: 'Build auth', description: 'JWT flow' }, project_id: 'proj1',
   },
   {
-    id: 't2', type: 'review', role: 'reviewer', status: 'completed', priority: 3,
+    id: 't2', type: 'review', role: 'reviewer', status: 'COMPLETED', priority: 3,
     payload: { title: 'Code review', description: '' }, project_id: 'proj1',
   },
   {
-    id: 't3', type: 'plan', role: 'orchestrator', status: 'failed', priority: 8,
+    id: 't3', type: 'plan', role: 'orchestrator', status: 'FAILED', priority: 8,
     payload: {}, project_id: 'proj1',
   },
 ]
 const TASK_LOGS = [
   {
     id: 'tl1', task_id: 't1', event_type: 'task_created',
-    old_status: '', new_status: 'planned', description: 'Task was created',
+    old_status: '', new_status: 'BACKLOG', description: 'Task was created',
     timestamp: new Date().toISOString(),
   },
   {
     id: 'tl2', task_id: 't1', event_type: 'task_claimed',
-    old_status: 'planned', new_status: 'in_progress', description: 'Agent claimed it',
+    old_status: 'BACKLOG', new_status: 'DEVELOPING', description: 'Agent claimed it',
     timestamp: new Date().toISOString(),
   },
 ]
 
-// refreshAll() calls loadTasks (4 parallel) + fetchLogs (1) = 5 total.
-// URL-based dispatch.
 function stubFetch(tasks = TASKS, projects = PROJECTS, types = TASK_TYPES, roles = TASK_ROLES, logs = TASK_LOGS) {
   vi.stubGlobal('fetch', vi.fn((url) => {
     let data
@@ -83,10 +81,9 @@ describe('Tasks — rendering', () => {
     stubFetch()
     render(Tasks)
     await waitFor(() => {
-      // status badges — may also appear in chart legend spans, so use getAllByText
-      expect(screen.getAllByText('pending',   { selector: 'span' }).length).toBeGreaterThan(0)
-      expect(screen.getAllByText('completed', { selector: 'span' }).length).toBeGreaterThan(0)
-      expect(screen.getAllByText('failed',    { selector: 'span' }).length).toBeGreaterThan(0)
+      expect(screen.getAllByText('BACKLOG',   { selector: 'span' }).length).toBeGreaterThan(0)
+      expect(screen.getAllByText('COMPLETED', { selector: 'span' }).length).toBeGreaterThan(0)
+      expect(screen.getAllByText('FAILED',    { selector: 'span' }).length).toBeGreaterThan(0)
     })
   })
 
@@ -99,12 +96,12 @@ describe('Tasks — rendering', () => {
     })
   })
 
-  it('shows Queue button for pending and failed tasks', async () => {
+  it('shows Queue button for BACKLOG and FAILED tasks', async () => {
     stubFetch()
     render(Tasks)
     await waitFor(() => {
       const queueBtns = screen.getAllByText('Queue')
-      expect(queueBtns.length).toBeGreaterThanOrEqual(2)
+      expect(queueBtns.length).toBeGreaterThanOrEqual(1)
     })
   })
 
@@ -124,6 +121,23 @@ describe('Tasks — filters', () => {
     stubFetch()
     render(Tasks)
     expect(screen.getByDisplayValue('All statuses')).toBeInTheDocument()
+  })
+
+  it('status filter contains new state vocabulary', async () => {
+    stubFetch()
+    render(Tasks)
+    await waitFor(() => {
+      // The dropdown options should include new states
+      const select = screen.getByDisplayValue('All statuses')
+      const options = Array.from(select.options).map(o => o.value)
+      expect(options).toContain('BACKLOG')
+      expect(options).toContain('DEVELOPING')
+      expect(options).toContain('AWAITING_REVIEW')
+      expect(options).toContain('AWAITING_REVISION')
+      expect(options).not.toContain('planned')
+      expect(options).not.toContain('in_progress')
+      expect(options).not.toContain('needs_review')
+    })
   })
 
   it('renders project filter with loaded projects', async () => {
@@ -146,7 +160,6 @@ describe('Tasks — create form', () => {
 
   it('posts task with all required fields', async () => {
     vi.stubGlobal('fetch', vi.fn()
-      // Initial refreshAll: 4 task-list calls + 1 task-logs call (dispatched by URL)
       .mockImplementation((url) => {
         let data
         if (url.includes('/api/task-logs'))    data = []
@@ -157,7 +170,6 @@ describe('Tasks — create form', () => {
         else data = []
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) })
       })
-      // POST /api/tasks → 201
       .mockResolvedValueOnce({ ok: true, status: 201, json: () => Promise.resolve({ id: 'tnew' }) })
     )
 
@@ -188,10 +200,10 @@ describe('Tasks — create form', () => {
 
 // ── Queue action ──────────────────────────────────────────────────────────────
 describe('Tasks — queue action', () => {
-  it('PUTs status=queued when Queue is clicked', async () => {
+  it('PUTs status=BACKLOG when Queue is clicked', async () => {
     vi.stubGlobal('fetch', vi.fn((url, opts = {}) => {
       if (opts.method === 'PUT') {
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ...TASKS[0], status: 'queued' }) })
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ...TASKS[0], status: 'BACKLOG' }) })
       }
       let data
       if (url.includes('/api/task-logs'))    data = TASK_LOGS
@@ -212,7 +224,7 @@ describe('Tasks — queue action', () => {
         url.includes('/api/tasks/') && opts?.method === 'PUT'
       )
       expect(putCall).toBeTruthy()
-      expect(JSON.parse(putCall[1].body).status).toBe('queued')
+      expect(JSON.parse(putCall[1].body).status).toBe('BACKLOG')
     })
   })
 })
@@ -261,11 +273,11 @@ describe('Tasks — log panel', () => {
     expect(screen.getByText('task_claimed')).toBeInTheDocument()
   })
 
-  it('shows status transition in log rows', async () => {
+  it('shows new-vocabulary status transition in log rows', async () => {
     stubFetch()
     render(Tasks)
     await waitFor(() =>
-      expect(screen.getByText('planned → in_progress')).toBeInTheDocument()
+      expect(screen.getByText('BACKLOG → DEVELOPING')).toBeInTheDocument()
     )
   })
 
@@ -286,7 +298,6 @@ describe('Tasks — task selection', () => {
     render(Tasks)
     await waitFor(() => screen.getByText('Build auth'))
 
-    // Click the task row (not a button inside it).
     const taskRow = screen.getByText('Build auth').closest('div[class*="bg-surface-800"]')
     if (taskRow) await user.click(taskRow)
 

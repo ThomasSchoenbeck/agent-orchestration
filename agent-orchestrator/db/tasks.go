@@ -17,7 +17,7 @@ func (d *Database) CreateTask(ctx context.Context, t *Task) error {
 	t.CreatedAt = now
 	t.UpdatedAt = now
 	if t.Status == "" {
-		t.Status = "planned"
+		t.Status = TaskStatusBacklog
 	}
 
 	_, err := d.db.ExecContext(ctx,
@@ -100,10 +100,12 @@ func (d *Database) UpdateTask(ctx context.Context, t *Task) error {
 	t.UpdatedAt = time.Now().UTC()
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE tasks SET status=?, priority=?, assigned_agent_id=?, payload=?,
-		 result=?, attempts=?, updated_at=?, started_at=?, completed_at=?
+		 result=?, attempts=?, branch_head_sha=?, worktree_path=?, assigned_port=?,
+		 updated_at=?, started_at=?, completed_at=?
 		 WHERE id=?`,
 		t.Status, t.Priority, nullableStr(t.AssignedAgentID),
 		marshalJSON(t.Payload), nullableJSON(t.Result), t.Attempts,
+		t.BranchHeadSHA, t.WorktreePath, nullableInt(t.AssignedPort),
 		t.UpdatedAt, nullableTime(t.StartedAt), nullableTime(t.CompletedAt),
 		t.ID,
 	)
@@ -128,23 +130,26 @@ func (d *Database) ClaimTask(ctx context.Context, taskID, agentID string) error 
 		if err != nil {
 			return err
 		}
-		if status == "in_progress" {
+		if IsExecutionState(status) {
 			return fmt.Errorf("task %q is already claimed by agent %q", taskID, assignedID)
 		}
-		if status == "completed" || status == "failed" {
+		if status == TaskStatusCompleted || status == TaskStatusFailed {
 			return fmt.Errorf("task %q cannot be claimed: status is %q", taskID, status)
+		}
+		if !IsQueueState(status) {
+			return fmt.Errorf("task %q cannot be claimed from state %q", taskID, status)
 		}
 		now := time.Now().UTC()
 		_, err = tx.ExecContext(ctx,
-			`UPDATE tasks SET status='in_progress', assigned_agent_id=?, started_at=?,
+			`UPDATE tasks SET status=?, assigned_agent_id=?, started_at=?,
 			 updated_at=?, attempts=attempts+1 WHERE id=?`,
-			agentID, now, now, taskID,
+			claimTargetState(status), agentID, now, now, taskID,
 		)
 		return err
 	}); err != nil {
 		return err
 	}
-	d.logTaskEvent(ctx, taskID, "", agentID, "task_claimed", "planned", "in_progress", "Task claimed by agent")
+	d.logTaskEvent(ctx, taskID, "", agentID, "task_claimed", TaskStatusBacklog, TaskStatusDeveloping, "Task claimed by agent")
 	// Emit a soft warning if any dependencies are not yet completed.
 	if unfinished, err := d.uncompletedDeps(ctx, taskID); err == nil && len(unfinished) > 0 {
 		msg := fmt.Sprintf("claimed with %d uncompleted dependenc", len(unfinished))
@@ -153,7 +158,7 @@ func (d *Database) ClaimTask(ctx context.Context, taskID, agentID string) error 
 		} else {
 			msg += "ies"
 		}
-		d.logTaskEvent(ctx, taskID, "", agentID, EventTaskDependencyWarning, "", "in_progress", msg)
+		d.logTaskEvent(ctx, taskID, "", agentID, EventTaskDependencyWarning, "", TaskStatusDeveloping, msg)
 	}
 	return nil
 }
@@ -170,7 +175,7 @@ func (d *Database) SubmitTaskResult(ctx context.Context, taskID string, result m
 		if status == "failed" {
 			eventType = "task_failed"
 		}
-		d.logTaskEvent(ctx, taskID, "", "", eventType, "in_progress", status, "Task result submitted")
+		d.logTaskEvent(ctx, taskID, "", "", eventType, TaskStatusDeveloping, status, "Task result submitted")
 	}
 	return err
 }
@@ -189,7 +194,8 @@ func (d *Database) GetNextTask(ctx context.Context, roles []string) (*Task, erro
 	}
 
 	query := taskSelectSQL +
-		fmt.Sprintf(` WHERE status='planned' AND (assigned_agent_id IS NULL OR assigned_agent_id='')
+		fmt.Sprintf(` WHERE (status='BACKLOG' OR status='AWAITING_REVISION' OR status='AWAITING_REVIEW' OR status='AWAITING_MERGE')
+		 AND (assigned_agent_id IS NULL OR assigned_agent_id='')
 		 AND role IN (%s) ORDER BY priority DESC, created_at ASC LIMIT 1`, placeholders)
 
 	row := d.db.QueryRowContext(ctx, query, args...)
@@ -200,11 +206,11 @@ func (d *Database) GetNextTask(ctx context.Context, roles []string) (*Task, erro
 	return t, err
 }
 
-// RequeueTimedOutTasks re-queues in_progress tasks that have not been updated for timeoutSec seconds.
+// RequeueTimedOutTasks re-queues execution-state tasks that have not been updated for timeoutSec seconds.
 func (d *Database) RequeueTimedOutTasks(ctx context.Context, timeoutSec int) (int64, error) {
 	res, err := d.db.ExecContext(ctx,
-		`UPDATE tasks SET status='planned', assigned_agent_id=NULL, updated_at=CURRENT_TIMESTAMP
-		 WHERE status='in_progress'
+		`UPDATE tasks SET status='BACKLOG', assigned_agent_id=NULL, updated_at=CURRENT_TIMESTAMP
+		 WHERE (status='DEVELOPING' OR status='REVIEWING' OR status='MERGING')
 		 AND CAST((julianday('now') - julianday(updated_at)) * 86400 AS INTEGER) > ?`,
 		timeoutSec,
 	)
@@ -218,19 +224,27 @@ func (d *Database) RequeueTimedOutTasks(ctx context.Context, timeoutSec int) (in
 
 const taskSelectSQL = `SELECT id, project_id, type, role, status, priority,
     COALESCE(assigned_agent_id,''), COALESCE(payload,'{}'), COALESCE(result,'{}'),
-    attempts, created_at, updated_at,
+    attempts,
+    COALESCE(branch_head_sha,''), COALESCE(last_push_at,''),
+    COALESCE(worktree_path,''), COALESCE(assigned_port,0),
+    created_at, updated_at,
     COALESCE(started_at,''), COALESCE(completed_at,'')
     FROM tasks`
 
 func scanTask(row *sql.Row) (*Task, error) {
 	var t Task
 	var payloadJSON, resultJSON, assignedID string
+	var branchSHA, lastPushAt, worktreePath string
+	var assignedPort int
 	var createdAt, updatedAt, startedAt, completedAt string
 
 	err := row.Scan(
 		&t.ID, &t.ProjectID, &t.Type, &t.Role, &t.Status, &t.Priority,
 		&assignedID, &payloadJSON, &resultJSON,
-		&t.Attempts, &createdAt, &updatedAt, &startedAt, &completedAt,
+		&t.Attempts,
+		&branchSHA, &lastPushAt,
+		&worktreePath, &assignedPort,
+		&createdAt, &updatedAt, &startedAt, &completedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -239,6 +253,14 @@ func scanTask(row *sql.Row) (*Task, error) {
 	t.Payload = unmarshalJSONMap(payloadJSON)
 	if resultJSON != "{}" && resultJSON != "" {
 		t.Result = unmarshalJSONMap(resultJSON)
+	}
+	t.BranchHeadSHA = branchSHA
+	t.WorktreePath = worktreePath
+	t.AssignedPort = assignedPort
+	if lastPushAt != "" {
+		if ts := parseTime(lastPushAt); !ts.IsZero() {
+			t.LastPushAt = &ts
+		}
 	}
 	t.CreatedAt = parseTime(createdAt)
 	t.UpdatedAt = parseTime(updatedAt)
@@ -260,12 +282,17 @@ func scanTasks(rows *sql.Rows) ([]*Task, error) {
 	for rows.Next() {
 		var t Task
 		var payloadJSON, resultJSON, assignedID string
+		var branchSHA, lastPushAt, worktreePath string
+		var assignedPort int
 		var createdAt, updatedAt, startedAt, completedAt string
 
 		if err := rows.Scan(
 			&t.ID, &t.ProjectID, &t.Type, &t.Role, &t.Status, &t.Priority,
 			&assignedID, &payloadJSON, &resultJSON,
-			&t.Attempts, &createdAt, &updatedAt, &startedAt, &completedAt,
+			&t.Attempts,
+			&branchSHA, &lastPushAt,
+			&worktreePath, &assignedPort,
+			&createdAt, &updatedAt, &startedAt, &completedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -273,6 +300,14 @@ func scanTasks(rows *sql.Rows) ([]*Task, error) {
 		t.Payload = unmarshalJSONMap(payloadJSON)
 		if resultJSON != "{}" && resultJSON != "" {
 			t.Result = unmarshalJSONMap(resultJSON)
+		}
+		t.BranchHeadSHA = branchSHA
+		t.WorktreePath = worktreePath
+		t.AssignedPort = assignedPort
+		if lastPushAt != "" {
+			if ts := parseTime(lastPushAt); !ts.IsZero() {
+				t.LastPushAt = &ts
+			}
 		}
 		t.CreatedAt = parseTime(createdAt)
 		t.UpdatedAt = parseTime(updatedAt)
@@ -312,6 +347,57 @@ func nullableJSON(m map[string]interface{}) interface{} {
 		return nil
 	}
 	return marshalJSON(m)
+}
+
+func nullableInt(n int) interface{} {
+	if n == 0 {
+		return nil
+	}
+	return n
+}
+
+// claimTargetState maps a queue state to its execution counterpart.
+// BACKLOG/AWAITING_REVISION → DEVELOPING
+// AWAITING_REVIEW → REVIEWING
+// AWAITING_MERGE  → MERGING
+func claimTargetState(queueState string) string {
+	switch queueState {
+	case TaskStatusAwaitingReview:
+		return TaskStatusReviewing
+	case TaskStatusAwaitingMerge:
+		return TaskStatusMerging
+	default: // BACKLOG, AWAITING_REVISION
+		return TaskStatusDeveloping
+	}
+}
+
+// TransitionTaskState atomically moves a task to a new state, recording the
+// transition in task_state_transitions.
+func (d *Database) TransitionTaskState(ctx context.Context, taskID, fromState, toState, actorAgentID, reason string) error {
+	return d.withImmediateTx(ctx, func(tx *sql.Tx) error {
+		var current string
+		if err := tx.QueryRowContext(ctx, "SELECT status FROM tasks WHERE id=?", taskID).Scan(&current); err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("task %q not found", taskID)
+			}
+			return err
+		}
+		if current != fromState {
+			return fmt.Errorf("task %q: expected state %s, got %s", taskID, fromState, current)
+		}
+		now := time.Now().UTC()
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE tasks SET status=?, updated_at=? WHERE id=?", toState, now, taskID,
+		); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO task_state_transitions (id, task_id, from_state, to_state, actor_agent_id, reason)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			newID(), taskID, fromState, toState, actorAgentID, reason,
+		)
+		return err
+	})
 }
 
 // DeleteTask removes a task by ID. Returns an error if not found.

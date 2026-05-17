@@ -1,14 +1,17 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"agent-orchestrator/api"
 	"agent-orchestrator/db"
+	"agent-orchestrator/git"
 	"agent-orchestrator/llm"
 )
 
@@ -109,16 +112,48 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p := &db.Project{
-			Name:        req.Name,
-			Description: req.Description,
-			RepoPath:    req.RepoPath,
-			GitURL:      req.GitURL,
-			Config:      req.Config,
+			Name:                 req.Name,
+			Description:          req.Description,
+			RepoPath:             req.RepoPath,
+			GitURL:               req.GitURL,
+			Slug:                 req.Slug,
+			RemoteURL:            req.RemoteURL,
+			RemoteCredentialsRef: req.RemoteCredentialsRef,
+			CodingRules:          req.CodingRules,
+			Config:               req.Config,
 		}
 		if err := s.db.CreateProject(r.Context(), p); err != nil {
 			s.internalError(w, err)
 			return
 		}
+
+		// Initialise a bare git repo for this project.
+		repoPath := s.storage.RepoPath(p.ID)
+		if err := git.InitBare(repoPath); err != nil {
+			log.Printf("server: InitBare project %q: %v", p.ID, err)
+		} else {
+			now := time.Now().UTC()
+			p.ServerRepoInitialisedAt = &now
+
+			// Wire optional upstream remote.
+			if p.RemoteURL != "" {
+				if err := git.AddRemote(repoPath, "upstream", p.RemoteURL); err != nil {
+					log.Printf("server: AddRemote project %q: %v", p.ID, err)
+				} else if req.InitialPull {
+					token := s.resolveCredential(p.RemoteCredentialsRef)
+					if err := git.FetchRemote(repoPath, "upstream", token); err != nil {
+						log.Printf("server: FetchRemote project %q: %v", p.ID, err)
+					} else if err := git.ResetBranchToRemote(repoPath, "upstream", "main"); err != nil {
+						log.Printf("server: ResetBranchToRemote project %q: %v", p.ID, err)
+					}
+				}
+			}
+
+			if err := s.db.UpdateProject(r.Context(), p); err != nil {
+				log.Printf("server: UpdateProject after InitBare %q: %v", p.ID, err)
+			}
+		}
+
 		api.WriteJSON(w, http.StatusCreated, p)
 
 	default:
@@ -204,6 +239,18 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.GitURL != nil {
 			p.GitURL = *req.GitURL
+		}
+		if req.Slug != nil {
+			p.Slug = *req.Slug
+		}
+		if req.RemoteURL != nil {
+			p.RemoteURL = *req.RemoteURL
+		}
+		if req.RemoteCredentialsRef != nil {
+			p.RemoteCredentialsRef = *req.RemoteCredentialsRef
+		}
+		if req.CodingRules != nil {
+			p.CodingRules = *req.CodingRules
 		}
 		if req.Status != nil {
 			p.Status = *req.Status
@@ -345,6 +392,9 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		t, _ := s.db.GetTask(r.Context(), id)
+		if t != nil {
+			s.releaseTaskResources(t)
+		}
 		api.WriteJSON(w, http.StatusOK, t)
 
 	case "unqueue":
@@ -357,15 +407,42 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
 			return
 		}
-		if t.Status != "queued" && t.Status != "planned" {
+		if !db.IsQueueState(t.Status) {
 			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput,
-				"can only unqueue tasks with status 'queued' or 'planned'")
+				"can only unqueue tasks that are in a queue state (BACKLOG, AWAITING_REVIEW, AWAITING_REVISION, AWAITING_MERGE)")
 			return
 		}
-		t.Status = "planned"
+		t.Status = db.TaskStatusBacklog
 		if err := s.db.UpdateTask(r.Context(), t); err != nil {
 			s.internalError(w, err)
 			return
+		}
+		api.WriteJSON(w, http.StatusOK, t)
+
+	case "submit-for-review":
+		// POST /api/tasks/{id}/submit-for-review
+		// The agent calls this after pushing its branch. State should already be
+		// AWAITING_REVIEW (driven by the git post-receive hook); this endpoint is
+		// a metadata confirmation that lets the agent cleanly release its claim.
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		t, err := s.db.GetTask(r.Context(), id)
+		if err != nil {
+			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+			return
+		}
+		// If the post-receive hook hasn't fired yet (e.g. colocated push),
+		// transition manually.
+		if t.Status == db.TaskStatusDeveloping {
+			_ = s.db.TransitionTaskState(r.Context(), id,
+				db.TaskStatusDeveloping, db.TaskStatusAwaitingReview,
+				t.AssignedAgentID, "submitted for review by agent")
+			t, _ = s.db.GetTask(r.Context(), id)
+		}
+		if t != nil {
+			s.releaseTaskResources(t)
 		}
 		api.WriteJSON(w, http.StatusOK, t)
 
@@ -406,6 +483,25 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 
 	case "comments":
 		s.handleTaskComments(w, r, id, parts)
+
+	case "reviews":
+		s.handleTaskReviews(w, r, id, parts)
+
+	case "transitions":
+		// GET /api/tasks/{id}/transitions — state-transition history
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		transitions, err := s.db.ListStateTransitions(r.Context(), id)
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		if transitions == nil {
+			transitions = []*db.StateTransition{}
+		}
+		api.WriteJSON(w, http.StatusOK, transitions)
 
 	case "chat":
 		s.handleTaskChat(w, r, id)
@@ -496,10 +592,17 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalise mode.
+	mode := req.Mode
+	if mode != "colocated" && mode != "remote" {
+		mode = "remote"
+	}
+
 	// Check if agent with this name already exists; if so, update it.
 	existing, _ := s.db.GetAgentByName(r.Context(), req.Name)
 	if existing != nil {
 		existing.Roles = req.Roles
+		existing.Mode = mode
 		existing.Capabilities = req.Capabilities
 		existing.Status = "online"
 		if err := s.db.UpdateAgent(r.Context(), existing); err != nil {
@@ -520,6 +623,7 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	a := &db.Agent{
 		Name:         req.Name,
 		Roles:        req.Roles,
+		Mode:         mode,
 		Capabilities: req.Capabilities,
 		Status:       "online",
 	}
@@ -618,7 +722,10 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 			api.WriteJSON(w, http.StatusOK, nil)
 			return
 		}
-		api.WriteJSON(w, http.StatusOK, task)
+
+		// Claim the task and enrich the response with workspace details.
+		claimResp := s.prepareClaimResponse(r.Context(), task, agentID)
+		api.WriteJSON(w, http.StatusOK, claimResp)
 		return
 	}
 
@@ -1077,6 +1184,24 @@ func (s *Server) decodeJSON(w http.ResponseWriter, r *http.Request, v interface{
 func (s *Server) internalError(w http.ResponseWriter, err error) {
 	log.Printf("internal error: %v", err)
 	api.WriteError(w, http.StatusInternalServerError, api.ErrCodeInternal, "internal server error")
+}
+
+// resolveCredential resolves a credential reference to a token string.
+// The ref is treated as an environment variable name; falls back to empty string.
+func (s *Server) resolveCredential(ref string) string {
+	if ref == "" {
+		return ""
+	}
+	// Try environment variable first.
+	if val := os.Getenv(ref); val != "" {
+		return val
+	}
+	// Try platform_settings key.
+	setting, err := s.db.GetSetting(context.Background(), ref)
+	if err == nil {
+		return setting.Value
+	}
+	return ""
 }
 
 func methodNotAllowed(w http.ResponseWriter) {

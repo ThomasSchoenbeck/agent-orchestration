@@ -21,12 +21,15 @@
   let showSidebar         = $state(false)
 
   const statusColors = {
-    pending:     'bg-gray-700 text-gray-300',
-    planned:     'bg-blue-900 text-blue-300',
-    queued:      'bg-yellow-900 text-yellow-300',
-    in_progress: 'bg-orange-900 text-orange-300',
-    completed:   'bg-green-900 text-green-300',
-    failed:      'bg-red-900 text-red-300',
+    BACKLOG:           'bg-blue-900 text-blue-300',
+    DEVELOPING:        'bg-orange-900 text-orange-300',
+    AWAITING_REVIEW:   'bg-yellow-900 text-yellow-300',
+    REVIEWING:         'bg-purple-900 text-purple-300',
+    AWAITING_REVISION: 'bg-rose-900 text-rose-300',
+    AWAITING_MERGE:    'bg-cyan-900 text-cyan-300',
+    MERGING:           'bg-indigo-900 text-indigo-300',
+    COMPLETED:         'bg-green-900 text-green-300',
+    FAILED:            'bg-red-900 text-red-300',
   }
 
   let form = $state({
@@ -52,25 +55,32 @@
   let bucketMinutes   = $state(60)
 
   const TASK_COLORS = {
-    task_created:   '#34d399',
-    task_updated:   '#60a5fa',
-    task_queued:    '#facc15',
-    task_claimed:   '#a78bfa',
-    task_started:   '#fb923c',
-    task_completed: '#22c55e',
-    task_failed:    '#ef4444',
-    task_retried:   '#f97316',
-    task_cancelled:           '#6b7280',
-    task_timeout:             '#f43f5e',
-    task_result:              '#38bdf8',
-    task_error:               '#e879f9',
-    task_dependency_warning:  '#fbbf24',
-    task_dependency_added:    '#a3e635',
-    task_dependency_removed:  '#fb923c',
-    task_checklist_changed:   '#67e8f9',
-    task_comment_added:       '#c084fc',
-    task_link_added:          '#86efac',
-    task_link_removed:        '#fca5a5',
+    task_created:              '#34d399',
+    task_updated:              '#60a5fa',
+    task_queued:               '#facc15',
+    task_claimed:              '#a78bfa',
+    task_started:              '#fb923c',
+    task_completed:            '#22c55e',
+    task_failed:               '#ef4444',
+    task_retried:              '#f97316',
+    task_cancelled:            '#6b7280',
+    task_timeout:              '#f43f5e',
+    task_result:               '#38bdf8',
+    task_error:                '#e879f9',
+    task_dependency_warning:   '#fbbf24',
+    task_dependency_added:     '#a3e635',
+    task_dependency_removed:   '#fb923c',
+    task_checklist_changed:    '#67e8f9',
+    task_comment_added:        '#c084fc',
+    task_link_added:           '#86efac',
+    task_link_removed:         '#fca5a5',
+    // W7.2 — new lifecycle events
+    task_submitted_for_review: '#f59e0b',
+    task_review_posted:        '#8b5cf6',
+    task_revision_started:     '#ec4899',
+    task_merge_started:        '#06b6d4',
+    task_merge_failed:         '#dc2626',
+    task_pushed_upstream:      '#10b981',
   }
 
   // ── Data loading ──────────────────────────────────────────────────────────
@@ -339,7 +349,7 @@
           onchange={loadTasks}
         >
           <option value="">All statuses</option>
-          {#each ['pending','planned','queued','in_progress','completed','failed'] as s}
+          {#each ['BACKLOG','DEVELOPING','AWAITING_REVIEW','REVIEWING','AWAITING_REVISION','AWAITING_MERGE','MERGING','COMPLETED','FAILED'] as s}
             <option value={s}>{s}</option>
           {/each}
         </select>
@@ -502,10 +512,10 @@
                 {/if}
               </div>
               <div class="flex items-center gap-1.5 shrink-0">
-                {#if t.status === 'pending' || t.status === 'failed'}
+                {#if t.status === 'BACKLOG' || t.status === 'FAILED'}
                   <button
                     class="text-[10px] text-yellow-400 hover:text-yellow-300"
-                    onclick={(e) => { e.stopPropagation(); setStatus(t.id, 'queued') }}
+                    onclick={(e) => { e.stopPropagation(); setStatus(t.id, 'BACKLOG') }}
                   >Queue</button>
                 {/if}
                 <button

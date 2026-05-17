@@ -134,7 +134,7 @@ func TestServerClient_Register(t *testing.T) {
 	c := agent.NewServerClient(srv.URL)
 
 	ctx := context.Background()
-	id, err := c.Register(ctx, "test", []string{"worker"}, nil)
+	id, err := c.Register(ctx, "test", []string{"worker"}, "remote", nil)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestServerClient_Heartbeat(t *testing.T) {
 	c := agent.NewServerClient(srv.URL)
 	ctx := context.Background()
 
-	_, _ = c.Register(ctx, "test", []string{"worker"}, nil)
+	_, _ = c.Register(ctx, "test", []string{"worker"}, "remote", nil)
 	if err := c.Heartbeat(ctx, "agent-test-123"); err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}

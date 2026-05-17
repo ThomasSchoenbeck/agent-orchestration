@@ -7,13 +7,44 @@ import "fmt"
 type TaskStatus string
 
 const (
-	StatusPlanned     TaskStatus = "planned"
-	StatusInProgress  TaskStatus = "in_progress"
-	StatusNeedsReview TaskStatus = "needs_review"
-	StatusApproved    TaskStatus = "approved"
-	StatusCompleted   TaskStatus = "completed"
-	StatusFailed      TaskStatus = "failed"
+	// Queue states — task is waiting for an agent.
+	StatusBacklog          TaskStatus = "BACKLOG"
+	StatusAwaitingReview   TaskStatus = "AWAITING_REVIEW"
+	StatusAwaitingRevision TaskStatus = "AWAITING_REVISION"
+	StatusAwaitingMerge    TaskStatus = "AWAITING_MERGE"
+
+	// Execution states — an agent holds the task.
+	StatusDeveloping TaskStatus = "DEVELOPING"
+	StatusReviewing  TaskStatus = "REVIEWING"
+	StatusMerging    TaskStatus = "MERGING"
+
+	// Terminal states.
+	StatusCompleted TaskStatus = "COMPLETED"
+	StatusFailed    TaskStatus = "FAILED"
 )
+
+// IsQueueState reports whether s is a state where the task is waiting for an agent.
+func IsQueueState(s TaskStatus) bool {
+	switch s {
+	case StatusBacklog, StatusAwaitingReview, StatusAwaitingRevision, StatusAwaitingMerge:
+		return true
+	}
+	return false
+}
+
+// IsExecutionState reports whether s is a state where an agent is actively working.
+func IsExecutionState(s TaskStatus) bool {
+	switch s {
+	case StatusDeveloping, StatusReviewing, StatusMerging:
+		return true
+	}
+	return false
+}
+
+// IsTerminalState reports whether s is a terminal state (no further transitions).
+func IsTerminalState(s TaskStatus) bool {
+	return s == StatusCompleted || s == StatusFailed
+}
 
 // TaskType identifies the kind of work a task represents.
 type TaskType string
@@ -33,14 +64,26 @@ type Transition struct {
 
 // validTransitions is the set of allowed state changes.
 var validTransitions = []Transition{
-	{StatusPlanned, StatusInProgress},
-	{StatusInProgress, StatusCompleted},
-	{StatusInProgress, StatusFailed},
-	{StatusInProgress, StatusNeedsReview},
-	{StatusNeedsReview, StatusApproved},
-	{StatusNeedsReview, StatusInProgress}, // re-queued after changes requested
-	{StatusApproved, StatusCompleted},
-	{StatusFailed, StatusPlanned}, // retry
+	// Dev path
+	{StatusBacklog, StatusDeveloping},
+	{StatusAwaitingRevision, StatusDeveloping},
+	{StatusDeveloping, StatusAwaitingReview},
+	{StatusDeveloping, StatusFailed},
+
+	// Review path
+	{StatusAwaitingReview, StatusReviewing},
+	{StatusReviewing, StatusAwaitingMerge},    // approved
+	{StatusReviewing, StatusAwaitingRevision}, // revision requested
+	{StatusReviewing, StatusFailed},
+
+	// Merge path
+	{StatusAwaitingMerge, StatusMerging},
+	{StatusMerging, StatusCompleted},
+	{StatusMerging, StatusAwaitingRevision}, // merge conflict → back to dev
+	{StatusMerging, StatusFailed},
+
+	// Retry
+	{StatusFailed, StatusBacklog},
 }
 
 // IsValidTransition returns true when moving from → to is allowed.
@@ -64,11 +107,6 @@ func ValidateTransition(from, to TaskStatus) error {
 // FollowOnType returns the task type that should be created when a task of
 // type src completes with the given result outcome. Returns ("", false) when
 // no follow-on task is needed.
-//
-//	implement + completed  → review
-//	review    + approved   → test
-//	review    + changes    → (re-queue existing implement, no new task)
-//	test      + completed  → (workflow done, no follow-on)
 func FollowOnType(src TaskType, outcome string) (TaskType, bool) {
 	switch src {
 	case TypeImplement:
@@ -79,13 +117,11 @@ func FollowOnType(src TaskType, outcome string) (TaskType, bool) {
 		if outcome == "approved" {
 			return TypeTest, true
 		}
-		// "changes" means re-queue the implement task — handled by scheduler, not here.
 	}
 	return "", false
 }
 
 // RoleForType returns the default role for a given task type.
-// These can be overridden by config.routing.
 func RoleForType(t TaskType) string {
 	switch t {
 	case TypePlan:

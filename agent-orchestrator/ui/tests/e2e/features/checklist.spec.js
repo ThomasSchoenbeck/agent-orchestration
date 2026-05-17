@@ -41,6 +41,6 @@ test('task detail: checklist section is present and interactive', async ({ page 
   if (await labelInput.count() > 0) {
     await labelInput.fill('Test item')
     await page.getByRole('button', { name: /add|save/i }).last().click()
-    await expect(page.getByText('Test item')).toBeVisible({ timeout: 3000 })
+    await expect(page.getByText('Test item').first()).toBeVisible({ timeout: 3000 })
   }
 })

@@ -3,20 +3,29 @@ package api
 // --- Project request/response types ---
 
 type CreateProjectRequest struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	RepoPath    string                 `json:"repo_path"` // local filesystem path
-	GitURL      string                 `json:"git_url"`   // git remote URL
-	Config      map[string]interface{} `json:"config"`
+	Name                 string                 `json:"name"`
+	Description          string                 `json:"description"`
+	RepoPath             string                 `json:"repo_path"` // local filesystem path
+	GitURL               string                 `json:"git_url"`   // git remote URL (legacy)
+	Slug                 string                 `json:"slug"`
+	RemoteURL            string                 `json:"remote_url,omitempty"`
+	RemoteCredentialsRef string                 `json:"remote_credentials_ref,omitempty"`
+	CodingRules          string                 `json:"coding_rules,omitempty"`
+	InitialPull          bool                   `json:"initial_pull,omitempty"` // fetch upstream and reset main on create
+	Config               map[string]interface{} `json:"config"`
 }
 
 type UpdateProjectRequest struct {
-	Name        *string                `json:"name,omitempty"`
-	Description *string                `json:"description,omitempty"`
-	RepoPath    *string                `json:"repo_path,omitempty"`
-	GitURL      *string                `json:"git_url,omitempty"`
-	Status      *string                `json:"status,omitempty"`
-	Config      map[string]interface{} `json:"config,omitempty"`
+	Name                 *string                `json:"name,omitempty"`
+	Description          *string                `json:"description,omitempty"`
+	RepoPath             *string                `json:"repo_path,omitempty"`
+	GitURL               *string                `json:"git_url,omitempty"`
+	Slug                 *string                `json:"slug,omitempty"`
+	RemoteURL            *string                `json:"remote_url,omitempty"`
+	RemoteCredentialsRef *string                `json:"remote_credentials_ref,omitempty"`
+	CodingRules          *string                `json:"coding_rules,omitempty"`
+	Status               *string                `json:"status,omitempty"`
+	Config               map[string]interface{} `json:"config,omitempty"`
 }
 
 // --- Task request/response types ---
@@ -52,11 +61,23 @@ type TaskMetrics struct {
 type RegisterAgentRequest struct {
 	Name         string                 `json:"name"`
 	Roles        []string               `json:"roles"`
+	Mode         string                 `json:"mode,omitempty"` // colocated | remote (default: remote)
 	Capabilities map[string]interface{} `json:"capabilities"`
 }
 
 type RegisterAgentResponse struct {
 	AgentID string `json:"agent_id"`
+}
+
+// ClaimTaskResponse is returned by the task-claim endpoint and carries
+// workspace details that differ between colocated and remote agents.
+type ClaimTaskResponse struct {
+	Task         interface{} `json:"task"`
+	// Colocated agents receive a local path; remote agents receive a URL+branch.
+	WorktreePath string `json:"worktree_path,omitempty"` // colocated only
+	RepoURL      string `json:"repo_url,omitempty"`      // remote only
+	Branch       string `json:"branch,omitempty"`        // remote only
+	AssignedPort int    `json:"assigned_port,omitempty"`
 }
 
 // --- Requirements / Features / Task Links ---

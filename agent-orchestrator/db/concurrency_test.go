@@ -13,7 +13,7 @@ import (
 // createConcurrencyProject creates a project for concurrency tests.
 func createConcurrencyProject(t *testing.T, d *db.Database) string {
 	t.Helper()
-	p := &db.Project{Name: "Concurrency Test Project", Status: "planned"}
+	p := &db.Project{Name: "Concurrency Test Project", Status: "active"}
 	if err := d.CreateProject(context.Background(), p); err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestClaimTask_NoConcurrentDoubleClaim(t *testing.T) {
 		ProjectID: projectID,
 		Type:      "implement",
 		Role:      "worker",
-		Status:    "planned",
+		Status:    db.TaskStatusBacklog,
 		Payload:   map[string]interface{}{},
 	}
 	if err := d.CreateTask(ctx, task); err != nil {
@@ -78,13 +78,12 @@ func TestClaimTask_NoConcurrentDoubleClaim(t *testing.T) {
 		t.Errorf("expected exactly 1 successful claim, got %d", successCount)
 	}
 
-	// Verify the task is in_progress with exactly one assigned agent.
 	updated, err := d.GetTask(ctx, task.ID)
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if updated.Status != "in_progress" {
-		t.Errorf("expected task status %q, got %q", "in_progress", updated.Status)
+	if updated.Status != db.TaskStatusDeveloping {
+		t.Errorf("expected task status %q, got %q", db.TaskStatusDeveloping, updated.Status)
 	}
 	if updated.AssignedAgentID == "" {
 		t.Error("expected assigned_agent_id to be set")
@@ -101,20 +100,18 @@ func TestClaimTask_ManyAgentsManyTasks(t *testing.T) {
 	ctx := context.Background()
 	projectID := createConcurrencyProject(t, d)
 
-	// Create agents.
 	agentIDs := make([]string, numAgents)
 	for i := 0; i < numAgents; i++ {
 		agentIDs[i] = createAgent(t, d, fmt.Sprintf("worker-%d", i))
 	}
 
-	// Create tasks.
 	taskIDs := make([]string, numTasks)
 	for i := 0; i < numTasks; i++ {
 		task := &db.Task{
 			ProjectID: projectID,
 			Type:      "implement",
 			Role:      "worker",
-			Status:    "planned",
+			Status:    db.TaskStatusBacklog,
 			Payload:   map[string]interface{}{"index": i},
 		}
 		if err := d.CreateTask(ctx, task); err != nil {
@@ -123,7 +120,6 @@ func TestClaimTask_ManyAgentsManyTasks(t *testing.T) {
 		taskIDs[i] = task.ID
 	}
 
-	// Each agent tries to claim every task concurrently.
 	var totalClaims int32
 	var wg sync.WaitGroup
 
@@ -140,20 +136,18 @@ func TestClaimTask_ManyAgentsManyTasks(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Each task should be claimed exactly once → totalClaims == numTasks.
 	if int(totalClaims) != numTasks {
 		t.Errorf("expected %d total claims (one per task), got %d", numTasks, totalClaims)
 	}
 
-	// Verify each task has exactly one assigned agent and is in_progress.
-	claimedBy := make(map[string]int) // agent → claim count
+	claimedBy := make(map[string]int)
 	for _, tid := range taskIDs {
 		task, err := d.GetTask(ctx, tid)
 		if err != nil {
 			t.Fatalf("get task %s: %v", tid, err)
 		}
-		if task.Status != "in_progress" {
-			t.Errorf("task %s: expected status in_progress, got %q", tid, task.Status)
+		if task.Status != db.TaskStatusDeveloping {
+			t.Errorf("task %s: expected status %s, got %q", tid, db.TaskStatusDeveloping, task.Status)
 		}
 		if task.AssignedAgentID == "" {
 			t.Errorf("task %s: expected assigned_agent_id to be set", tid)
@@ -161,7 +155,6 @@ func TestClaimTask_ManyAgentsManyTasks(t *testing.T) {
 		claimedBy[task.AssignedAgentID]++
 	}
 
-	// Verify all claimants are real agents.
 	agentSet := make(map[string]bool, numAgents)
 	for _, id := range agentIDs {
 		agentSet[id] = true
@@ -186,19 +179,17 @@ func TestClaimTask_AlreadyClaimed(t *testing.T) {
 		ProjectID: projectID,
 		Type:      "implement",
 		Role:      "worker",
-		Status:    "planned",
+		Status:    db.TaskStatusBacklog,
 		Payload:   map[string]interface{}{},
 	}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 
-	// First claim succeeds.
 	if err := d.ClaimTask(ctx, task.ID, agentA); err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
 
-	// Second claim must fail.
 	if err := d.ClaimTask(ctx, task.ID, agentB); err == nil {
 		t.Error("expected error on second claim of already-in-progress task")
 	}
@@ -215,7 +206,7 @@ func TestClaimTask_CompletedTask(t *testing.T) {
 		ProjectID: projectID,
 		Type:      "implement",
 		Role:      "worker",
-		Status:    "completed",
+		Status:    db.TaskStatusCompleted,
 		Payload:   map[string]interface{}{},
 	}
 	if err := d.CreateTask(ctx, task); err != nil {
@@ -233,25 +224,22 @@ func TestRequeueTimedOutTasks(t *testing.T) {
 	ctx := context.Background()
 	projectID := createConcurrencyProject(t, d)
 
-	// Create an in-progress task backdated by 600s.
 	task := &db.Task{
 		ProjectID: projectID,
 		Type:      "implement",
 		Role:      "worker",
-		Status:    "in_progress",
+		Status:    db.TaskStatusDeveloping,
 		Payload:   map[string]interface{}{},
 	}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
-	// Backdate updated_at.
 	_, err := d.RawDB().ExecContext(ctx,
 		`UPDATE tasks SET updated_at=datetime('now','-600 seconds') WHERE id=?`, task.ID)
 	if err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
 
-	// Requeue tasks older than 300s.
 	n, err := d.RequeueTimedOutTasks(ctx, 300)
 	if err != nil {
 		t.Fatalf("RequeueTimedOutTasks: %v", err)
@@ -260,13 +248,12 @@ func TestRequeueTimedOutTasks(t *testing.T) {
 		t.Errorf("expected 1 task requeued, got %d", n)
 	}
 
-	// Verify the task is now planned.
 	updated, err := d.GetTask(ctx, task.ID)
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if updated.Status != "planned" {
-		t.Errorf("expected status %q, got %q", "planned", updated.Status)
+	if updated.Status != db.TaskStatusBacklog {
+		t.Errorf("expected status %q, got %q", db.TaskStatusBacklog, updated.Status)
 	}
 }
 
@@ -280,13 +267,12 @@ func TestRequeueTimedOutTasks_NotExpired(t *testing.T) {
 		ProjectID: projectID,
 		Type:      "implement",
 		Role:      "worker",
-		Status:    "in_progress",
+		Status:    db.TaskStatusDeveloping,
 		Payload:   map[string]interface{}{},
 	}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
-	// Task is fresh (just created), timeout is 300s.
 	n, err := d.RequeueTimedOutTasks(ctx, 300)
 	if err != nil {
 		t.Fatalf("RequeueTimedOutTasks: %v", err)

@@ -31,7 +31,7 @@ func listTasksTool(database *db.Database) Definition {
 		Description: "List tasks for a project. Optionally filter by status or role.",
 		Parameters: map[string]Param{
 			"project_id": {Type: "string", Description: "Project ID to list tasks for (required)"},
-			"status":     {Type: "string", Description: "Filter by status: planned|in_progress|completed|failed (optional)"},
+			"status":     {Type: "string", Description: "Filter by status: BACKLOG|DEVELOPING|AWAITING_REVIEW|REVIEWING|AWAITING_REVISION|AWAITING_MERGE|MERGING|COMPLETED|FAILED (optional)"},
 			"role":       {Type: "string", Description: "Filter by role: worker|orchestrator|reviewer (optional)"},
 			"limit":      {Type: "number", Description: "Maximum number of tasks to return (default 50)"},
 		},
@@ -66,7 +66,7 @@ func submitTaskResultTool(database *db.Database) Definition {
 		Description: "Submit the result of a completed or failed task. Updates the task status and stores the result.",
 		Parameters: map[string]Param{
 			"task_id": {Type: "string", Description: "ID of the task being completed"},
-			"status":  {Type: "string", Description: "Final status: completed|failed|needs_review"},
+			"status":  {Type: "string", Description: "Final status: AWAITING_REVIEW|COMPLETED|FAILED"},
 			"output":  {Type: "string", Description: "Text output or summary of the work done"},
 			"error":   {Type: "string", Description: "Error message if status is failed (optional)"},
 		},
@@ -108,7 +108,7 @@ func submitTaskResultTool(database *db.Database) Definition {
 func getNextTaskTool(database *db.Database) Definition {
 	return Definition{
 		Name:        "get_next_task",
-		Description: "Fetch the next available planned task matching the given roles. Returns null if no tasks are available.",
+		Description: "Fetch the next available task in a queue state (BACKLOG, AWAITING_REVIEW, AWAITING_REVISION, AWAITING_MERGE) matching the given roles. Returns null if no tasks are available.",
 		Parameters: map[string]Param{
 			"roles": {Type: "string", Description: "Comma-separated roles the agent can handle (e.g. 'worker,reviewer')"},
 		},

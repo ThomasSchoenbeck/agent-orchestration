@@ -36,18 +36,23 @@
   let comments     = $state([])
   let newComment   = $state('')
   let postingComment = $state(false)
+  let transitions  = $state([])
+  let reviews      = $state([])
 
   // Edit buffer
   let editBuf = $state({})
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const statusColors = {
-    planned:     'bg-blue-900 text-blue-300',
-    queued:      'bg-yellow-900 text-yellow-300',
-    in_progress: 'bg-orange-900 text-orange-300',
-    needs_review:'bg-purple-900 text-purple-300',
-    completed:   'bg-green-900 text-green-300',
-    failed:      'bg-red-900 text-red-300',
+    BACKLOG:           'bg-blue-900 text-blue-300',
+    DEVELOPING:        'bg-orange-900 text-orange-300',
+    AWAITING_REVIEW:   'bg-yellow-900 text-yellow-300',
+    REVIEWING:         'bg-purple-900 text-purple-300',
+    AWAITING_REVISION: 'bg-rose-900 text-rose-300',
+    AWAITING_MERGE:    'bg-cyan-900 text-cyan-300',
+    MERGING:           'bg-indigo-900 text-indigo-300',
+    COMPLETED:         'bg-green-900 text-green-300',
+    FAILED:            'bg-red-900 text-red-300',
   }
 
   function formatDate(iso) {
@@ -75,14 +80,18 @@
       // Fetch core task first; secondary endpoints (new in this build) are
       // fetched with individual fallbacks so a missing/unimplemented endpoint
       // doesn't prevent the page from rendering.
-      const [t, links, depList, checklistData, commentData] = await Promise.all([
+      const [t, links, depList, checklistData, commentData, transitionData, reviewData] = await Promise.all([
         getTask(taskId),
         listTaskLinks(taskId).catch(() => []),
         listTaskDependencies(taskId).catch(() => []),
         listChecklistItems(taskId).catch(() => []),
         listComments(taskId).catch(() => []),
+        fetch(`/api/tasks/${taskId}/transitions`).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch(`/api/tasks/${taskId}/reviews`).then(r => r.ok ? r.json() : []).catch(() => []),
       ])
       task = t
+      transitions = Array.isArray(transitionData) ? transitionData : []
+      reviews     = Array.isArray(reviewData) ? reviewData : []
       taskLinks  = links ?? []
       deps       = depList ?? []
       checklist  = checklistData ?? []
@@ -309,7 +318,7 @@
 
   async function handleQueue() {
     try {
-      const updated = await updateTask(taskId, { status: 'queued' })
+      const updated = await updateTask(taskId, { status: 'BACKLOG' })
       task = updated
       toasts.success('Task queued')
       loadLogs(taskId)
@@ -381,7 +390,7 @@
                        text-sm text-gray-300 focus:outline-none focus:border-accent"
                 bind:value={editBuf.status}
               >
-                {#each ['planned','queued','in_progress','needs_review','completed','failed'] as s}
+                {#each ['BACKLOG','DEVELOPING','AWAITING_REVIEW','REVIEWING','AWAITING_REVISION','AWAITING_MERGE','MERGING','COMPLETED','FAILED'] as s}
                   <option value={s}>{s}</option>
                 {/each}
               </select>
@@ -752,6 +761,69 @@
         </div>
       {/if}
 
+      <!-- ── State-transition timeline ──────────────────────────────── -->
+      {#if transitions.length > 0}
+        <div class="mt-6">
+          <h3 class="text-sm font-semibold text-gray-300 mb-3">State Timeline</h3>
+          <ol class="relative border-l border-surface-600 ml-3 flex flex-col gap-4">
+            {#each transitions as tr (tr.id)}
+              <li class="ml-4 text-xs">
+                <span class="absolute -left-1.5 mt-1 w-3 h-3 rounded-full border border-surface-600
+                             {tr.to_state === 'COMPLETED' ? 'bg-green-600' :
+                              tr.to_state === 'FAILED' ? 'bg-red-600' :
+                              tr.to_state.startsWith('AWAITING') ? 'bg-yellow-600' :
+                              'bg-accent'}">
+                </span>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="text-gray-500 font-mono">
+                    {new Date(tr.created_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
+                  </span>
+                  <span class="text-gray-400">
+                    {#if tr.from_state}<span class="text-gray-500">{tr.from_state}</span> → {/if}
+                    <span class="font-semibold text-gray-200">{tr.to_state}</span>
+                  </span>
+                  {#if tr.reason}
+                    <span class="text-gray-600 italic">{tr.reason}</span>
+                  {/if}
+                  {#if tr.actor_agent_id}
+                    <span class="text-gray-600 font-mono">{tr.actor_agent_id.slice(0,8)}</span>
+                  {/if}
+                </div>
+              </li>
+            {/each}
+          </ol>
+        </div>
+      {/if}
+
+      <!-- ── Code reviews ──────────────────────────────────────────── -->
+      {#if reviews.length > 0}
+        <div class="mt-6">
+          <h3 class="text-sm font-semibold text-gray-300 mb-3">Code Reviews</h3>
+          <div class="flex flex-col gap-4">
+            {#each reviews as rev (rev.id)}
+              <div class="rounded border
+                {rev.status === 'approved' ? 'border-green-700 bg-green-950' :
+                 rev.status === 'changes_requested' ? 'border-yellow-700 bg-yellow-950' :
+                 'border-rose-700 bg-rose-950'} p-3">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="text-xs font-medium
+                    {rev.status === 'approved' ? 'text-green-300' :
+                     rev.status === 'changes_requested' ? 'text-yellow-300' :
+                     'text-rose-300'}">
+                    {rev.status.replace('_', ' ').toUpperCase()}
+                  </span>
+                  <span class="text-xs text-gray-500">{rev.author_role || rev.author_type}</span>
+                  <span class="text-xs text-gray-600 font-mono ml-auto">
+                    {new Date(rev.created_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
+                  </span>
+                </div>
+                <div class="text-xs text-gray-300 whitespace-pre-wrap font-mono">{rev.body}</div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <div class="mt-6">
         <h3 class="text-sm font-semibold text-gray-300 mb-3">Task Events</h3>
         {#if logsLoading}
@@ -794,14 +866,14 @@
     <div class="p-5 bg-surface-800 rounded border border-surface-600">
       <h3 class="text-sm font-semibold text-gray-200 mb-3">Actions</h3>
       <div class="flex gap-2 flex-wrap">
-        {#if task.status === 'planned' || task.status === 'failed'}
+        {#if task.status === 'FAILED'}
           <button
             class="px-3 py-1.5 text-sm border border-yellow-600 text-yellow-400
                    hover:bg-yellow-900 hover:border-yellow-500 rounded transition-colors"
             onclick={handleQueue}
-          >Queue</button>
+          >Retry (→ BACKLOG)</button>
         {/if}
-        {#if task.status === 'queued' || task.status === 'planned'}
+        {#if task.status === 'BACKLOG' || task.status === 'AWAITING_REVIEW' || task.status === 'AWAITING_REVISION' || task.status === 'AWAITING_MERGE'}
           <button
             class="px-3 py-1.5 text-sm border border-orange-600 text-orange-400
                    hover:bg-orange-900 hover:border-orange-500 rounded transition-colors"

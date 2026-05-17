@@ -39,7 +39,6 @@ func seedTask(t *testing.T, d *db.Database, projectID, status string) *db.Task {
 }
 
 // countFromResult extracts the integer "count" field from a tool result map.
-// Handlers return native int, so we handle both int and float64 defensively.
 func countFromResult(result map[string]interface{}) int {
 	switch v := result["count"].(type) {
 	case int:
@@ -66,9 +65,9 @@ func TestListTasks_Empty(t *testing.T) {
 func TestListTasks_ReturnsAll(t *testing.T) {
 	d, reg, projectID := openTaskToolDB(t)
 
-	seedTask(t, d, projectID, "planned")
-	seedTask(t, d, projectID, "in_progress")
-	seedTask(t, d, projectID, "completed")
+	seedTask(t, d, projectID, db.TaskStatusBacklog)
+	seedTask(t, d, projectID, db.TaskStatusDeveloping)
+	seedTask(t, d, projectID, db.TaskStatusCompleted)
 
 	result := callTool(t, reg, "list_tasks", map[string]interface{}{
 		"project_id": projectID,
@@ -81,16 +80,16 @@ func TestListTasks_ReturnsAll(t *testing.T) {
 func TestListTasks_FilterByStatus(t *testing.T) {
 	d, reg, projectID := openTaskToolDB(t)
 
-	seedTask(t, d, projectID, "planned")
-	seedTask(t, d, projectID, "in_progress")
-	seedTask(t, d, projectID, "completed")
+	seedTask(t, d, projectID, db.TaskStatusBacklog)
+	seedTask(t, d, projectID, db.TaskStatusDeveloping)
+	seedTask(t, d, projectID, db.TaskStatusCompleted)
 
 	result := callTool(t, reg, "list_tasks", map[string]interface{}{
 		"project_id": projectID,
-		"status":     "planned",
+		"status":     db.TaskStatusBacklog,
 	})
 	if n := countFromResult(result); n != 1 {
-		t.Errorf("expected 1 planned task, got %d", n)
+		t.Errorf("expected 1 BACKLOG task, got %d", n)
 	}
 }
 
@@ -98,11 +97,11 @@ func TestListTasks_FilterByRole(t *testing.T) {
 	d, reg, projectID := openTaskToolDB(t)
 
 	workerTask := &db.Task{
-		ProjectID: projectID, Type: "implement", Role: "worker", Status: "planned",
+		ProjectID: projectID, Type: "implement", Role: "worker", Status: db.TaskStatusBacklog,
 		Payload: map[string]interface{}{},
 	}
 	reviewerTask := &db.Task{
-		ProjectID: projectID, Type: "review", Role: "reviewer", Status: "planned",
+		ProjectID: projectID, Type: "review", Role: "reviewer", Status: db.TaskStatusBacklog,
 		Payload: map[string]interface{}{},
 	}
 	_ = d.CreateTask(context.Background(), workerTask)
@@ -126,11 +125,11 @@ func TestListTasks_MissingProjectID(t *testing.T) {
 
 func TestSubmitTaskResult_Completed(t *testing.T) {
 	d, reg, projectID := openTaskToolDB(t)
-	task := seedTask(t, d, projectID, "in_progress")
+	task := seedTask(t, d, projectID, db.TaskStatusDeveloping)
 
 	result := callTool(t, reg, "submit_task_result", map[string]interface{}{
 		"task_id": task.ID,
-		"status":  "completed",
+		"status":  db.TaskStatusCompleted,
 		"output":  "all done",
 	})
 
@@ -142,8 +141,8 @@ func TestSubmitTaskResult_Completed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if updated.Status != "completed" {
-		t.Errorf("expected status completed, got %q", updated.Status)
+	if updated.Status != db.TaskStatusCompleted {
+		t.Errorf("expected status %s, got %q", db.TaskStatusCompleted, updated.Status)
 	}
 	if updated.Result["output"] != "all done" {
 		t.Errorf("expected result.output='all done', got %v", updated.Result["output"])
@@ -152,11 +151,11 @@ func TestSubmitTaskResult_Completed(t *testing.T) {
 
 func TestSubmitTaskResult_Failed(t *testing.T) {
 	d, reg, projectID := openTaskToolDB(t)
-	task := seedTask(t, d, projectID, "in_progress")
+	task := seedTask(t, d, projectID, db.TaskStatusDeveloping)
 
 	callTool(t, reg, "submit_task_result", map[string]interface{}{
 		"task_id": task.ID,
-		"status":  "failed",
+		"status":  db.TaskStatusFailed,
 		"output":  "partial work",
 		"error":   "LLM timeout",
 	})
@@ -165,34 +164,34 @@ func TestSubmitTaskResult_Failed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if updated.Status != "failed" {
-		t.Errorf("expected status failed, got %q", updated.Status)
+	if updated.Status != db.TaskStatusFailed {
+		t.Errorf("expected status %s, got %q", db.TaskStatusFailed, updated.Status)
 	}
 	if updated.Result["error"] != "LLM timeout" {
 		t.Errorf("expected result.error='LLM timeout', got %v", updated.Result["error"])
 	}
 }
 
-func TestSubmitTaskResult_NeedsReview(t *testing.T) {
+func TestSubmitTaskResult_AwaitingReview(t *testing.T) {
 	d, reg, projectID := openTaskToolDB(t)
-	task := seedTask(t, d, projectID, "in_progress")
+	task := seedTask(t, d, projectID, db.TaskStatusDeveloping)
 
 	callTool(t, reg, "submit_task_result", map[string]interface{}{
 		"task_id": task.ID,
-		"status":  "needs_review",
+		"status":  db.TaskStatusAwaitingReview,
 		"output":  "implementation ready for review",
 	})
 
 	updated, _ := d.GetTask(context.Background(), task.ID)
-	if updated.Status != "needs_review" {
-		t.Errorf("expected status needs_review, got %q", updated.Status)
+	if updated.Status != db.TaskStatusAwaitingReview {
+		t.Errorf("expected status %s, got %q", db.TaskStatusAwaitingReview, updated.Status)
 	}
 }
 
 func TestSubmitTaskResult_MissingTaskID(t *testing.T) {
 	_, reg, _ := openTaskToolDB(t)
 	callToolExpectError(t, reg, "submit_task_result", map[string]interface{}{
-		"status": "completed",
+		"status": db.TaskStatusCompleted,
 		"output": "done",
 	})
 }
@@ -212,7 +211,7 @@ func TestGetNextTask_NoTask(t *testing.T) {
 
 func TestGetNextTask_ReturnsTask(t *testing.T) {
 	d, reg, projectID := openTaskToolDB(t)
-	seedTask(t, d, projectID, "planned")
+	seedTask(t, d, projectID, db.TaskStatusBacklog)
 
 	result := callTool(t, reg, "get_next_task", map[string]interface{}{
 		"roles": "worker",
@@ -224,7 +223,7 @@ func TestGetNextTask_ReturnsTask(t *testing.T) {
 
 func TestGetNextTask_RoleNotMatched(t *testing.T) {
 	d, reg, projectID := openTaskToolDB(t)
-	seedTask(t, d, projectID, "planned") // role="worker"
+	seedTask(t, d, projectID, db.TaskStatusBacklog) // role="worker"
 
 	result := callTool(t, reg, "get_next_task", map[string]interface{}{
 		"roles": "reviewer",
@@ -236,7 +235,7 @@ func TestGetNextTask_RoleNotMatched(t *testing.T) {
 
 func TestGetNextTask_MultipleRoles(t *testing.T) {
 	d, reg, projectID := openTaskToolDB(t)
-	seedTask(t, d, projectID, "planned") // role="worker"
+	seedTask(t, d, projectID, db.TaskStatusBacklog) // role="worker"
 
 	result := callTool(t, reg, "get_next_task", map[string]interface{}{
 		"roles": "reviewer,worker",

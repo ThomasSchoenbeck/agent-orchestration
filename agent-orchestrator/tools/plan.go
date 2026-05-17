@@ -120,7 +120,7 @@ func planProjectTool(database *db.Database) Definition {
 					ProjectID: projectID,
 					Type:      "implement",
 					Role:      role,
-					Status:    "planned",
+					Status:    db.TaskStatusBacklog,
 					Priority:  priority,
 					Payload: map[string]interface{}{
 						"title":       wp.Title,
@@ -186,7 +186,7 @@ func createWorkPackageTool(database *db.Database) Definition {
 				ProjectID: projectID,
 				Type:      taskType,
 				Role:      role,
-				Status:    "planned",
+				Status:    db.TaskStatusBacklog,
 				Priority:  priority,
 				Payload: map[string]interface{}{
 					"title":       title,

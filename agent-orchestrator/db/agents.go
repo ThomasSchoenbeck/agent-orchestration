@@ -19,10 +19,13 @@ func (d *Database) CreateAgent(ctx context.Context, a *Agent) error {
 		a.Status = "online"
 	}
 
+	if a.Mode == "" {
+		a.Mode = "remote"
+	}
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO agents (id, name, roles, status, capabilities, registered_at, last_heartbeat)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		a.ID, a.Name, marshalJSONArray(a.Roles), a.Status,
+		`INSERT INTO agents (id, name, roles, status, mode, capabilities, registered_at, last_heartbeat)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.Name, marshalJSONArray(a.Roles), a.Status, a.Mode,
 		marshalJSON(a.Capabilities), a.RegisteredAt, a.LastHeartbeat,
 	)
 	return err
@@ -61,9 +64,9 @@ func (d *Database) ListAgents(ctx context.Context) ([]*Agent, error) {
 // UpdateAgent updates mutable agent fields.
 func (d *Database) UpdateAgent(ctx context.Context, a *Agent) error {
 	_, err := d.db.ExecContext(ctx,
-		`UPDATE agents SET roles=?, status=?, current_task_id=?, capabilities=?, last_heartbeat=?
+		`UPDATE agents SET roles=?, status=?, mode=?, current_task_id=?, capabilities=?, last_heartbeat=?
 		 WHERE id=?`,
-		marshalJSONArray(a.Roles), a.Status, nullableStr(a.CurrentTaskID),
+		marshalJSONArray(a.Roles), a.Status, a.Mode, nullableStr(a.CurrentTaskID),
 		marshalJSON(a.Capabilities), a.LastHeartbeat, a.ID,
 	)
 	return err
@@ -102,14 +105,14 @@ func (d *Database) DeleteAgent(ctx context.Context, id string) error {
 // --- SQL and scan helpers ---
 
 const agentSelectSQL = `SELECT id, name, roles, status,
-    COALESCE(current_task_id,''), capabilities, registered_at, last_heartbeat
+    COALESCE(mode,'remote'), COALESCE(current_task_id,''), capabilities, registered_at, last_heartbeat
     FROM agents`
 
 func scanAgent(row *sql.Row) (*Agent, error) {
 	var a Agent
 	var rolesJSON, capsJSON, registeredAt, lastHeartbeat string
 	err := row.Scan(&a.ID, &a.Name, &rolesJSON, &a.Status,
-		&a.CurrentTaskID, &capsJSON, &registeredAt, &lastHeartbeat)
+		&a.Mode, &a.CurrentTaskID, &capsJSON, &registeredAt, &lastHeartbeat)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +129,7 @@ func scanAgents(rows *sql.Rows) ([]*Agent, error) {
 		var a Agent
 		var rolesJSON, capsJSON, registeredAt, lastHeartbeat string
 		if err := rows.Scan(&a.ID, &a.Name, &rolesJSON, &a.Status,
-			&a.CurrentTaskID, &capsJSON, &registeredAt, &lastHeartbeat); err != nil {
+			&a.Mode, &a.CurrentTaskID, &capsJSON, &registeredAt, &lastHeartbeat); err != nil {
 			return nil, err
 		}
 		a.Roles = unmarshalJSONStringSlice(rolesJSON)

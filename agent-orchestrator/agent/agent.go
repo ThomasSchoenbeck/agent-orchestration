@@ -17,6 +17,7 @@ type Agent struct {
 	id        string
 	name      string
 	roles     []string
+	mode      string // colocated | remote
 	serverURL string
 	cfg       *config.Config
 	client    *ServerClient
@@ -30,11 +31,18 @@ func NewAgent(name string, roles []string, serverURL string, cfg *config.Config)
 	return &Agent{
 		name:      name,
 		roles:     roles,
+		mode:      "remote",
 		serverURL: serverURL,
 		cfg:       cfg,
 		client:    NewServerClient(serverURL),
 		done:      make(chan struct{}),
 	}
+}
+
+// WithMode sets the agent's operating mode ("colocated" or "remote").
+func (a *Agent) WithMode(mode string) *Agent {
+	a.mode = mode
+	return a
 }
 
 // WithExecutor attaches an LLM router and tool registry so the agent can
@@ -57,7 +65,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	caps := map[string]interface{}{
 		"go_version": "1.22",
 	}
-	id, err := a.client.Register(ctx, a.name, a.roles, caps)
+	id, err := a.client.Register(ctx, a.name, a.roles, a.mode, caps)
 	if err != nil {
 		return fmt.Errorf("agent %q registration failed: %w", a.name, err)
 	}

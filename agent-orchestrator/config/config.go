@@ -23,6 +23,7 @@ type Config struct {
 	LogsDB       LogsDBConfig              `yaml:"logs_db"`
 	Agents        AgentConfig               `yaml:"agents"`
 	LogRetention  LogRetentionConfig         `yaml:"log_retention"`
+	Storage       StorageConfig              `yaml:"storage"`
 }
 
 // ProviderConfig defines a single LLM backend.
@@ -72,12 +73,21 @@ type LogsDBConfig struct {
 
 // AgentConfig holds agent timing defaults.
 type AgentConfig struct {
-	HeartbeatIntervalSec    int    `yaml:"heartbeat_interval_sec"`
-	TaskPollIntervalSec     int    `yaml:"task_poll_interval_sec"`
-	TaskTimeoutSec          int    `yaml:"task_timeout_sec"`
-	MaxRetries              int    `yaml:"max_retries"`               // max LLM call retries (Phase 4)
-	FallbackProvider        string `yaml:"fallback_provider"`         // provider name to fall back to (Phase 4)
-	CircuitBreakerThreshold int    `yaml:"circuit_breaker_threshold"` // failures before opening circuit (Phase 4)
+	HeartbeatIntervalSec         int    `yaml:"heartbeat_interval_sec"`
+	TaskPollIntervalSec          int    `yaml:"task_poll_interval_sec"`
+	TaskTimeoutSec               int    `yaml:"task_timeout_sec"`
+	MaxRetries                   int    `yaml:"max_retries"`               // max LLM call retries (Phase 4)
+	FallbackProvider             string `yaml:"fallback_provider"`         // provider name to fall back to (Phase 4)
+	CircuitBreakerThreshold      int    `yaml:"circuit_breaker_threshold"` // failures before opening circuit (Phase 4)
+	PortPoolStart                int    `yaml:"port_pool_start"`           // first port in agent test-port pool
+	PortPoolSize                 int    `yaml:"port_pool_size"`            // number of ports in pool
+	MergeSupervisorIntervalSec   int    `yaml:"merge_supervisor_interval_sec"`
+}
+
+// StorageConfig holds paths for server-managed git repos and worktrees.
+type StorageConfig struct {
+	Root                          string `yaml:"root"`
+	WorktreeRetentionFailedHours  int    `yaml:"worktree_retention_failed_hours"`
 }
 
 // ModelPricing holds per-model cost config (USD per 1M tokens).
@@ -215,6 +225,21 @@ func (c *Config) applyDefaults() {
 	}
 	if c.LogRetention.CleanupIntervalMins == 0 {
 		c.LogRetention.CleanupIntervalMins = 60
+	}
+	if c.Storage.Root == "" {
+		c.Storage.Root = DefaultStorageRoot
+	}
+	if c.Storage.WorktreeRetentionFailedHours == 0 {
+		c.Storage.WorktreeRetentionFailedHours = DefaultWorktreeRetentionFailedHours
+	}
+	if c.Agents.PortPoolStart == 0 {
+		c.Agents.PortPoolStart = DefaultPortPoolStart
+	}
+	if c.Agents.PortPoolSize == 0 {
+		c.Agents.PortPoolSize = DefaultPortPoolSize
+	}
+	if c.Agents.MergeSupervisorIntervalSec == 0 {
+		c.Agents.MergeSupervisorIntervalSec = DefaultMergeSupervisorIntervalSec
 	}
 }
 

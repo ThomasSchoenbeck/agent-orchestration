@@ -126,8 +126,8 @@ func TestPlanProject_Basic(t *testing.T) {
 			t.Errorf("GetTask(%q): %v", taskID, err)
 			continue
 		}
-		if task.Status != "planned" {
-			t.Errorf("task %q: expected status planned, got %q", taskID, task.Status)
+		if task.Status != db.TaskStatusBacklog {
+			t.Errorf("task %q: expected status %s, got %q", taskID, db.TaskStatusBacklog, task.Status)
 		}
 		if task.ProjectID != projectID {
 			t.Errorf("task %q: expected project_id %q, got %q", taskID, projectID, task.ProjectID)

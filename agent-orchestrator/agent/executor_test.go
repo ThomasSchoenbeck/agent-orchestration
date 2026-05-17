@@ -120,7 +120,7 @@ func TestExecutor_SubmitsResult(t *testing.T) {
 		ID:      "task-001",
 		Type:    "implement",
 		Role:    "worker",
-		Status:  "in_progress",
+		Status:  db.TaskStatusDeveloping,
 		Payload: map[string]interface{}{"description": "Write a hello world program"},
 	}
 

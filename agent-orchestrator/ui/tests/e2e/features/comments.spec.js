@@ -34,6 +34,6 @@ test('task detail: comments section is present', async ({ page }) => {
   if (await commentInput.count() > 0) {
     await commentInput.fill('E2E test comment')
     await page.keyboard.press('Control+Enter')
-    await expect(page.getByText('E2E test comment')).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('.text-xs.text-gray-300', { hasText: 'E2E test comment' }).first()).toBeVisible({ timeout: 3000 })
   }
 })

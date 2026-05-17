@@ -12,14 +12,23 @@ func TestIsValidTransition_AllValid(t *testing.T) {
 		from TaskStatus
 		to   TaskStatus
 	}{
-		{StatusPlanned, StatusInProgress},
-		{StatusInProgress, StatusCompleted},
-		{StatusInProgress, StatusFailed},
-		{StatusInProgress, StatusNeedsReview},
-		{StatusNeedsReview, StatusApproved},
-		{StatusNeedsReview, StatusInProgress},
-		{StatusApproved, StatusCompleted},
-		{StatusFailed, StatusPlanned},
+		// Dev path
+		{StatusBacklog, StatusDeveloping},
+		{StatusAwaitingRevision, StatusDeveloping},
+		{StatusDeveloping, StatusAwaitingReview},
+		{StatusDeveloping, StatusFailed},
+		// Review path
+		{StatusAwaitingReview, StatusReviewing},
+		{StatusReviewing, StatusAwaitingMerge},
+		{StatusReviewing, StatusAwaitingRevision},
+		{StatusReviewing, StatusFailed},
+		// Merge path
+		{StatusAwaitingMerge, StatusMerging},
+		{StatusMerging, StatusCompleted},
+		{StatusMerging, StatusAwaitingRevision},
+		{StatusMerging, StatusFailed},
+		// Retry
+		{StatusFailed, StatusBacklog},
 	}
 	for _, tc := range valid {
 		if !IsValidTransition(tc.from, tc.to) {
@@ -33,21 +42,15 @@ func TestIsValidTransition_Invalid(t *testing.T) {
 		from TaskStatus
 		to   TaskStatus
 	}{
-		{StatusPlanned, StatusCompleted},
-		{StatusPlanned, StatusFailed},
-		{StatusPlanned, StatusApproved},
-		{StatusPlanned, StatusNeedsReview},
-		{StatusCompleted, StatusPlanned},
-		{StatusCompleted, StatusInProgress},
+		{StatusBacklog, StatusCompleted},
+		{StatusBacklog, StatusFailed},
+		{StatusCompleted, StatusBacklog},
+		{StatusCompleted, StatusDeveloping},
 		{StatusCompleted, StatusFailed},
-		{StatusCompleted, StatusNeedsReview},
 		{StatusFailed, StatusCompleted},
-		{StatusFailed, StatusInProgress},
-		{StatusApproved, StatusPlanned},
-		{StatusApproved, StatusInProgress},
-		{StatusApproved, StatusFailed},
-		{StatusNeedsReview, StatusCompleted},
-		{StatusNeedsReview, StatusFailed},
+		{StatusFailed, StatusDeveloping},
+		{StatusDeveloping, StatusCompleted},
+		{StatusDeveloping, StatusMerging},
 	}
 	for _, tc := range invalid {
 		if IsValidTransition(tc.from, tc.to) {
@@ -58,8 +61,9 @@ func TestIsValidTransition_Invalid(t *testing.T) {
 
 func TestIsValidTransition_SameStatus(t *testing.T) {
 	statuses := []TaskStatus{
-		StatusPlanned, StatusInProgress, StatusNeedsReview,
-		StatusApproved, StatusCompleted, StatusFailed,
+		StatusBacklog, StatusDeveloping, StatusAwaitingReview,
+		StatusReviewing, StatusAwaitingRevision, StatusAwaitingMerge,
+		StatusMerging, StatusCompleted, StatusFailed,
 	}
 	for _, s := range statuses {
 		if IsValidTransition(s, s) {
@@ -71,13 +75,13 @@ func TestIsValidTransition_SameStatus(t *testing.T) {
 // --- ValidateTransition ---
 
 func TestValidateTransition_Valid(t *testing.T) {
-	if err := ValidateTransition(StatusPlanned, StatusInProgress); err != nil {
+	if err := ValidateTransition(StatusBacklog, StatusDeveloping); err != nil {
 		t.Errorf("expected nil error, got: %v", err)
 	}
 }
 
 func TestValidateTransition_Invalid_ErrorContainsArrow(t *testing.T) {
-	err := ValidateTransition(StatusPlanned, StatusCompleted)
+	err := ValidateTransition(StatusBacklog, StatusCompleted)
 	if err == nil {
 		t.Fatal("expected error for invalid transition")
 	}
@@ -93,10 +97,56 @@ func TestValidateTransition_Invalid_MentionsStatuses(t *testing.T) {
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, string(StatusCompleted)) {
-		t.Errorf("expected 'completed' in error message, got: %q", msg)
+		t.Errorf("expected %q in error, got: %q", StatusCompleted, msg)
 	}
 	if !strings.Contains(msg, string(StatusFailed)) {
-		t.Errorf("expected 'failed' in error message, got: %q", msg)
+		t.Errorf("expected %q in error, got: %q", StatusFailed, msg)
+	}
+}
+
+// --- IsQueueState / IsExecutionState / IsTerminalState ---
+
+func TestIsQueueState(t *testing.T) {
+	queue := []TaskStatus{StatusBacklog, StatusAwaitingReview, StatusAwaitingRevision, StatusAwaitingMerge}
+	for _, s := range queue {
+		if !IsQueueState(s) {
+			t.Errorf("expected %s to be a queue state", s)
+		}
+	}
+	notQueue := []TaskStatus{StatusDeveloping, StatusReviewing, StatusMerging, StatusCompleted, StatusFailed}
+	for _, s := range notQueue {
+		if IsQueueState(s) {
+			t.Errorf("expected %s NOT to be a queue state", s)
+		}
+	}
+}
+
+func TestIsExecutionState(t *testing.T) {
+	exec := []TaskStatus{StatusDeveloping, StatusReviewing, StatusMerging}
+	for _, s := range exec {
+		if !IsExecutionState(s) {
+			t.Errorf("expected %s to be an execution state", s)
+		}
+	}
+	notExec := []TaskStatus{StatusBacklog, StatusAwaitingReview, StatusAwaitingRevision, StatusAwaitingMerge, StatusCompleted, StatusFailed}
+	for _, s := range notExec {
+		if IsExecutionState(s) {
+			t.Errorf("expected %s NOT to be an execution state", s)
+		}
+	}
+}
+
+func TestIsTerminalState(t *testing.T) {
+	if !IsTerminalState(StatusCompleted) {
+		t.Error("COMPLETED should be terminal")
+	}
+	if !IsTerminalState(StatusFailed) {
+		t.Error("FAILED should be terminal")
+	}
+	for _, s := range []TaskStatus{StatusBacklog, StatusDeveloping, StatusReviewing} {
+		if IsTerminalState(s) {
+			t.Errorf("%s should not be terminal", s)
+		}
 	}
 }
 
@@ -122,39 +172,21 @@ func TestFollowOnType_ReviewApproved_ReturnsTest(t *testing.T) {
 	}
 }
 
-func TestFollowOnType_ReviewChanges_NoFollowOn(t *testing.T) {
-	// "changes" means re-queue existing implement — scheduler handles it, no new task
-	_, ok := FollowOnType(TypeReview, "changes")
-	if ok {
-		t.Error("expected no follow-on task for review+changes")
+func TestFollowOnType_NoFollowOns(t *testing.T) {
+	cases := []struct {
+		src     TaskType
+		outcome string
+	}{
+		{TypeReview, "changes"},
+		{TypeTest, "completed"},
+		{TypePlan, "completed"},
+		{TypeImplement, "failed"},
+		{TypeImplement, "unknown_outcome"},
 	}
-}
-
-func TestFollowOnType_TestCompleted_NoFollowOn(t *testing.T) {
-	_, ok := FollowOnType(TypeTest, "completed")
-	if ok {
-		t.Error("expected no follow-on for test+completed (workflow done)")
-	}
-}
-
-func TestFollowOnType_PlanCompleted_NoFollowOn(t *testing.T) {
-	_, ok := FollowOnType(TypePlan, "completed")
-	if ok {
-		t.Error("expected no follow-on for plan+completed")
-	}
-}
-
-func TestFollowOnType_ImplementFailed_NoFollowOn(t *testing.T) {
-	_, ok := FollowOnType(TypeImplement, "failed")
-	if ok {
-		t.Error("expected no follow-on for implement+failed")
-	}
-}
-
-func TestFollowOnType_UnknownOutcome_NoFollowOn(t *testing.T) {
-	_, ok := FollowOnType(TypeImplement, "unknown_outcome")
-	if ok {
-		t.Error("expected no follow-on for unknown outcome")
+	for _, tc := range cases {
+		if _, ok := FollowOnType(tc.src, tc.outcome); ok {
+			t.Errorf("expected no follow-on for %s+%s", tc.src, tc.outcome)
+		}
 	}
 }
 

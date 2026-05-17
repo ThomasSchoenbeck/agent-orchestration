@@ -23,6 +23,16 @@ const (
 	EventTaskCommentAdded      = "task_comment_added"
 	EventTaskLinkAdded         = "task_link_added"
 	EventTaskLinkRemoved       = "task_link_removed"
+
+	// W7.2: lifecycle event types for the agentic dev cycle.
+	EventTaskSubmittedForReview = "task_submitted_for_review"
+	EventTaskReviewPosted       = "task_review_posted"
+	EventTaskRevisionStarted    = "task_revision_started"
+	EventTaskMergeStarted       = "task_merge_started"
+	EventTaskMergeCompleted     = "task_merge_completed"
+	EventTaskMergeFailed        = "task_merge_failed"
+	EventTaskPushedUpstream     = "task_pushed_upstream"
+	EventTaskUpstreamSyncFailed = "task_upstream_sync_failed"
 )
 
 // AgentLog is one structured agent activity event row.

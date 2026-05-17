@@ -94,3 +94,11 @@ agents:
   heartbeat_interval_sec: 30
   task_poll_interval_sec: 5
   task_timeout_sec: 300
+  # port_pool_start: 18000        # first port assigned to agent test servers
+  # port_pool_size: 100           # number of ports in the pool
+  # merge_supervisor_interval_sec: 10
+
+# Server-managed git storage (bare repos + agent worktrees).
+# storage:
+#   root: ./data                          # default; repos → ./data/repos/, worktrees → ./data/worktrees/
+#   worktree_retention_failed_hours: 168  # keep worktrees for failed tasks for 7 days

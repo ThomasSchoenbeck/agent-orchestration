@@ -21,9 +21,6 @@ type Scheduler struct {
 }
 
 // NewScheduler creates a Scheduler backed by the given database.
-// timeoutSec: seconds before an in_progress task is considered timed out.
-// maxRetries: maximum number of times a failed task is automatically retried.
-// interval: how often the scheduler polls for work (e.g. 30s).
 func NewScheduler(database *db.Database, timeoutSec, maxRetries int, interval time.Duration) *Scheduler {
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -69,7 +66,6 @@ func (s *Scheduler) run(ctx context.Context) {
 //  2. Retry eligible failed tasks (exponential backoff).
 //  3. Create follow-on tasks for newly completed tasks.
 func (s *Scheduler) Tick(ctx context.Context) error {
-	// 1. Requeue timed-out in_progress tasks.
 	requeued, err := s.db.RequeueTimedOutTasks(ctx, s.timeoutSec)
 	if err != nil {
 		return fmt.Errorf("requeue timed out tasks: %w", err)
@@ -78,12 +74,10 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 		log.Printf("[scheduler] requeued %d timed-out tasks", requeued)
 	}
 
-	// 2. Retry failed tasks within retry limit.
 	if err := s.retryFailedTasks(ctx); err != nil {
 		return fmt.Errorf("retry failed tasks: %w", err)
 	}
 
-	// 3. Create follow-on tasks for completed tasks that need them.
 	if err := s.createFollowOnTasks(ctx); err != nil {
 		return fmt.Errorf("create follow-on tasks: %w", err)
 	}
@@ -91,10 +85,10 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 	return nil
 }
 
-// retryFailedTasks promotes failed tasks back to planned if under the retry limit.
+// retryFailedTasks promotes FAILED tasks back to BACKLOG if under the retry limit.
 // Uses exponential backoff: a task is only retried after 2^(attempts-1) minutes.
 func (s *Scheduler) retryFailedTasks(ctx context.Context) error {
-	tasks, err := s.db.ListTasks(ctx, db.TaskFilters{Status: "failed"})
+	tasks, err := s.db.ListTasks(ctx, db.TaskFilters{Status: db.TaskStatusFailed})
 	if err != nil {
 		return err
 	}
@@ -103,14 +97,12 @@ func (s *Scheduler) retryFailedTasks(ctx context.Context) error {
 		if t.Attempts >= s.maxRetries {
 			continue // permanently failed
 		}
-		// Exponential backoff: wait 2^(attempts-1) minutes since last update.
 		backoffMin := math.Pow(2, float64(t.Attempts-1))
 		backoffDur := time.Duration(backoffMin * float64(time.Minute))
 		if now.Sub(t.UpdatedAt) < backoffDur {
-			continue // not ready yet
+			continue
 		}
-		// Promote back to planned.
-		t.Status = "planned"
+		t.Status = db.TaskStatusBacklog
 		t.AssignedAgentID = ""
 		if err := s.db.UpdateTask(ctx, t); err != nil {
 			log.Printf("[scheduler] failed to requeue task %s: %v", t.ID, err)
@@ -121,12 +113,9 @@ func (s *Scheduler) retryFailedTasks(ctx context.Context) error {
 	return nil
 }
 
-// createFollowOnTasks inspects recently completed tasks and spawns follow-on
-// tasks according to the workflow rules (implement→review, review→test, etc.).
+// createFollowOnTasks inspects recently completed tasks and spawns follow-on tasks.
 func (s *Scheduler) createFollowOnTasks(ctx context.Context) error {
-	// Find completed tasks that need a follow-on (last updated within the tick window
-	// times 2 to avoid missing tasks when the scheduler restarts).
-	tasks, err := s.db.ListTasks(ctx, db.TaskFilters{Status: "completed"})
+	tasks, err := s.db.ListTasks(ctx, db.TaskFilters{Status: db.TaskStatusCompleted})
 	if err != nil {
 		return err
 	}
@@ -136,10 +125,9 @@ func (s *Scheduler) createFollowOnTasks(ctx context.Context) error {
 		if !ok {
 			continue
 		}
-		// Check if a follow-on task already exists to avoid duplicates.
 		existing, err := s.db.ListTasks(ctx, db.TaskFilters{
 			ProjectID: t.ProjectID,
-			Status:    "planned",
+			Status:    db.TaskStatusBacklog,
 		})
 		if err != nil {
 			continue
@@ -147,7 +135,6 @@ func (s *Scheduler) createFollowOnTasks(ctx context.Context) error {
 		alreadyExists := false
 		for _, e := range existing {
 			if e.Type == string(followType) {
-				// Look for a task whose payload references this parent.
 				if pid, ok := e.Payload["parent_task_id"].(string); ok && pid == t.ID {
 					alreadyExists = true
 					break
@@ -158,8 +145,12 @@ func (s *Scheduler) createFollowOnTasks(ctx context.Context) error {
 			continue
 		}
 
-		// Also check non-planned states (in_progress, etc.) to avoid duplicates.
-		for _, status := range []string{"in_progress", "needs_review", "approved"} {
+		// Check other non-terminal states to avoid duplicates.
+		for _, status := range []string{
+			db.TaskStatusDeveloping, db.TaskStatusAwaitingReview,
+			db.TaskStatusReviewing, db.TaskStatusAwaitingRevision,
+			db.TaskStatusAwaitingMerge, db.TaskStatusMerging,
+		} {
 			more, err := s.db.ListTasks(ctx, db.TaskFilters{
 				ProjectID: t.ProjectID,
 				Status:    status,
@@ -190,7 +181,6 @@ func (s *Scheduler) createFollowOnTasks(ctx context.Context) error {
 func (s *Scheduler) CreateFollowOnTask(ctx context.Context, parent *db.Task, followType TaskType) error {
 	role := RoleForType(followType)
 
-	// Inherit parent payload and add context.
 	payload := make(map[string]interface{})
 	for k, v := range parent.Payload {
 		payload[k] = v
@@ -202,8 +192,8 @@ func (s *Scheduler) CreateFollowOnTask(ctx context.Context, parent *db.Task, fol
 		ProjectID: parent.ProjectID,
 		Type:      string(followType),
 		Role:      role,
-		Status:    "planned",
-		Priority:  parent.Priority, // inherit priority
+		Status:    db.TaskStatusBacklog,
+		Priority:  parent.Priority,
 		Payload:   payload,
 	}
 
@@ -215,40 +205,18 @@ func (s *Scheduler) CreateFollowOnTask(ctx context.Context, parent *db.Task, fol
 	return nil
 }
 
-// HandleReviewResult processes the outcome of a review task:
-//   - "approved": marks review as approved, creates a test task
-//   - "changes": marks review as needs_review, re-queues the implement task
+// HandleReviewResult processes the outcome of a review task.
+// "approved" → task moves to AWAITING_MERGE.
+// "changes"  → task moves to AWAITING_REVISION (dev picks it up again).
 func (s *Scheduler) HandleReviewResult(ctx context.Context, reviewTask *db.Task, outcome string) error {
 	switch outcome {
 	case "approved":
-		reviewTask.Status = "approved"
-		if err := s.db.UpdateTask(ctx, reviewTask); err != nil {
-			return fmt.Errorf("update review task to approved: %w", err)
-		}
-		// Create a test task.
-		return s.CreateFollowOnTask(ctx, reviewTask, TypeTest)
+		reviewTask.Status = db.TaskStatusAwaitingMerge
+		return s.db.UpdateTask(ctx, reviewTask)
 
 	case "changes":
-		reviewTask.Status = "needs_review"
-		if err := s.db.UpdateTask(ctx, reviewTask); err != nil {
-			return fmt.Errorf("update review task to needs_review: %w", err)
-		}
-		// Re-queue the original implement task.
-		parentID, _ := reviewTask.Payload["parent_task_id"].(string)
-		if parentID == "" {
-			return nil
-		}
-		implTask, err := s.db.GetTask(ctx, parentID)
-		if err != nil {
-			return fmt.Errorf("get parent implement task %s: %w", parentID, err)
-		}
-		if implTask.Attempts >= s.maxRetries {
-			log.Printf("[scheduler] implement task %s has reached max retries, not re-queuing", implTask.ID)
-			return nil
-		}
-		implTask.Status = "planned"
-		implTask.AssignedAgentID = ""
-		return s.db.UpdateTask(ctx, implTask)
+		reviewTask.Status = db.TaskStatusAwaitingRevision
+		return s.db.UpdateTask(ctx, reviewTask)
 
 	default:
 		return fmt.Errorf("unknown review outcome %q; expected 'approved' or 'changes'", outcome)
@@ -256,7 +224,6 @@ func (s *Scheduler) HandleReviewResult(ctx context.Context, reviewTask *db.Task,
 }
 
 // RetryDelay returns the exponential backoff duration for a given attempt count.
-// attempt=1 → 1m, attempt=2 → 2m, attempt=3 → 4m, etc.
 func RetryDelay(attempt int) time.Duration {
 	if attempt <= 0 {
 		return time.Minute

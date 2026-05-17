@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -14,7 +16,13 @@ import (
 	"agent-orchestrator/llm"
 	"agent-orchestrator/logging"
 	"agent-orchestrator/router"
+	"agent-orchestrator/storage"
 	"agent-orchestrator/workflow"
+)
+
+const (
+	defaultPortPoolStart = 18000
+	defaultPortPoolSize  = 100
 )
 
 // AgentPollStatus tracks the last poll activity for an agent.
@@ -36,6 +44,8 @@ type Server struct {
 	mux        *http.ServeMux
 	pollMu     sync.RWMutex
 	pollStatus map[string]*AgentPollStatus
+	storage    *storage.Paths
+	portPool   *workflow.PortPool
 
 	// Cached debug-mode flag — re-read from DB at most once per 30 s.
 	debugMu        sync.RWMutex
@@ -55,6 +65,17 @@ func New(cfg *config.Config, database *db.Database, llmReg *llm.Registry) *Serve
 	if err := rtr.LoadFromDB(database); err != nil {
 		log.Printf("server: router.LoadFromDB: %v", err)
 	}
+	stor := storage.New(cfg.Storage.Root)
+
+	poolStart := cfg.Agents.PortPoolStart
+	if poolStart == 0 {
+		poolStart = defaultPortPoolStart
+	}
+	poolSize := cfg.Agents.PortPoolSize
+	if poolSize == 0 {
+		poolSize = defaultPortPoolSize
+	}
+
 	s := &Server{
 		cfg:        cfg,
 		db:         database,
@@ -63,10 +84,25 @@ func New(cfg *config.Config, database *db.Database, llmReg *llm.Registry) *Serve
 		log:        logging.New(database, "", "", ""),
 		mux:        http.NewServeMux(),
 		pollStatus: make(map[string]*AgentPollStatus),
+		storage:    stor,
+		portPool:   workflow.NewPortPool(poolStart, poolSize),
 	}
+	s.ensureStorageDirs()
 	s.registerHandlers()
+	s.mux.Handle("/git/", s.newGitHTTPHandler())
 	s.registerStaticHandler() // must come after API routes so "/" is the catch-all
 	return s
+}
+
+// ensureStorageDirs creates the repos/ and worktrees/ subdirectories under the
+// storage root on startup (idempotent).
+func (s *Server) ensureStorageDirs() {
+	for _, sub := range []string{"repos", "worktrees"} {
+		dir := filepath.Join(s.cfg.Storage.Root, sub)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Printf("server: ensureStorageDirs %q: %v", dir, err)
+		}
+	}
 }
 
 // Start begins listening on the configured address. It blocks until the
@@ -101,6 +137,16 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		job := workflow.NewRetentionJob(s.db, intervalMin)
 		job.Run(ctx)
+	}()
+
+	// Background merge supervisor.
+	go func() {
+		intervalSec := s.cfg.Agents.MergeSupervisorIntervalSec
+		if intervalSec <= 0 {
+			intervalSec = 10
+		}
+		supervisor := workflow.NewMergeSupervisor(s.db, s.storage, intervalSec)
+		supervisor.Run(ctx)
 	}()
 
 	log.Printf("server: listening on http://%s", addr)

@@ -31,8 +31,9 @@ func NewServerClient(serverURL string) *ServerClient {
 }
 
 // Register registers this agent and stores the returned agent ID.
-func (c *ServerClient) Register(ctx context.Context, name string, roles []string, caps map[string]interface{}) (string, error) {
-	body := api.RegisterAgentRequest{Name: name, Roles: roles, Capabilities: caps}
+// mode should be "colocated" or "remote" (defaults to "remote" if empty).
+func (c *ServerClient) Register(ctx context.Context, name string, roles []string, mode string, caps map[string]interface{}) (string, error) {
+	body := api.RegisterAgentRequest{Name: name, Roles: roles, Mode: mode, Capabilities: caps}
 	var resp api.RegisterAgentResponse
 	if err := c.post(ctx, "/api/agents/register", body, &resp); err != nil {
 		return "", fmt.Errorf("register: %w", err)
@@ -80,6 +81,26 @@ func (c *ServerClient) ClaimTask(ctx context.Context, taskID, agentID string) (*
 func (c *ServerClient) SubmitTaskResult(ctx context.Context, taskID string, result map[string]interface{}, status string, metrics *api.TaskMetrics) error {
 	body := api.SubmitTaskResultRequest{Result: result, Status: status, Metrics: metrics}
 	return c.post(ctx, fmt.Sprintf("/api/tasks/%s/result", taskID), body, nil)
+}
+
+// SubmitForReview notifies the server that the agent has pushed its branch and
+// the task should transition to AWAITING_REVIEW.
+func (c *ServerClient) SubmitForReview(ctx context.Context, taskID string) error {
+	return c.post(ctx, fmt.Sprintf("/api/tasks/%s/submit-for-review", taskID), struct{}{}, nil)
+}
+
+// PostReview posts a code review on a task. status should be one of:
+// "approved", "changes_requested", "revision_requested".
+func (c *ServerClient) PostReview(ctx context.Context, taskID, status, body, branchHeadSHA, agentID string) error {
+	req := map[string]string{
+		"author_type":     "agent",
+		"author_role":     "reviewer",
+		"author_id":       agentID,
+		"status":          status,
+		"body":            body,
+		"branch_head_sha": branchHeadSHA,
+	}
+	return c.post(ctx, fmt.Sprintf("/api/tasks/%s/reviews", taskID), req, nil)
 }
 
 // PostLog ships a log entry to the server.

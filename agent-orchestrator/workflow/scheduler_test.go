@@ -30,97 +30,11 @@ func openTestDB(t *testing.T) *db.Database {
 // createProject inserts a test project and returns its ID.
 func createProject(t *testing.T, d *db.Database, name string) string {
 	t.Helper()
-	p := &db.Project{Name: name, Status: "planned"}
+	p := &db.Project{Name: name, Status: db.TaskStatusBacklog}
 	if err := d.CreateProject(context.Background(), p); err != nil {
 		t.Fatalf("create project: %v", err)
 	}
 	return p.ID
-}
-
-// --- State machine tests ---
-
-func TestIsValidTransition(t *testing.T) {
-	valid := []struct{ from, to TaskStatus }{
-		{StatusPlanned, StatusInProgress},
-		{StatusInProgress, StatusCompleted},
-		{StatusInProgress, StatusFailed},
-		{StatusInProgress, StatusNeedsReview},
-		{StatusNeedsReview, StatusApproved},
-		{StatusNeedsReview, StatusInProgress},
-		{StatusApproved, StatusCompleted},
-		{StatusFailed, StatusPlanned},
-	}
-	for _, c := range valid {
-		if !IsValidTransition(c.from, c.to) {
-			t.Errorf("expected valid transition %s→%s", c.from, c.to)
-		}
-	}
-	// Invalid transitions.
-	invalid := []struct{ from, to TaskStatus }{
-		{StatusCompleted, StatusPlanned},
-		{StatusPlanned, StatusCompleted},
-		{StatusApproved, StatusPlanned},
-		{StatusFailed, StatusCompleted},
-	}
-	for _, c := range invalid {
-		if IsValidTransition(c.from, c.to) {
-			t.Errorf("expected invalid transition %s→%s", c.from, c.to)
-		}
-	}
-}
-
-func TestValidateTransition_Error(t *testing.T) {
-	err := ValidateTransition(StatusCompleted, StatusPlanned)
-	if err == nil {
-		t.Error("expected error for invalid transition")
-	}
-}
-
-func TestValidateTransition_OK(t *testing.T) {
-	if err := ValidateTransition(StatusPlanned, StatusInProgress); err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-// --- FollowOnType tests ---
-
-func TestFollowOnType(t *testing.T) {
-	cases := []struct {
-		src     TaskType
-		outcome string
-		want    TaskType
-		wantOK  bool
-	}{
-		{TypeImplement, "completed", TypeReview, true},
-		{TypeReview, "approved", TypeTest, true},
-		{TypeReview, "changes", "", false},
-		{TypeTest, "completed", "", false},
-		{TypePlan, "completed", "", false},
-	}
-	for _, c := range cases {
-		got, ok := FollowOnType(c.src, c.outcome)
-		if ok != c.wantOK || got != c.want {
-			t.Errorf("FollowOnType(%q,%q) = (%q,%v), want (%q,%v)",
-				c.src, c.outcome, got, ok, c.want, c.wantOK)
-		}
-	}
-}
-
-// --- RoleForType ---
-
-func TestRoleForType(t *testing.T) {
-	cases := []struct{ typ TaskType; want string }{
-		{TypePlan, "orchestrator"},
-		{TypeImplement, "worker"},
-		{TypeReview, "reviewer"},
-		{TypeTest, "worker"},
-		{"unknown", "worker"},
-	}
-	for _, c := range cases {
-		if got := RoleForType(c.typ); got != c.want {
-			t.Errorf("RoleForType(%q) = %q, want %q", c.typ, got, c.want)
-		}
-	}
 }
 
 // --- RetryDelay ---
@@ -130,7 +44,7 @@ func TestRetryDelay(t *testing.T) {
 		attempt int
 		want    time.Duration
 	}{
-		{0, time.Minute},  // edge case
+		{0, time.Minute},
 		{1, time.Minute},
 		{2, 2 * time.Minute},
 		{3, 4 * time.Minute},
@@ -155,7 +69,7 @@ func TestScheduler_CreateFollowOnTask(t *testing.T) {
 		ProjectID: projectID,
 		Type:      "implement",
 		Role:      "worker",
-		Status:    "completed",
+		Status:    db.TaskStatusCompleted,
 		Priority:  5,
 		Payload:   map[string]interface{}{"description": "build feature"},
 	}
@@ -167,7 +81,7 @@ func TestScheduler_CreateFollowOnTask(t *testing.T) {
 		t.Fatalf("CreateFollowOnTask: %v", err)
 	}
 
-	tasks, err := d.ListTasks(context.Background(), db.TaskFilters{ProjectID: projectID, Status: "planned"})
+	tasks, err := d.ListTasks(context.Background(), db.TaskFilters{ProjectID: projectID, Status: db.TaskStatusBacklog})
 	if err != nil {
 		t.Fatalf("ListTasks: %v", err)
 	}
@@ -196,24 +110,22 @@ func TestScheduler_HandleReviewResult_Approved(t *testing.T) {
 	projectID := createProject(t, d, "TestProject2")
 	s := NewScheduler(d, 300, 3, time.Minute)
 
-	// Create a completed implement task.
 	implTask := &db.Task{
 		ProjectID: projectID,
 		Type:      "implement",
 		Role:      "worker",
-		Status:    "completed",
+		Status:    db.TaskStatusCompleted,
 		Payload:   map[string]interface{}{},
 	}
 	if err := d.CreateTask(context.Background(), implTask); err != nil {
 		t.Fatalf("create impl task: %v", err)
 	}
 
-	// Create a review task.
 	reviewTask := &db.Task{
 		ProjectID: projectID,
 		Type:      "review",
 		Role:      "reviewer",
-		Status:    "in_progress",
+		Status:    db.TaskStatusReviewing,
 		Payload:   map[string]interface{}{"parent_task_id": implTask.ID},
 	}
 	if err := d.CreateTask(context.Background(), reviewTask); err != nil {
@@ -224,22 +136,12 @@ func TestScheduler_HandleReviewResult_Approved(t *testing.T) {
 		t.Fatalf("HandleReviewResult: %v", err)
 	}
 
-	// Review task should now be "approved".
 	updated, err := d.GetTask(context.Background(), reviewTask.ID)
 	if err != nil {
 		t.Fatalf("get review task: %v", err)
 	}
-	if updated.Status != "approved" {
-		t.Errorf("expected review task status %q, got %q", "approved", updated.Status)
-	}
-
-	// A test task should have been created.
-	planned, err := d.ListTasks(context.Background(), db.TaskFilters{ProjectID: projectID, Status: "planned"})
-	if err != nil {
-		t.Fatalf("ListTasks: %v", err)
-	}
-	if len(planned) != 1 || planned[0].Type != "test" {
-		t.Errorf("expected 1 planned test task, got %d tasks", len(planned))
+	if updated.Status != db.TaskStatusAwaitingMerge {
+		t.Errorf("expected review task status %q, got %q", db.TaskStatusAwaitingMerge, updated.Status)
 	}
 }
 
@@ -248,12 +150,11 @@ func TestScheduler_HandleReviewResult_Changes(t *testing.T) {
 	projectID := createProject(t, d, "TestProject3")
 	s := NewScheduler(d, 300, 3, time.Minute)
 
-	// Create implement task (completed).
 	implTask := &db.Task{
 		ProjectID: projectID,
 		Type:      "implement",
 		Role:      "worker",
-		Status:    "completed",
+		Status:    db.TaskStatusDeveloping,
 		Attempts:  1,
 		Payload:   map[string]interface{}{},
 	}
@@ -265,7 +166,7 @@ func TestScheduler_HandleReviewResult_Changes(t *testing.T) {
 		ProjectID: projectID,
 		Type:      "review",
 		Role:      "reviewer",
-		Status:    "in_progress",
+		Status:    db.TaskStatusReviewing,
 		Payload:   map[string]interface{}{"parent_task_id": implTask.ID},
 	}
 	if err := d.CreateTask(context.Background(), reviewTask); err != nil {
@@ -276,29 +177,19 @@ func TestScheduler_HandleReviewResult_Changes(t *testing.T) {
 		t.Fatalf("HandleReviewResult: %v", err)
 	}
 
-	// Review task should now be "needs_review".
 	updated, err := d.GetTask(context.Background(), reviewTask.ID)
 	if err != nil {
 		t.Fatalf("get review task: %v", err)
 	}
-	if updated.Status != "needs_review" {
-		t.Errorf("expected status %q, got %q", "needs_review", updated.Status)
-	}
-
-	// Implement task should be re-queued to "planned".
-	impl, err := d.GetTask(context.Background(), implTask.ID)
-	if err != nil {
-		t.Fatalf("get impl task: %v", err)
-	}
-	if impl.Status != "planned" {
-		t.Errorf("expected implement task re-queued to planned, got %q", impl.Status)
+	if updated.Status != db.TaskStatusAwaitingRevision {
+		t.Errorf("expected review task status %q, got %q", db.TaskStatusAwaitingRevision, updated.Status)
 	}
 }
 
 func TestScheduler_HandleReviewResult_UnknownOutcome(t *testing.T) {
 	d := openTestDB(t)
 	s := NewScheduler(d, 300, 3, time.Minute)
-	reviewTask := &db.Task{ID: "fake", Status: "in_progress", Payload: map[string]interface{}{}}
+	reviewTask := &db.Task{ID: "fake", Status: db.TaskStatusReviewing, Payload: map[string]interface{}{}}
 	err := s.HandleReviewResult(context.Background(), reviewTask, "unknown_outcome")
 	if err == nil {
 		t.Error("expected error for unknown review outcome")
@@ -312,12 +203,11 @@ func TestScheduler_Tick_RetriesFailedTask(t *testing.T) {
 	projectID := createProject(t, d, "RetryProject")
 	s := NewScheduler(d, 300, 3, time.Minute)
 
-	// Create a failed task with 1 attempt that was updated >1 min ago.
 	task := &db.Task{
 		ProjectID: projectID,
 		Type:      "implement",
 		Role:      "worker",
-		Status:    "failed",
+		Status:    db.TaskStatusFailed,
 		Attempts:  1,
 		Payload:   map[string]interface{}{},
 	}
@@ -339,8 +229,8 @@ func TestScheduler_Tick_RetriesFailedTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if updated.Status != "planned" {
-		t.Errorf("expected task retried to %q, got %q", "planned", updated.Status)
+	if updated.Status != db.TaskStatusBacklog {
+		t.Errorf("expected task retried to %q, got %q", db.TaskStatusBacklog, updated.Status)
 	}
 }
 
@@ -353,7 +243,7 @@ func TestScheduler_Tick_DoesNotRetryMaxAttempts(t *testing.T) {
 		ProjectID: projectID,
 		Type:      "implement",
 		Role:      "worker",
-		Status:    "failed",
+		Status:    db.TaskStatusFailed,
 		Attempts:  3, // already at max
 		Payload:   map[string]interface{}{},
 	}
@@ -368,7 +258,7 @@ func TestScheduler_Tick_DoesNotRetryMaxAttempts(t *testing.T) {
 	}
 
 	updated, _ := d.GetTask(context.Background(), task.ID)
-	if updated.Status != "failed" {
-		t.Errorf("expected max-retry task to remain %q, got %q", "failed", updated.Status)
+	if updated.Status != db.TaskStatusFailed {
+		t.Errorf("expected max-retry task to remain %q, got %q", db.TaskStatusFailed, updated.Status)
 	}
 }

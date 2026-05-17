@@ -7,7 +7,10 @@ func (d *Database) migrate() error {
 	if err := d.migrateSchema(); err != nil {
 		return err
 	}
-	return d.applyColumnMigrations()
+	if err := d.applyColumnMigrations(); err != nil {
+		return err
+	}
+	return d.migrateTaskStates()
 }
 
 // migrateSchema creates all base tables and indexes (idempotent).
@@ -249,6 +252,52 @@ CREATE TABLE IF NOT EXISTS task_project_links (
     FOREIGN KEY (task_id) REFERENCES tasks(id)
 );
 
+-- Task reviews (formal evaluation that drives a state transition)
+CREATE TABLE IF NOT EXISTS task_reviews (
+    id              TEXT PRIMARY KEY,
+    task_id         TEXT NOT NULL,
+    author_type     TEXT NOT NULL DEFAULT 'user',   -- user | agent
+    author_role     TEXT NOT NULL DEFAULT '',        -- reviewer | '' for users
+    author_id       TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL,                  -- APPROVED | REVISION_REQUESTED
+    body            TEXT NOT NULL DEFAULT '',        -- markdown
+    branch_head_sha TEXT NOT NULL DEFAULT '',
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_reviews_task ON task_reviews(task_id, created_at DESC);
+
+-- State migration audit log (one-shot migration from old vocabulary)
+CREATE TABLE IF NOT EXISTS state_migration_log (
+    id         INTEGER PRIMARY KEY,
+    task_id    TEXT NOT NULL,
+    old_state  TEXT NOT NULL,
+    new_state  TEXT NOT NULL,
+    migrated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Persisted state transition history
+CREATE TABLE IF NOT EXISTS task_state_transitions (
+    id             TEXT PRIMARY KEY,
+    task_id        TEXT NOT NULL,
+    from_state     TEXT NOT NULL,
+    to_state       TEXT NOT NULL,
+    actor_agent_id TEXT NOT NULL DEFAULT '',
+    reason         TEXT NOT NULL DEFAULT '',
+    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+CREATE INDEX IF NOT EXISTS idx_state_transitions_task ON task_state_transitions(task_id, created_at ASC);
+
+-- Merge queue: persisted file-path locks for crash recovery
+CREATE TABLE IF NOT EXISTS merge_locks (
+    id         TEXT PRIMARY KEY,
+    task_id    TEXT NOT NULL UNIQUE,
+    paths_json TEXT NOT NULL DEFAULT '[]',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_agent_status   ON tasks(assigned_agent_id, status);
@@ -309,6 +358,58 @@ func (d *Database) applyColumnMigrations() error {
 			name: "add_duration_ms_to_messages",
 			sql:  "ALTER TABLE messages ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0",
 		},
+		// W1.2: bare-repo tracking
+		{
+			name: "add_server_repo_initialised_at_to_projects",
+			sql:  "ALTER TABLE projects ADD COLUMN server_repo_initialised_at DATETIME",
+		},
+		// W1.3: upstream remote
+		{
+			name: "add_remote_url_to_projects",
+			sql:  "ALTER TABLE projects ADD COLUMN remote_url TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			name: "add_remote_credentials_ref_to_projects",
+			sql:  "ALTER TABLE projects ADD COLUMN remote_credentials_ref TEXT NOT NULL DEFAULT ''",
+		},
+		// W1.4: git HTTP server / branch tracking
+		{
+			name: "add_branch_head_sha_to_tasks",
+			sql:  "ALTER TABLE tasks ADD COLUMN branch_head_sha TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			name: "add_last_push_at_to_tasks",
+			sql:  "ALTER TABLE tasks ADD COLUMN last_push_at DATETIME",
+		},
+		{
+			name: "add_slug_to_projects",
+			sql:  "ALTER TABLE projects ADD COLUMN slug TEXT NOT NULL DEFAULT ''",
+		},
+		// W3.2: worktree path
+		{
+			name: "add_worktree_path_to_tasks",
+			sql:  "ALTER TABLE tasks ADD COLUMN worktree_path TEXT NOT NULL DEFAULT ''",
+		},
+		// W3.4: port pool
+		{
+			name: "add_assigned_port_to_tasks",
+			sql:  "ALTER TABLE tasks ADD COLUMN assigned_port INTEGER",
+		},
+		// W3.1: agent mode
+		{
+			name: "add_mode_to_agents",
+			sql:  "ALTER TABLE agents ADD COLUMN mode TEXT NOT NULL DEFAULT 'remote'",
+		},
+		// W5.2: task_comments.review_id FK index (column already created in schema)
+		{
+			name: "add_review_id_index_to_task_comments",
+			sql:  "CREATE INDEX IF NOT EXISTS idx_task_comments_review ON task_comments(review_id)",
+		},
+		// W2.3: projects coding rules
+		{
+			name: "add_coding_rules_to_projects",
+			sql:  "ALTER TABLE projects ADD COLUMN coding_rules TEXT NOT NULL DEFAULT ''",
+		},
 	}
 
 	for _, m := range migrations {
@@ -331,4 +432,73 @@ func (d *Database) applyColumnMigrations() error {
 		}
 	}
 	return nil
+}
+
+// migrateTaskStates is a one-shot migration that renames old task status strings
+// to the new vocabulary. Each renamed row is recorded in state_migration_log.
+// Running this on a fresh database is a no-op.
+func (d *Database) migrateTaskStates() error {
+	const migName = "rename_task_states_to_new_vocabulary"
+	var count int
+	if err := d.db.QueryRow(
+		"SELECT COUNT(*) FROM _schema_migrations WHERE name = ?", migName,
+	).Scan(&count); err != nil {
+		return fmt.Errorf("checking migration %q: %w", migName, err)
+	}
+	if count > 0 {
+		return nil // already applied
+	}
+
+	// Map old → new state strings.
+	renames := [][2]string{
+		{"planned", TaskStatusBacklog},
+		{"queued", TaskStatusBacklog},
+		{"in_progress", TaskStatusDeveloping},
+		{"needs_review", TaskStatusAwaitingReview},
+		{"approved", TaskStatusAwaitingMerge},
+		{"completed", TaskStatusCompleted},
+		{"failed", TaskStatusFailed},
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("migrateTaskStates: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, pair := range renames {
+		oldState, newState := pair[0], pair[1]
+
+		rows, err := tx.Query("SELECT id FROM tasks WHERE status = ?", oldState)
+		if err != nil {
+			return fmt.Errorf("migrateTaskStates: query %q: %w", oldState, err)
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+
+		for _, id := range ids {
+			if _, err := tx.Exec("UPDATE tasks SET status = ? WHERE id = ?", newState, id); err != nil {
+				return fmt.Errorf("migrateTaskStates: update task %s: %w", id, err)
+			}
+			if _, err := tx.Exec(
+				`INSERT INTO state_migration_log (task_id, old_state, new_state) VALUES (?, ?, ?)`,
+				id, oldState, newState,
+			); err != nil {
+				return fmt.Errorf("migrateTaskStates: log task %s: %w", id, err)
+			}
+		}
+	}
+
+	if _, err := tx.Exec("INSERT INTO _schema_migrations (name) VALUES (?)", migName); err != nil {
+		return fmt.Errorf("recording migration %q: %w", migName, err)
+	}
+	return tx.Commit()
 }

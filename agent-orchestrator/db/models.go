@@ -8,15 +8,53 @@ import (
 // --- Project ---
 
 type Project struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	RepoPath    string                 `json:"repo_path"` // local filesystem path
-	GitURL      string                 `json:"git_url"`   // git remote URL
-	Status      string                 `json:"status"`    // planned | in_progress | completed | failed
-	Config      map[string]interface{} `json:"config"`
-	CreatedAt   time.Time              `json:"created_at"`
-	UpdatedAt   time.Time             `json:"updated_at"`
+	ID                       string                 `json:"id"`
+	Name                     string                 `json:"name"`
+	Description              string                 `json:"description"`
+	RepoPath                 string                 `json:"repo_path"`                  // legacy local path hint (optional)
+	GitURL                   string                 `json:"git_url"`                    // git remote URL (legacy)
+	Slug                     string                 `json:"slug"`                       // URL-safe name used by git HTTP server
+	RemoteURL                string                 `json:"remote_url,omitempty"`       // upstream remote URL for mirroring
+	RemoteCredentialsRef     string                 `json:"remote_credentials_ref,omitempty"` // env-var / settings key for upstream auth
+	CodingRules              string                 `json:"coding_rules,omitempty"`     // freeform coding rules written to .agent_context/
+	Status                   string                 `json:"status"`
+	Config                   map[string]interface{} `json:"config"`
+	ServerRepoInitialisedAt  *time.Time             `json:"server_repo_initialised_at,omitempty"`
+	CreatedAt                time.Time              `json:"created_at"`
+	UpdatedAt                time.Time              `json:"updated_at"`
+}
+
+// Task state constants (mirrors workflow.TaskStatus — duplicated here to avoid
+// the db package importing workflow).
+const (
+	TaskStatusBacklog          = "BACKLOG"
+	TaskStatusDeveloping       = "DEVELOPING"
+	TaskStatusAwaitingReview   = "AWAITING_REVIEW"
+	TaskStatusReviewing        = "REVIEWING"
+	TaskStatusAwaitingRevision = "AWAITING_REVISION"
+	TaskStatusAwaitingMerge    = "AWAITING_MERGE"
+	TaskStatusMerging          = "MERGING"
+	TaskStatusCompleted        = "COMPLETED"
+	TaskStatusFailed           = "FAILED"
+)
+
+// IsQueueState returns true for states where no agent holds the task.
+func IsQueueState(s string) bool {
+	switch s {
+	case TaskStatusBacklog, TaskStatusAwaitingReview,
+		TaskStatusAwaitingRevision, TaskStatusAwaitingMerge:
+		return true
+	}
+	return false
+}
+
+// IsExecutionState returns true for states where an agent is actively working.
+func IsExecutionState(s string) bool {
+	switch s {
+	case TaskStatusDeveloping, TaskStatusReviewing, TaskStatusMerging:
+		return true
+	}
+	return false
 }
 
 // --- Task ---
@@ -26,12 +64,16 @@ type Task struct {
 	ProjectID       string                 `json:"project_id"`
 	Type            string                 `json:"type"`   // plan | implement | review | test | ...
 	Role            string                 `json:"role"`   // orchestrator | worker | reviewer | ...
-	Status          string                 `json:"status"` // planned | in_progress | needs_review | approved | completed | failed
+	Status          string                 `json:"status"` // BACKLOG | DEVELOPING | AWAITING_REVIEW | REVIEWING | AWAITING_REVISION | AWAITING_MERGE | MERGING | COMPLETED | FAILED
 	Priority        int                    `json:"priority"`
 	AssignedAgentID string                 `json:"assigned_agent_id,omitempty"`
 	Payload         map[string]interface{} `json:"payload"`
 	Result          map[string]interface{} `json:"result,omitempty"`
 	Attempts        int                    `json:"attempts"`
+	BranchHeadSHA   string                 `json:"branch_head_sha,omitempty"`
+	LastPushAt      *time.Time             `json:"last_push_at,omitempty"`
+	WorktreePath    string                 `json:"worktree_path,omitempty"`
+	AssignedPort    int                    `json:"assigned_port,omitempty"`
 	CreatedAt       time.Time              `json:"created_at"`
 	UpdatedAt       time.Time              `json:"updated_at"`
 	StartedAt       *time.Time             `json:"started_at,omitempty"`
@@ -92,6 +134,7 @@ type Agent struct {
 	Name          string                 `json:"name"`
 	Roles         []string               `json:"roles"`
 	Status        string                 `json:"status"` // online | offline | idle | busy
+	Mode          string                 `json:"mode"`   // colocated | remote
 	CurrentTaskID string                 `json:"current_task_id,omitempty"`
 	Capabilities  map[string]interface{} `json:"capabilities"`
 	RegisteredAt  time.Time              `json:"registered_at"`

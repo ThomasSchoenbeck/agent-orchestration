@@ -30,7 +30,7 @@ The platform manages projects through a real dev lifecycle: planning → develop
 
 ## W1. Server-managed git storage (foundation)
 
-### W1.1 [ ] Storage root + filesystem layout
+### W1.1 [x] Storage root + filesystem layout
 Outline:
 - Add `storage.root` to `config.go` (default `./data`).
 - Add `storage.worktree_retention_failed_hours` (default 168 = 7 days).
@@ -45,7 +45,7 @@ Files:
 
 Verify: server boots with custom `storage.root`; directories appear; paths_test asserts helpers.
 
-### W1.2 [ ] Bare repo per project (`git init --bare` via go-git)
+### W1.2 [x] Bare repo per project (`git init --bare` via go-git)
 Outline:
 - New package `agent-orchestrator/git/` wrapping go-git.
 - `git.InitBare(path)`: creates a bare repo with an empty `main` branch.
@@ -63,7 +63,7 @@ Files:
 
 Verify: create project via API; assert `{root}/repos/{id}.git/HEAD` exists and points at `main`.
 
-### W1.3 [ ] Optional `upstream` mirroring
+### W1.3 [x] Optional `upstream` mirroring
 Outline:
 - Project optional fields `remote_url`, `remote_credentials_ref` (just a credential lookup key; secrets in env or platform_settings).
 - On project create with `remote_url`: `git.AddRemote("upstream", url)`.
@@ -80,7 +80,7 @@ Files:
 
 Verify: integration test creates a project with a local "upstream" path; completes a task; asserts upstream's `main` advances.
 
-### W1.4 [ ] Embedded smart-HTTP git server
+### W1.4 [x] Embedded smart-HTTP git server
 Outline:
 - New `git/httpserver.go` implementing the smart-HTTP protocol via go-git's `transport/server` and `transport/http`:
   - `GET /git/{project_slug}.git/info/refs?service=git-upload-pack` → advertisement for clone/fetch
@@ -106,7 +106,7 @@ Verify: integration test runs a real `git clone http://localhost:8080/git/foo.gi
 
 ## W2. Task state machine
 
-### W2.1 [ ] State enum + migration
+### W2.1 [x] State enum + migration
 Outline:
 - New canonical states: `BACKLOG`, `DEVELOPING`, `AWAITING_REVIEW`, `REVIEWING`, `AWAITING_REVISION`, `AWAITING_MERGE`, `MERGING`, `COMPLETED`, `FAILED`.
 - One-shot DB migration: `planned/queued → BACKLOG`, `in_progress → DEVELOPING`, `needs_review → AWAITING_REVIEW`, `completed → COMPLETED`, `failed → FAILED`. Records the mapping in a `state_migration_log` table for audit.
@@ -120,7 +120,7 @@ Files:
 
 Verify: migration test inserts old-state rows, runs migration, asserts new states + log entries.
 
-### W2.2 [ ] Scheduler + claim path updated
+### W2.2 [x] Scheduler + claim path updated
 Outline:
 - The scheduler claims tasks by role + state: `dev` agents claim `BACKLOG` or `AWAITING_REVISION` → transition to `DEVELOPING`. `reviewer` agents claim `AWAITING_REVIEW` → `REVIEWING`. `merge` agents claim `AWAITING_MERGE` → `MERGING` (only after the merge supervisor releases the file-locks for the task — see W6).
 - The existing claim transaction stays; only the state predicates change.
@@ -132,7 +132,7 @@ Files:
 
 Verify: unit tests for each role/state combination.
 
-### W2.3 [ ] UI vocabulary update
+### W2.3 [x] UI vocabulary update
 Outline:
 - Replace every reference to the old states in Svelte files. `statusColors` map and dropdowns updated to the new states (with two new colours — `AWAITING_REVISION` and `AWAITING_MERGE`).
 - TaskDetail status select shows the full new list.
@@ -152,7 +152,7 @@ Verify: the A6 interaction crawler (from plan 1) must pass; vitest updated.
 
 ## W3. Agent modes — colocated vs remote
 
-### W3.1 [ ] Agent mode flag + identity
+### W3.1 [x] Agent mode flag + identity
 Outline:
 - `./agent-orchestrator agent --mode=colocated|remote --storage-root=… --server=…`.
 - Agent registers with `mode`, `hostname`, `pid`. New column `agents.mode`. Server uses this to decide whether to assign worktree-creation to itself (colocated) or expect the agent to clone over HTTP (remote).
@@ -166,7 +166,7 @@ Files:
 
 Verify: register a colocated and a remote agent; assert mode persisted.
 
-### W3.2 [ ] Colocated worktree provisioning (server-side)
+### W3.2 [x] Colocated worktree provisioning (server-side)
 Outline:
 - When a colocated agent claims a task moving into an execution state, the server creates the worktree at `{root}/worktrees/{task_id}/` pointed at the right branch:
   - `DEVELOPING` from `BACKLOG`: branch `task/{id}` is created from `main`.
@@ -184,7 +184,7 @@ Files:
 
 Verify: claim a task, assert worktree exists and is on the expected branch.
 
-### W3.3 [ ] Remote agent clone/fetch via embedded git HTTP
+### W3.3 [x] Remote agent clone/fetch via embedded git HTTP
 Outline:
 - Remote agent receives `repo_url` + `branch` on claim instead of `worktree_path`.
 - Agent uses go-git over HTTP to `Clone --depth 1` into a temp directory derived from `os.TempDir() / "agent-{id}/task-{taskID}"`. Subsequent revisions on the same task fetch + checkout rather than re-cloning.
@@ -197,7 +197,7 @@ Files:
 
 Verify: e2e starts server + remote agent, claims a task, asserts the clone happens via `/git/...` and the temp dir is created.
 
-### W3.4 [ ] Test-server port assignment for agents
+### W3.4 [x] Test-server port assignment for agents
 Outline:
 - Server keeps a free-port pool (config: `agents.port_pool_start`, default 18000, plus `agents.port_pool_size`, default 100).
 - On claim, the server allocates a port from the pool and returns it as `assigned_port` in the claim response. Released on transition out of an execution state.
@@ -213,7 +213,7 @@ Files:
 
 Verify: claim two tasks simultaneously; assert distinct ports allocated; release one; reclaim returns the freed port.
 
-### W3.5 [ ] `.agent_context/` per task
+### W3.5 [x] `.agent_context/` per task
 Outline:
 - On worktree/clone setup, populate `.agent_context/` in the work directory:
   - `last_review.md` — body of the latest review if state is `DEVELOPING` from revision; else absent.
@@ -235,7 +235,7 @@ Verify: claim a task; assert `.agent_context/task.md` exists; assert `git status
 
 ## W4. Dev cycle — commit, push, transition to AWAITING_REVIEW
 
-### W4.1 [ ] Branch creation + commit + push
+### W4.1 [x] Branch creation + commit + push
 Outline:
 - Agent's executor, after performing work on the worktree/clone:
   1. `git add -A` (via go-git Worktree.Add).
@@ -251,7 +251,7 @@ Files:
 
 Verify: integration test runs an agent through a fake task; asserts a branch exists on the bare repo at the expected SHA and the task is in `AWAITING_REVIEW`.
 
-### W4.2 [ ] Pre-submit gates (tests + lint + build) tied to task checklist
+### W4.2 [x] Pre-submit gates (tests + lint + build) tied to task checklist
 Outline:
 - Reuses A1.2 (per-task checklist) from plan 1. Before submit, executor walks the checklist items marked as required-pre-submit; if any are `failed`, the agent does NOT push and instead emits `task_pre_submit_failed` log + holds the task. (Surfaced to the user via the existing event panel.)
 - Default required items: `tests_pass`, `lint_pass`, `build_pass`. These are emitted by existing `tools/code.go` runs.
@@ -267,7 +267,7 @@ Verify: integration test where lint fails; assert no push, task stays in `DEVELO
 
 ## W5. Review-Fix loop
 
-### W5.1 [ ] Reviewer role + system prompt
+### W5.1 [x] Reviewer role + system prompt
 Outline:
 - New `roles` row `reviewer` (already partially supported by the codebase — verify routing).
 - New default reviewer prompt in `config.yaml` and `prompts/reviewer.txt`. Prompt instructs the agent to produce a structured manifest (not freeform).
@@ -279,7 +279,7 @@ Files:
 
 Verify: starting the server seeds the reviewer role row.
 
-### W5.2 [ ] Review schema + storage
+### W5.2 [x] Review schema + storage
 Outline:
 - Reviews are freeform markdown — no structured `suggestions_json`. Code suggestions, severity, file/line references all express naturally inside markdown (fenced diff blocks, inline references, headings). Agents and humans write the same shape.
 - New table `task_reviews(id, task_id, author_type, author_role, author_id, status, body, branch_head_sha, created_at)`.
@@ -301,7 +301,7 @@ Files:
 
 Verify: post a review as a user; assert state changes. Post a second review on the same task (after a new push); assert it appends as a new row and the state changes again. Attempt to post a review from a `dev`-role agent; assert 403.
 
-### W5.3 [ ] Reviewer agent execution
+### W5.3 [x] Reviewer agent execution
 Outline:
 - The reviewer claims a task in `AWAITING_REVIEW`, worktree/clones onto the task's branch, runs the project's test command, reads diffs against `main`, and writes a markdown review.
 - LLM tool `post_review(status, body)`: posts the review via the API. The reviewer system prompt instructs the LLM to embed code suggestions as fenced markdown blocks with file paths in headings, and to mark severity inline (e.g. `**blocker:**`, `**nit:**`).
@@ -316,7 +316,7 @@ Files:
 
 Verify: e2e — agent in reviewer role processes a task and posts a markdown review containing at least one fenced code suggestion; `status=REVISION_REQUESTED`; state transitions.
 
-### W5.4 [ ] Dev pickup of AWAITING_REVISION + dev↔reviewer discussion
+### W5.4 [x] Dev pickup of AWAITING_REVISION + dev↔reviewer discussion
 Outline:
 - When a dev agent claims a task in `AWAITING_REVISION`, the server includes the latest review (markdown body + status + branch_head_sha) and any threaded replies in the claim response. `context.go` (W3.5) writes `.agent_context/last_review.md` (the full review body) and `.agent_context/review_thread.md` (the reply chain).
 - Executor's prompt builder appends the review body and instructs the LLM to address each point inline. If the dev agent disagrees with a point, it must either propose an alternative in code OR post a reply comment via `post_task_comment(body, review_id=…)` explaining why. The reviewer can then respond by posting another comment (also tied to `review_id`). This is the discussion loop.
@@ -329,7 +329,7 @@ Files:
 
 Verify: integration test where reviewer requests a revision; dev picks up; resulting commit message references the `review_id`; dev posts a reply comment disagreeing with one point; reviewer (in a follow-up round) sees the reply in the thread.
 
-### W5.5 [ ] Unified task feed in the UI
+### W5.5 [x] Unified task feed in the UI
 Outline:
 - TaskDetail renders one chronological "Activity" section combining reviews and comments. No separate "Reviews tab".
 - New endpoint `GET /api/tasks/{id}/feed` returning rows from `task_reviews` and `task_comments` ordered by `created_at`, each carrying a `kind: 'review' | 'comment'` discriminator. Implementation: `SELECT … FROM task_reviews UNION ALL SELECT … FROM task_comments ORDER BY created_at`. Items may be filtered (`?since=…`) and paginated.
@@ -354,7 +354,7 @@ Verify: e2e — task has 1 review with `REVISION_REQUESTED` and 2 replies under 
 
 ## W6. Merge orchestration
 
-### W6.1 [ ] Merge supervisor (server-side background goroutine)
+### W6.1 [x] Merge supervisor (server-side background goroutine)
 Outline:
 - Single goroutine, started by `server.Start`. Polls tasks in `AWAITING_MERGE` every N seconds (config `agents.merge_supervisor_interval_sec`, default 10).
 - For each candidate, computes its changed-paths set via `git diff main...task/{id} --name-only` (go-git tree walking).
@@ -371,7 +371,7 @@ Files:
 
 Verify: unit tests for the path-overlap algorithm; integration test where two non-overlapping tasks merge in parallel and two overlapping tasks merge serially.
 
-### W6.2 [ ] Merge agent role + workflow
+### W6.2 [x] Merge agent role + workflow
 Outline:
 - Merge agent claims a released task → state `MERGING`.
 - Steps:
@@ -392,7 +392,7 @@ Files:
 
 Verify: integration test forces a conflict; assert task lands in `AWAITING_REVISION` with a synthetic review attached.
 
-### W6.3 [ ] Upstream push on COMPLETED
+### W6.3 [x] Upstream push on COMPLETED
 Outline: hooks W1.3 into the post-`COMPLETED` step. If `remote_url` configured, push `main` (and tags if applicable) to `upstream` in a goroutine; log failure but do not roll back.
 
 Files:
@@ -401,7 +401,7 @@ Files:
 
 Verify: covered by W1.3's integration test extended to assert the upstream branch advances.
 
-### W6.4 [ ] UI: merge queue view
+### W6.4 [x] UI: merge queue view
 Outline:
 - ProjectDetail.svelte: new collapsible "Merge queue" section listing tasks in `AWAITING_MERGE` / `MERGING`, with their changed-path summary and lock status.
 - TaskDetail.svelte: shows merge-attempt history (from the synthetic reviews + `task_logs`).
@@ -418,7 +418,7 @@ Verify: e2e visits a project with two AWAITING_MERGE tasks; asserts both appear;
 
 ## W7. Visibility — lifecycle history, charts, events
 
-### W7.1 [ ] Persisted state-transition history
+### W7.1 [x] Persisted state-transition history
 Outline:
 - New table `task_state_transitions(id, task_id, from_state, to_state, actor_agent_id, reason, created_at)`.
 - Every state transition (scheduler, hooks, supervisor) writes a row.
@@ -432,7 +432,7 @@ Files:
 
 Verify: a task's full lifecycle yields ≥ 6 transition rows; rendered in order.
 
-### W7.2 [ ] New event types for charts
+### W7.2 [x] New event types for charts
 Outline:
 - Extend `TASK_COLORS` in Tasks.svelte and the chart legend with:
   `task_submitted_for_review`, `task_review_posted`, `task_revision_started`, `task_merge_started`, `task_merge_failed`, `task_pushed_upstream`.
@@ -447,14 +447,14 @@ Verify: charts render new colours; A6 crawler still passes.
 
 ## W8. Testing
 
-### W8.1 [ ] Go unit tests for new packages
+### W8.1 [x] Go unit tests for new packages
 - `git/bare_test.go`, `git/worktree_test.go`, `git/diff_test.go`, `git/remote_test.go`, `git/httpserver_test.go`
 - `workflow/merge_supervisor_test.go`, `workflow/portpool_test.go`
 - `db/task_reviews_test.go`, `db/merge_queue_test.go`, `db/task_state_transitions_test.go`
 
 Verify: `task test:server` green.
 
-### W8.2 [ ] Integration test — full lifecycle
+### W8.2 [x] Integration test — full lifecycle
 Outline:
 - One Go integration test (build-tag `integration`) that:
   1. Boots the server with a tmp `storage.root`.
@@ -470,7 +470,7 @@ Files:
 
 Verify: `go test -tags=integration ./integration/...` passes.
 
-### W8.3 [ ] Playwright e2e additions
+### W8.3 [x] Playwright e2e additions
 Outline:
 - Extends plan 1's A6 suite:
   - `e2e/features/workflow-states.spec.js`: drive a project through every state via UI controls + simulated agents (the integration backend started in test mode).

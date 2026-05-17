@@ -95,12 +95,15 @@
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const statusColors = {
-    planned:     'bg-blue-900 text-blue-300',
-    queued:      'bg-yellow-900 text-yellow-300',
-    in_progress: 'bg-orange-900 text-orange-300',
-    needs_review:'bg-purple-900 text-purple-300',
-    completed:   'bg-green-900 text-green-300',
-    failed:      'bg-red-900 text-red-300',
+    BACKLOG:           'bg-blue-900 text-blue-300',
+    DEVELOPING:        'bg-orange-900 text-orange-300',
+    AWAITING_REVIEW:   'bg-yellow-900 text-yellow-300',
+    REVIEWING:         'bg-purple-900 text-purple-300',
+    AWAITING_REVISION: 'bg-rose-900 text-rose-300',
+    AWAITING_MERGE:    'bg-cyan-900 text-cyan-300',
+    MERGING:           'bg-indigo-900 text-indigo-300',
+    COMPLETED:         'bg-green-900 text-green-300',
+    FAILED:            'bg-red-900 text-red-300',
   }
 
   const projectStatusOptions = ['planned', 'in_progress', 'completed', 'failed']
@@ -215,11 +218,14 @@
   // ── Project editing ───────────────────────────────────────────────────────
   function startEdit() {
     editBuf = {
-      name:        project.name,
-      description: project.description,
-      repo_path:   project.repo_path,
-      git_url:     project.git_url,
-      status:      project.status,
+      name:                  project.name,
+      description:           project.description,
+      repo_path:             project.repo_path,
+      git_url:               project.git_url,
+      remote_url:            project.remote_url || '',
+      remote_credentials_ref: project.remote_credentials_ref || '',
+      coding_rules:          project.coding_rules || '',
+      status:                project.status,
     }
     editing = true
   }
@@ -227,11 +233,14 @@
   async function saveProject() {
     try {
       const updated = await updateProject(projectId, {
-        name:        editBuf.name,
-        description: editBuf.description,
-        repo_path:   editBuf.repo_path,
-        git_url:     editBuf.git_url,
-        status:      editBuf.status,
+        name:                  editBuf.name,
+        description:           editBuf.description,
+        repo_path:             editBuf.repo_path,
+        git_url:               editBuf.git_url,
+        remote_url:            editBuf.remote_url || undefined,
+        remote_credentials_ref: editBuf.remote_credentials_ref || undefined,
+        coding_rules:          editBuf.coding_rules || undefined,
+        status:                editBuf.status,
       })
       project = updated
       editing = false
@@ -354,7 +363,7 @@
               />
             </div>
             <div>
-              <label for="project-git-url" class="text-xs text-gray-500 mb-1 block">Git remote URL</label>
+              <label for="project-git-url" class="text-xs text-gray-500 mb-1 block">Git remote URL (legacy)</label>
               <input
                 id="project-git-url"
                 class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2
@@ -363,6 +372,41 @@
                 bind:value={editBuf.git_url}
               />
             </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="project-remote-url" class="text-xs text-gray-500 mb-1 block">Upstream remote URL</label>
+              <input
+                id="project-remote-url"
+                class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2
+                       text-sm text-gray-200 font-mono focus:outline-none focus:border-accent"
+                placeholder="https://github.com/org/repo.git"
+                bind:value={editBuf.remote_url}
+              />
+            </div>
+            <div>
+              <label for="project-credentials-ref" class="text-xs text-gray-500 mb-1 block">Credentials env var / key</label>
+              <input
+                id="project-credentials-ref"
+                class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2
+                       text-sm text-gray-200 font-mono focus:outline-none focus:border-accent"
+                placeholder="GITHUB_TOKEN"
+                bind:value={editBuf.remote_credentials_ref}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label for="project-coding-rules" class="text-xs text-gray-500 mb-1 block">Coding rules</label>
+            <textarea
+              id="project-coding-rules"
+              rows="4"
+              class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2
+                     text-sm text-gray-200 font-mono focus:outline-none focus:border-accent resize-y"
+              placeholder="Freeform coding conventions written to .agent_context/ for each task…"
+              bind:value={editBuf.coding_rules}
+            ></textarea>
           </div>
 
           <div class="flex justify-end gap-2">
@@ -410,6 +454,15 @@
                   class="hover:text-accent transition-colors"
                   title="Git remote"
                 >🔗 {project.git_url}</a>
+              {/if}
+              {#if project.remote_url}
+                <a
+                  href={project.remote_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="hover:text-accent transition-colors"
+                  title="Upstream remote"
+                >⬆ {project.remote_url}</a>
               {/if}
               <span class="text-gray-600">ID: {project.id}</span>
             </div>
@@ -650,7 +703,7 @@
             onchange={loadTasks}
           >
             <option value="">All statuses</option>
-            {#each ['planned','queued','in_progress','needs_review','completed','failed'] as s}
+            {#each ['BACKLOG','DEVELOPING','AWAITING_REVIEW','REVIEWING','AWAITING_REVISION','AWAITING_MERGE','MERGING','COMPLETED','FAILED'] as s}
               <option value={s}>{s}</option>
             {/each}
           </select>
@@ -747,10 +800,10 @@
                   {/if}
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
-                  {#if t.status === 'planned' || t.status === 'failed'}
+                  {#if t.status === 'BACKLOG' || t.status === 'FAILED'}
                     <button
                       class="text-xs text-yellow-400 hover:text-yellow-300 transition-colors"
-                      onclick={(e) => { e.stopPropagation(); setTaskStatus(t.id, 'queued') }}
+                      onclick={(e) => { e.stopPropagation(); setTaskStatus(t.id, 'BACKLOG') }}
                     >Queue</button>
                   {/if}
                   <button

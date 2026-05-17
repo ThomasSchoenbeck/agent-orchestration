@@ -57,12 +57,45 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		DurationMs: durationMs,
 	}
 
+	// Reviewer tasks post a review instead of a generic result.
+	if task.Role == "reviewer" && execErr == nil {
+		reviewStatus, body := extractReviewFromResult(result)
+		if err := e.client.PostReview(ctx, task.ID, reviewStatus, body, task.BranchHeadSHA, e.agentID); err != nil {
+			log.Printf("executor: PostReview task %s: %v", task.ID, err)
+		}
+		// Also submit result so metrics are recorded.
+		_ = e.client.SubmitTaskResult(ctx, task.ID, result, "completed", metrics)
+		log.Printf("executor: reviewer task %s done (review_status=%s tokens=%d duration=%dms)",
+			task.ID, reviewStatus, tokensUsed, durationMs)
+		return
+	}
+
 	if err := e.client.SubmitTaskResult(ctx, task.ID, result, status, metrics); err != nil {
 		log.Printf("executor: failed to submit result for task %s: %v", task.ID, err)
 	} else {
 		log.Printf("executor: task %s done (status=%s tokens=%d duration=%dms)",
 			task.ID, status, tokensUsed, durationMs)
 	}
+}
+
+// extractReviewFromResult pulls the review status and body out of the LLM
+// result map. The LLM is expected to return:
+//
+//	{ "review_status": "approved|changes_requested", "review_body": "…" }
+//
+// Falls back to "changes_requested" with the raw output if keys are absent.
+func extractReviewFromResult(result map[string]interface{}) (reviewStatus, body string) {
+	if s, ok := result["review_status"].(string); ok && s != "" {
+		reviewStatus = s
+	} else {
+		reviewStatus = "changes_requested"
+	}
+	if b, ok := result["review_body"].(string); ok && b != "" {
+		body = b
+	} else if out, ok := result["output"].(string); ok {
+		body = out
+	}
+	return reviewStatus, body
 }
 
 // execute performs the LLM+tool loop and returns the final result map, status,
@@ -158,6 +191,18 @@ func (e *Executor) buildSystemMessage(task *db.Task, route *router.RouteResult) 
 	// Prefer DB-backed system prompt from the resolved role definition.
 	if route.SystemPrompt != "" {
 		return route.SystemPrompt
+	}
+
+	// Reviewer role gets a structured fallback that instructs the LLM on
+	// the expected output format.
+	if task.Role == "reviewer" {
+		return `You are a code reviewer agent. Review the code changes in the provided worktree or diff.
+
+Respond with a JSON object containing:
+- "review_status": one of "approved" (no issues), "changes_requested" (minor issues), or "revision_requested" (blocking issues)
+- "review_body": your full review in markdown, including specific inline suggestions using fenced code blocks where applicable
+
+Be constructive. Reference specific files and line numbers where possible.`
 	}
 
 	// Generic fallback if no system prompt is defined (should rarely happen with DB-backed roles).
