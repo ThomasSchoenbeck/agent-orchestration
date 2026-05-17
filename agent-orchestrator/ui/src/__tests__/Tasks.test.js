@@ -305,7 +305,7 @@ describe('Tasks — auto-refresh', () => {
     await waitFor(() => expect(fetch).toHaveBeenCalled())
     const callsAfterMount = fetch.mock.calls.length
 
-    vi.advanceTimersByTime(5_500)
+    await vi.advanceTimersByTimeAsync(5_500)
     expect(fetch.mock.calls.length).toBeGreaterThan(callsAfterMount)
   })
 })

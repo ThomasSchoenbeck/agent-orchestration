@@ -27,6 +27,8 @@
   let newConvTitle   = $state('')
   let renamingID     = $state(null)
   let renameTitle    = $state('')
+  // Index of the message currently being streamed into (-1 = not streaming).
+  let streamingIdx   = $state(-1)
 
   // ── WebSocket ────────────────────────────────────────────────────────────
   const sock = createChatSocket({
@@ -34,14 +36,60 @@
       connected = true
     },
     onMessage(data) {
+      // ── Streaming chunk ────────────────────────────────────────────────
+      if (data.type === 'chat_chunk') {
+        const chunk = data.content ?? ''
+        if (streamingIdx === -1) {
+          // First chunk — push placeholder and track its index.
+          messages.push({ role: 'assistant', content: chunk, streaming: true })
+          streamingIdx = messages.length - 1
+        } else {
+          messages[streamingIdx] = {
+            ...messages[streamingIdx],
+            content: messages[streamingIdx].content + chunk,
+          }
+        }
+        scrollBottom()
+        return
+      }
+
+      // ── Streaming done ─────────────────────────────────────────────────
+      if (data.type === 'chat_done') {
+        if (streamingIdx !== -1) {
+          const finalMsg = { ...messages[streamingIdx], streaming: false, usage: data.usage ?? null }
+          messages[streamingIdx] = finalMsg
+          if (activeConvID && finalMsg.content) {
+            const body = { role: 'assistant', content: finalMsg.content }
+            if (data.usage) {
+              body.tokens_used   = data.usage.tokens_used
+              body.input_tokens  = data.usage.input_tokens
+              body.output_tokens = data.usage.output_tokens
+              body.duration_ms   = data.usage.duration_ms
+            }
+            addMessage(activeConvID, body).catch(e => console.error('Failed to save message:', e))
+          }
+          streamingIdx = -1
+        }
+        sending = false
+        scrollBottom()
+        return
+      }
+
+      // ── Non-streaming reply (type === "chat") ──────────────────────────
       sending = false
       const content = typeof data === 'string' ? data : (data.content ?? JSON.stringify(data))
-      messages.push({ role: 'assistant', content })
+      const usage   = data.usage ?? null
+      messages.push({ role: 'assistant', content, usage })
       scrollBottom()
-      // Save assistant message to DB
       if (activeConvID) {
-        addMessage(activeConvID, { role: 'assistant', content })
-          .catch(e => console.error('Failed to save message:', e))
+        const body = { role: 'assistant', content }
+        if (usage) {
+          body.tokens_used   = usage.tokens_used
+          body.input_tokens  = usage.input_tokens
+          body.output_tokens = usage.output_tokens
+          body.duration_ms   = usage.duration_ms
+        }
+        addMessage(activeConvID, body).catch(e => console.error('Failed to save message:', e))
       }
     },
     onClose() {
@@ -379,24 +427,31 @@
         {:else}
           {#each messages as m, i (i)}
             <div class="flex {m.role === 'user' ? 'justify-end' : 'justify-start'}">
-              <div class="max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed
-                {m.role === 'user'
-                  ? 'bg-accent text-white rounded-br-sm'
-                  : m.role === 'error'
-                    ? 'bg-red-900 text-red-200 rounded-bl-sm'
-                    : 'bg-surface-700 text-gray-200 rounded-bl-sm'}"
-              >
-                {#if m.role === 'user'}
-                  <!-- User messages: render as markdown -->
+              <div class="max-w-[75%]">
+                <div class="px-4 py-2.5 rounded-2xl text-sm leading-relaxed
+                  {m.role === 'user'
+                    ? 'bg-accent text-white rounded-br-sm'
+                    : m.role === 'error'
+                      ? 'bg-red-900 text-red-200 rounded-bl-sm'
+                      : 'bg-surface-700 text-gray-200 rounded-bl-sm'}"
+                >
                   <div class="prose prose-invert prose-sm max-w-none">
                     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
                     {@html renderMarkdown(m.content)}
                   </div>
-                {:else}
-                  <!-- Assistant/error messages: render as markdown -->
-                  <div class="prose prose-invert prose-sm max-w-none">
-                    <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-                    {@html renderMarkdown(m.content)}
+                  {#if m.streaming}
+                    <span class="inline-block w-1.5 h-3.5 bg-gray-400 animate-pulse ml-0.5 align-middle rounded-sm"></span>
+                  {/if}
+                </div>
+                {#if m.usage && m.role === 'assistant'}
+                  <div class="text-[10px] text-gray-600 mt-0.5 px-1 flex gap-2">
+                    <span>{m.usage.tokens_used} tok</span>
+                    {#if m.usage.input_tokens || m.usage.output_tokens}
+                      <span>{m.usage.input_tokens}↑ {m.usage.output_tokens}↓</span>
+                    {/if}
+                    {#if m.usage.duration_ms}
+                      <span>{m.usage.duration_ms} ms</span>
+                    {/if}
                   </div>
                 {/if}
               </div>

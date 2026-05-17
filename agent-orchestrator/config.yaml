@@ -85,6 +85,11 @@ database:
   type: sqlite
   path: ./data/orchestrator.db
 
+# Optional: store agent/task/system logs in a separate SQLite file.
+# When omitted, logs default to ./data/logs.db (next to the main database).
+# logs_db:
+#   path: ./data/logs.db
+
 agents:
   heartbeat_interval_sec: 30
   task_poll_interval_sec: 5

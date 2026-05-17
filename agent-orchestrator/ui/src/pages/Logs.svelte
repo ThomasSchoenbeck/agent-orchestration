@@ -1,9 +1,11 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { listLogs } from '../lib/api.js'
+  import { listLogs, listChatLog, listSettings } from '../lib/api.js'
   import { toasts, router } from '../lib/stores.js'
 
   // ── State ─────────────────────────────────────────────────────────────────
+  let chatLog         = $state([])
+  let chatLogLimit    = $state(50)
   let logs            = $state([])
   let loading         = $state(false)
   let level           = $state('')
@@ -32,8 +34,12 @@
     try {
       const params = { limit }
       if (level) params.level = level
-      const res = await listLogs(params)
-      logs = Array.isArray(res) ? res : (res.logs ?? [])
+      const [res, cl] = await Promise.all([
+        listLogs(params),
+        listChatLog({ limit: chatLogLimit }),
+      ])
+      logs    = Array.isArray(res) ? res : (res.logs ?? [])
+      chatLog = Array.isArray(cl)  ? cl  : []
     } catch (e) {
       toasts.error('Failed to load logs: ' + e.message)
     } finally {
@@ -123,9 +129,18 @@
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   let timer = null
-  onMount(() => {
+  onMount(async () => {
     load()
-    timer = setInterval(load, 10_000)
+    let intervalMs = 10_000
+    try {
+      const all = await listSettings()
+      const s = all.find(s => s.key === 'platform.charts.autorefresh_ms')
+      if (s) {
+        const parsed = parseInt(s.value, 10)
+        if (parsed > 0) intervalMs = parsed
+      }
+    } catch (_) { /* fall back to default */ }
+    timer = setInterval(load, intervalMs)
   })
   onDestroy(() => clearInterval(timer))
 </script>
@@ -208,6 +223,52 @@
       {/each}
     </div>
   </div>
+
+  <!-- ── Chat log ──────────────────────────────────────────────────────────── -->
+  {#if chatLog.length > 0}
+    <div class="shrink-0 border-b border-surface-600">
+      <div class="px-6 py-2 flex items-center justify-between">
+        <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Chat Log</span>
+        <div class="flex items-center gap-2">
+          <select
+            class="bg-surface-700 border border-surface-600 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none"
+            bind:value={chatLogLimit}
+            onchange={load}
+          >
+            <option value={20}>20</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </div>
+      </div>
+      <div class="max-h-40 overflow-y-auto">
+        <table class="w-full font-mono text-xs">
+          <thead class="sticky top-0 bg-surface-800 z-10">
+            <tr>
+              <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-28">Time</th>
+              <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-28">Provider</th>
+              <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-28">Direction</th>
+              <th class="text-left px-4 py-1.5 text-gray-500 font-medium">Preview</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each chatLog as entry (entry.timestamp + entry.direction + entry.preview)}
+              <tr class="border-t border-surface-700 hover:bg-surface-700/20">
+                <td class="px-4 py-1 text-gray-600 whitespace-nowrap">{formatTime(entry.timestamp)}</td>
+                <td class="px-4 py-1 text-gray-400 truncate max-w-[6rem]">{entry.provider_name || '—'}</td>
+                <td class="px-4 py-1">
+                  <span class="text-[10px] px-1.5 py-0.5 rounded {entry.direction === 'user_to_llm' ? 'bg-blue-900/50 text-blue-300' : 'bg-purple-900/50 text-purple-300'}">
+                    {entry.direction === 'user_to_llm' ? '→ LLM' : '← LLM'}
+                  </span>
+                </td>
+                <td class="px-4 py-1 text-gray-400">{entry.preview}…</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {/if}
 
   <!-- ── Log stream ─────────────────────────────────────────────────────────── -->
   <div class="flex-1 overflow-y-auto font-mono text-xs">

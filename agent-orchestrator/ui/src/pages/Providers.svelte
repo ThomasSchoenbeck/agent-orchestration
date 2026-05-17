@@ -34,9 +34,18 @@
     return PROVIDER_TYPES.find(pt => pt.value === t)?.label ?? t
   }
 
+  // Returns only scalar (number / string / boolean) metric entries for the grid display.
   function metricEntries(m) {
     if (!m || typeof m !== 'object') return []
-    return Object.entries(m).filter(([, v]) => v !== null && v !== undefined)
+    return Object.entries(m).filter(([, v]) =>
+      v !== null && v !== undefined && !Array.isArray(v) && typeof v !== 'object'
+    )
+  }
+
+  // Returns array/object metric entries (e.g. by_project, by_agent) for table display.
+  function metricTableEntries(m) {
+    if (!m || typeof m !== 'object') return []
+    return Object.entries(m).filter(([, v]) => Array.isArray(v) && v.length > 0)
   }
 
   // ── Data loading ──────────────────────────────────────────────────────────
@@ -369,17 +378,46 @@
   {/if}
 
   <!-- Metrics -->
-  {#if metrics && metricEntries(metrics).length > 0}
+  {#if metrics && (metricEntries(metrics).length > 0 || metricTableEntries(metrics).length > 0)}
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Metrics</h2>
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
-      {#each metricEntries(metrics) as [key, val]}
-        <div class="p-3 bg-surface-800 rounded border border-surface-600">
-          <div class="text-xs text-gray-500 mb-1 capitalize">{key.replace(/_/g, ' ')}</div>
-          <div class="text-lg font-semibold text-gray-100">
-            {typeof val === 'number' ? val.toLocaleString() : String(val)}
+    {#if metricEntries(metrics).length > 0}
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 mb-4">
+        {#each metricEntries(metrics) as [key, val]}
+          <div class="p-3 bg-surface-800 rounded border border-surface-600">
+            <div class="text-xs text-gray-500 mb-1 capitalize">{key.replace(/_/g, ' ')}</div>
+            <div class="text-lg font-semibold text-gray-100">
+              {typeof val === 'number' ? val.toLocaleString() : String(val)}
+            </div>
           </div>
+        {/each}
+      </div>
+    {/if}
+    {#each metricTableEntries(metrics) as [key, rows]}
+      <div class="mb-4">
+        <div class="text-xs text-gray-500 uppercase tracking-wide mb-1 capitalize">{key.replace(/_/g, ' ')}</div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs text-left text-gray-300">
+            <thead class="text-gray-500">
+              <tr>
+                {#each Object.keys(rows[0]) as col}
+                  <th class="pr-4 pb-1 capitalize font-medium">{col.replace(/_/g, ' ')}</th>
+                {/each}
+              </tr>
+            </thead>
+            <tbody>
+              {#each rows as row}
+                <tr class="border-t border-surface-700">
+                  {#each Object.values(row) as cell}
+                    <td class="pr-4 py-1">
+                      {typeof cell === 'number' ? cell.toLocaleString() : String(cell ?? '')}
+                    </td>
+                  {/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         </div>
-      {/each}
-    </div>
+      </div>
+    {/each}
   {/if}
 </div>

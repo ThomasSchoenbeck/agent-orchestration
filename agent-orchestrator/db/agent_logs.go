@@ -7,6 +7,24 @@ import (
 	"time"
 )
 
+// Debug-mode event type constants emitted when platform.debug_mode=true.
+const (
+	EventAgentHeartbeat  = "agent_heartbeat"
+	EventAgentPollQuery  = "agent_poll_query"
+	EventAgentPollNoTask = "agent_poll_no_task"
+)
+
+// Task event type constants.
+const (
+	EventTaskDependencyWarning = "task_dependency_warning"
+	EventTaskDependencyAdded   = "task_dependency_added"
+	EventTaskDependencyRemoved = "task_dependency_removed"
+	EventTaskChecklistChanged  = "task_checklist_changed"
+	EventTaskCommentAdded      = "task_comment_added"
+	EventTaskLinkAdded         = "task_link_added"
+	EventTaskLinkRemoved       = "task_link_removed"
+)
+
 // AgentLog is one structured agent activity event row.
 type AgentLog struct {
 	ID          string    `json:"id"`

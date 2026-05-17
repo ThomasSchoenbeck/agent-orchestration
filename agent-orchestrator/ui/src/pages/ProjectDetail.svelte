@@ -6,6 +6,8 @@
     getProject, updateProject,
     listProjectTasks, createTask, updateTask, deleteTask,
     getTaskTypes, getTaskRoles,
+    listRequirements, createRequirement, updateRequirement, deleteRequirement,
+    listFeatures, createFeature, updateFeature, deleteFeature,
   } from '../lib/api.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
   import AssistantSidebar from '../components/AssistantSidebar.svelte'
@@ -22,6 +24,43 @@
   let showTaskForm = $state(false)
   let filterStatus = $state('')
   let showAssistant = $state(false)
+
+  // Requirements / features state
+  let requirements       = $state([])
+  let features           = $state([])
+  let reqsOpen           = $state(true)
+  let featsOpen          = $state(true)
+  let reqStatusFilter    = $state([])
+  let featStatusFilter   = $state([])
+  let newReqTitle        = $state('')
+  let newFeatTitle       = $state('')
+  let editingReqId       = $state(null)
+  let editingFeatId      = $state(null)
+  let reqBuf             = $state({})
+  let featBuf            = $state({})
+
+  const REQ_STATUSES  = ['proposed', 'accepted', 'implemented', 'obsolete']
+  const FEAT_STATUSES = ['planned', 'in_progress', 'done', 'dropped']
+
+  const REQ_STATUS_COLORS = {
+    proposed:    'bg-blue-900 text-blue-300',
+    accepted:    'bg-green-900 text-green-300',
+    implemented: 'bg-emerald-900 text-emerald-300',
+    obsolete:    'bg-gray-700 text-gray-400',
+  }
+  const FEAT_STATUS_COLORS = {
+    planned:     'bg-blue-900 text-blue-300',
+    in_progress: 'bg-orange-900 text-orange-300',
+    done:        'bg-green-900 text-green-300',
+    dropped:     'bg-gray-700 text-gray-400',
+  }
+
+  let filteredReqs  = $derived(
+    reqStatusFilter.length === 0 ? requirements : requirements.filter(r => reqStatusFilter.includes(r.status))
+  )
+  let filteredFeats = $derived(
+    featStatusFilter.length === 0 ? features : features.filter(f => featStatusFilter.includes(f.status))
+  )
 
   // Edit buffer — populated when editing starts
   let editBuf = $state({})
@@ -82,7 +121,7 @@
       project   = p
       taskTypes = Array.isArray(tt) ? tt : []
       taskRoles = Array.isArray(tr) ? tr : []
-      await loadTasks()
+      await Promise.all([loadTasks(), loadRequirements(), loadFeatures()])
     } catch (e) {
       toasts.error('Failed to load project: ' + e.message)
     } finally {
@@ -99,6 +138,78 @@
     } catch (e) {
       toasts.error('Failed to load tasks: ' + e.message)
     }
+  }
+
+  async function loadRequirements() {
+    try { requirements = await listRequirements(projectId) } catch (_) {}
+  }
+
+  async function loadFeatures() {
+    try { features = await listFeatures(projectId) } catch (_) {}
+  }
+
+  async function addRequirement() {
+    if (!newReqTitle.trim()) return
+    try {
+      const r = await createRequirement(projectId, { title: newReqTitle.trim(), position: requirements.length })
+      requirements = [...requirements, r]
+      newReqTitle = ''
+    } catch (e) { toasts.error('Create failed: ' + e.message) }
+  }
+
+  async function saveRequirement(req) {
+    try {
+      const updated = await updateRequirement(projectId, req.id, reqBuf)
+      requirements = requirements.map(r => r.id === req.id ? { ...r, ...updated } : r)
+      editingReqId = null
+    } catch (e) { toasts.error('Save failed: ' + e.message) }
+  }
+
+  async function removeRequirement(id) {
+    if (!confirm('Delete this requirement?')) return
+    try {
+      await deleteRequirement(projectId, id)
+      requirements = requirements.filter(r => r.id !== id)
+    } catch (e) { toasts.error('Delete failed: ' + e.message) }
+  }
+
+  async function patchReqStatus(req, status) {
+    try {
+      const updated = await updateRequirement(projectId, req.id, { status })
+      requirements = requirements.map(r => r.id === req.id ? { ...r, ...updated } : r)
+    } catch (e) { toasts.error('Update failed: ' + e.message) }
+  }
+
+  async function addFeature() {
+    if (!newFeatTitle.trim()) return
+    try {
+      const f = await createFeature(projectId, { title: newFeatTitle.trim(), position: features.length })
+      features = [...features, f]
+      newFeatTitle = ''
+    } catch (e) { toasts.error('Create failed: ' + e.message) }
+  }
+
+  async function saveFeature(feat) {
+    try {
+      const updated = await updateFeature(projectId, feat.id, featBuf)
+      features = features.map(f => f.id === feat.id ? { ...f, ...updated } : f)
+      editingFeatId = null
+    } catch (e) { toasts.error('Save failed: ' + e.message) }
+  }
+
+  async function removeFeature(id) {
+    if (!confirm('Delete this feature?')) return
+    try {
+      await deleteFeature(projectId, id)
+      features = features.filter(f => f.id !== id)
+    } catch (e) { toasts.error('Delete failed: ' + e.message) }
+  }
+
+  async function patchFeatStatus(feat, status) {
+    try {
+      const updated = await updateFeature(projectId, feat.id, { status })
+      features = features.map(f => f.id === feat.id ? { ...f, ...updated } : f)
+    } catch (e) { toasts.error('Update failed: ' + e.message) }
   }
 
   // ── Project editing ───────────────────────────────────────────────────────
@@ -309,6 +420,218 @@
                    hover:border-accent hover:text-gray-200 rounded transition-colors shrink-0"
             onclick={startEdit}
           >Edit</button>
+        </div>
+      {/if}
+    </div>
+
+    <!-- ── Requirements ──────────────────────────────────────────────────── -->
+    <div class="mb-4">
+      <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+        <button
+          class="flex items-center gap-1.5 text-base font-semibold text-gray-200 hover:text-gray-100"
+          onclick={() => reqsOpen = !reqsOpen}
+        >
+          <span class="text-xs text-gray-500">{reqsOpen ? '▾' : '▸'}</span>
+          Requirements
+          <span class="text-xs font-normal text-gray-500">({requirements.length})</span>
+        </button>
+        <div class="flex items-center gap-1.5 flex-wrap">
+          {#each REQ_STATUSES as s}
+            <button
+              class="text-[10px] px-1.5 py-0.5 rounded-full border transition-colors
+                {reqStatusFilter.includes(s)
+                  ? (REQ_STATUS_COLORS[s] || 'bg-surface-600 text-gray-300') + ' border-transparent'
+                  : 'border-surface-600 text-gray-500 hover:text-gray-300'}"
+              onclick={() => {
+                if (reqStatusFilter.includes(s)) reqStatusFilter = reqStatusFilter.filter(x => x !== s)
+                else reqStatusFilter = [...reqStatusFilter, s]
+              }}
+            >{s}</button>
+          {/each}
+        </div>
+      </div>
+
+      {#if reqsOpen}
+        <div class="flex flex-col gap-1.5 mb-2">
+          {#each filteredReqs as req (req.id)}
+            <div class="p-2.5 bg-surface-800 rounded border border-surface-600">
+              {#if editingReqId === req.id}
+                <div class="flex flex-col gap-2">
+                  <input
+                    class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-accent"
+                    bind:value={reqBuf.title}
+                  />
+                  <textarea
+                    class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-accent resize-none"
+                    rows="3"
+                    placeholder="Description (markdown)"
+                    bind:value={reqBuf.body}
+                  ></textarea>
+                  <div class="flex items-center gap-2">
+                    <select
+                      class="bg-surface-700 border border-surface-500 rounded px-2 py-0.5 text-xs text-gray-300 focus:outline-none"
+                      bind:value={reqBuf.status}
+                    >
+                      {#each REQ_STATUSES as s}<option value={s}>{s}</option>{/each}
+                    </select>
+                    <button class="px-2 py-0.5 bg-accent hover:bg-accent-hover text-white text-xs rounded" onclick={() => saveRequirement(req)}>Save</button>
+                    <button class="px-2 py-0.5 bg-surface-600 hover:bg-surface-500 text-gray-300 text-xs rounded" onclick={() => editingReqId = null}>Cancel</button>
+                  </div>
+                </div>
+              {:else}
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                      <span class="text-sm text-gray-200 font-medium">{req.title}</span>
+                      <select
+                        class="bg-transparent border-0 text-[10px] px-1 py-0 rounded-full cursor-pointer focus:outline-none {REQ_STATUS_COLORS[req.status] || 'text-gray-400'}"
+                        value={req.status}
+                        onchange={(e) => patchReqStatus(req, e.currentTarget.value)}
+                      >
+                        {#each REQ_STATUSES as s}<option value={s}>{s}</option>{/each}
+                      </select>
+                      {#if req.linked_tasks > 0}
+                        <span class="text-[10px] text-gray-500 bg-surface-700 px-1 py-0.5 rounded">{req.linked_tasks} task{req.linked_tasks !== 1 ? 's' : ''}</span>
+                      {/if}
+                    </div>
+                    {#if req.body}
+                      <p class="text-xs text-gray-400 mt-0.5 line-clamp-2">{req.body}</p>
+                    {/if}
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <button class="text-[10px] text-blue-400 hover:text-blue-300" onclick={() => { editingReqId = req.id; reqBuf = { title: req.title, body: req.body, status: req.status } }}>Edit</button>
+                    <button class="text-[10px] text-red-400 hover:text-red-300" onclick={() => removeRequirement(req.id)}>Del</button>
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {:else}
+            {#if filteredReqs.length === 0 && requirements.length === 0}
+              <p class="text-xs text-gray-500 py-2">No requirements yet. Use requirements to define what the project must do.</p>
+            {:else if filteredReqs.length === 0}
+              <p class="text-xs text-gray-500 py-2">No requirements match the current status filter.</p>
+            {/if}
+          {/each}
+        </div>
+
+        <div class="flex items-center gap-2">
+          <input
+            class="flex-1 bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-accent"
+            placeholder="New requirement title…"
+            bind:value={newReqTitle}
+            onkeydown={(e) => e.key === 'Enter' && addRequirement()}
+          />
+          <button
+            class="px-3 py-1 bg-accent hover:bg-accent-hover text-white text-xs rounded transition-colors disabled:opacity-40"
+            disabled={!newReqTitle.trim()}
+            onclick={addRequirement}
+          >+ Add</button>
+        </div>
+      {/if}
+    </div>
+
+    <!-- ── Features ───────────────────────────────────────────────────────── -->
+    <div class="mb-4">
+      <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+        <button
+          class="flex items-center gap-1.5 text-base font-semibold text-gray-200 hover:text-gray-100"
+          onclick={() => featsOpen = !featsOpen}
+        >
+          <span class="text-xs text-gray-500">{featsOpen ? '▾' : '▸'}</span>
+          Features
+          <span class="text-xs font-normal text-gray-500">({features.length})</span>
+        </button>
+        <div class="flex items-center gap-1.5 flex-wrap">
+          {#each FEAT_STATUSES as s}
+            <button
+              class="text-[10px] px-1.5 py-0.5 rounded-full border transition-colors
+                {featStatusFilter.includes(s)
+                  ? (FEAT_STATUS_COLORS[s] || 'bg-surface-600 text-gray-300') + ' border-transparent'
+                  : 'border-surface-600 text-gray-500 hover:text-gray-300'}"
+              onclick={() => {
+                if (featStatusFilter.includes(s)) featStatusFilter = featStatusFilter.filter(x => x !== s)
+                else featStatusFilter = [...featStatusFilter, s]
+              }}
+            >{s}</button>
+          {/each}
+        </div>
+      </div>
+
+      {#if featsOpen}
+        <div class="flex flex-col gap-1.5 mb-2">
+          {#each filteredFeats as feat (feat.id)}
+            <div class="p-2.5 bg-surface-800 rounded border border-surface-600">
+              {#if editingFeatId === feat.id}
+                <div class="flex flex-col gap-2">
+                  <input
+                    class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-accent"
+                    bind:value={featBuf.title}
+                  />
+                  <textarea
+                    class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-accent resize-none"
+                    rows="3"
+                    placeholder="Description (markdown)"
+                    bind:value={featBuf.body}
+                  ></textarea>
+                  <div class="flex items-center gap-2">
+                    <select
+                      class="bg-surface-700 border border-surface-500 rounded px-2 py-0.5 text-xs text-gray-300 focus:outline-none"
+                      bind:value={featBuf.status}
+                    >
+                      {#each FEAT_STATUSES as s}<option value={s}>{s}</option>{/each}
+                    </select>
+                    <button class="px-2 py-0.5 bg-accent hover:bg-accent-hover text-white text-xs rounded" onclick={() => saveFeature(feat)}>Save</button>
+                    <button class="px-2 py-0.5 bg-surface-600 hover:bg-surface-500 text-gray-300 text-xs rounded" onclick={() => editingFeatId = null}>Cancel</button>
+                  </div>
+                </div>
+              {:else}
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                      <span class="text-sm text-gray-200 font-medium">{feat.title}</span>
+                      <select
+                        class="bg-transparent border-0 text-[10px] px-1 py-0 rounded-full cursor-pointer focus:outline-none {FEAT_STATUS_COLORS[feat.status] || 'text-gray-400'}"
+                        value={feat.status}
+                        onchange={(e) => patchFeatStatus(feat, e.currentTarget.value)}
+                      >
+                        {#each FEAT_STATUSES as s}<option value={s}>{s}</option>{/each}
+                      </select>
+                      {#if feat.linked_tasks > 0}
+                        <span class="text-[10px] text-gray-500 bg-surface-700 px-1 py-0.5 rounded">{feat.linked_tasks} task{feat.linked_tasks !== 1 ? 's' : ''}</span>
+                      {/if}
+                    </div>
+                    {#if feat.body}
+                      <p class="text-xs text-gray-400 mt-0.5 line-clamp-2">{feat.body}</p>
+                    {/if}
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <button class="text-[10px] text-blue-400 hover:text-blue-300" onclick={() => { editingFeatId = feat.id; featBuf = { title: feat.title, body: feat.body, status: feat.status } }}>Edit</button>
+                    <button class="text-[10px] text-red-400 hover:text-red-300" onclick={() => removeFeature(feat.id)}>Del</button>
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {:else}
+            {#if filteredFeats.length === 0 && features.length === 0}
+              <p class="text-xs text-gray-500 py-2">No features yet. Use features to track what the project ships.</p>
+            {:else if filteredFeats.length === 0}
+              <p class="text-xs text-gray-500 py-2">No features match the current status filter.</p>
+            {/if}
+          {/each}
+        </div>
+
+        <div class="flex items-center gap-2">
+          <input
+            class="flex-1 bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-accent"
+            placeholder="New feature title…"
+            bind:value={newFeatTitle}
+            onkeydown={(e) => e.key === 'Enter' && addFeature()}
+          />
+          <button
+            class="px-3 py-1 bg-accent hover:bg-accent-hover text-white text-xs rounded transition-colors disabled:opacity-40"
+            disabled={!newFeatTitle.trim()}
+            onclick={addFeature}
+          >+ Add</button>
         </div>
       {/if}
     </div>

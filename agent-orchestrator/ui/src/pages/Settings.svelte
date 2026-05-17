@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { listSettings, updateSetting } from '../lib/api.js'
+  import { listSettings, updateSetting, listChecklistTemplates, createChecklistTemplate, updateChecklistTemplate, deleteChecklistTemplate } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
 
   const AGENT_EVENTS = [
@@ -37,10 +37,15 @@
     { key: 'task_requeued', label: 'Task Requeued', desc: 'Task requeued' },
   ]
 
-  let settings = $state({})
-  let overrides = $state({})
-  let loading = $state(true)
-  let saving = $state(false)
+  let settings   = $state({})
+  let overrides  = $state({})
+  let loading    = $state(true)
+  let saving     = $state(false)
+  let templates  = $state([])
+  let newTplName = $state('')
+  let newTplItems = $state('')  // newline-separated item labels
+  let editingTplId = $state('')
+  let tplBuf = $state({ name: '', items: '' })
 
   function settingVal(key) {
     return settings[key]?.value ?? ''
@@ -56,6 +61,41 @@
     const override = overrides['task_' + eventKey] ?? overrides[eventKey] ?? ''
     if (override !== '') return override + ' (override)'
     return (settingVal('log.retention.task.default_days') || '30') + ' (default)'
+  }
+
+  async function loadTemplates() {
+    try {
+      templates = (await listChecklistTemplates()) ?? []
+    } catch (_) { templates = [] }
+  }
+
+  async function createTemplate() {
+    if (!newTplName.trim()) return
+    const items = newTplItems.split('\n').map(s => s.trim()).filter(Boolean)
+    try {
+      await createChecklistTemplate({ name: newTplName.trim(), items_json: JSON.stringify(items) })
+      newTplName = ''; newTplItems = ''
+      await loadTemplates()
+      toasts.success('Template created')
+    } catch (e) { toasts.error('Create failed: ' + e.message) }
+  }
+
+  async function saveTemplate(id) {
+    const items = tplBuf.items.split('\n').map(s => s.trim()).filter(Boolean)
+    try {
+      await updateChecklistTemplate(id, { name: tplBuf.name, items_json: JSON.stringify(items) })
+      editingTplId = ''
+      await loadTemplates()
+      toasts.success('Template saved')
+    } catch (e) { toasts.error('Save failed: ' + e.message) }
+  }
+
+  async function removeTemplate(id) {
+    if (!confirm('Delete this template?')) return
+    try {
+      await deleteChecklistTemplate(id)
+      await loadTemplates()
+    } catch (e) { toasts.error('Delete failed: ' + e.message) }
   }
 
   async function load() {
@@ -78,6 +118,19 @@
       toasts.error('Failed to load settings: ' + e.message)
     } finally {
       loading = false
+    }
+  }
+
+  async function savePlatform(key, value) {
+    saving = true
+    try {
+      await updateSetting(key, String(value))
+      toasts.success('Saved')
+      await load()
+    } catch (e) {
+      toasts.error('Save failed: ' + e.message)
+    } finally {
+      saving = false
     }
   }
 
@@ -139,7 +192,7 @@
     }
   }
 
-  onMount(load)
+  onMount(() => { load(); loadTemplates() })
 </script>
 
 <div class="overflow-y-auto p-6 max-w-4xl mx-auto">
@@ -148,6 +201,54 @@
   {#if loading}
     <p class="text-gray-500 text-sm">Loading…</p>
   {:else}
+    <!-- Platform -->
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-gray-200 mb-1">Platform</h2>
+      <p class="text-xs text-gray-500 mb-4">Global behaviour settings that take effect immediately.</p>
+
+      <div class="flex flex-col gap-4">
+        <!-- Debug mode -->
+        <div class="flex items-center justify-between p-3 bg-surface-800 rounded border border-surface-600">
+          <div>
+            <div class="text-sm text-gray-200 font-medium">Debug mode</div>
+            <div class="text-xs text-gray-500 mt-0.5">Emit verbose agent events: heartbeat, poll_query, poll_no_task. Generates high log volume.</div>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer ml-4 shrink-0">
+            <input
+              type="checkbox"
+              class="sr-only peer"
+              checked={settings['platform.debug_mode']?.value === 'true'}
+              onchange={(e) => savePlatform('platform.debug_mode', e.currentTarget.checked)}
+              disabled={saving}
+            />
+            <div class="w-10 h-6 bg-surface-600 peer-focus:outline-none rounded-full peer peer-checked:bg-accent peer-disabled:opacity-40 transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-4"></div>
+          </label>
+        </div>
+
+        <!-- Chart autorefresh -->
+        <div class="flex items-center justify-between p-3 bg-surface-800 rounded border border-surface-600">
+          <div>
+            <div class="text-sm text-gray-200 font-medium">Chart / log auto-refresh</div>
+            <div class="text-xs text-gray-500 mt-0.5">How often the Tasks and Logs pages re-fetch data (milliseconds). Requires page reload.</div>
+          </div>
+          <div class="flex items-center gap-2 ml-4 shrink-0">
+            <input
+              type="number" min="1000" step="500"
+              class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 w-28 focus:outline-none focus:border-accent"
+              value={settings['platform.charts.autorefresh_ms']?.value ?? '5000'}
+              oninput={(e) => { const s = settings['platform.charts.autorefresh_ms']; if (s) s.value = e.currentTarget.value }}
+            />
+            <span class="text-xs text-gray-500">ms</span>
+            <button
+              class="px-3 py-1 bg-accent hover:bg-accent-hover text-white text-xs rounded transition-colors disabled:opacity-40"
+              disabled={saving}
+              onclick={() => savePlatform('platform.charts.autorefresh_ms', settings['platform.charts.autorefresh_ms']?.value ?? '5000')}
+            >Save</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Agent Log Retention -->
     <section class="mb-8">
       <h2 class="text-base font-semibold text-gray-200 mb-1">Agent Log Retention</h2>
@@ -268,6 +369,84 @@
         {#if settings['log.retention.system.default_days']?.updated_at}
           <span class="text-xs text-gray-600">Updated {new Date(settings['log.retention.system.default_days'].updated_at).toLocaleDateString()}</span>
         {/if}
+      </div>
+    </section>
+
+    <!-- ── Checklist Templates ──────────────────────────────────────────────── -->
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-gray-200 mb-1">Checklist Templates</h2>
+      <p class="text-xs text-gray-500 mb-4">Reusable item lists you can apply to any task's checklist.</p>
+
+      {#if templates.length > 0}
+        <div class="flex flex-col gap-2 mb-4">
+          {#each templates as tpl (tpl.id)}
+            <div class="p-3 bg-surface-800 rounded border border-surface-600">
+              {#if editingTplId === tpl.id}
+                <div class="flex flex-col gap-2">
+                  <input
+                    class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-accent"
+                    bind:value={tplBuf.name}
+                    placeholder="Template name"
+                  />
+                  <textarea
+                    class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-accent resize-none font-mono"
+                    rows="4"
+                    placeholder="One item per line…"
+                    bind:value={tplBuf.items}
+                  ></textarea>
+                  <div class="flex gap-2 justify-end">
+                    <button class="text-xs text-gray-400 hover:text-gray-200" onclick={() => editingTplId = ''}>Cancel</button>
+                    <button class="px-3 py-1 bg-accent hover:bg-accent-hover text-white text-xs rounded" onclick={() => saveTemplate(tpl.id)}>Save</button>
+                  </div>
+                </div>
+              {:else}
+                {@const items = (() => { try { return JSON.parse(tpl.items_json || '[]') } catch { return [] } })()}
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <p class="text-sm font-medium text-gray-200">{tpl.name}</p>
+                    <p class="text-xs text-gray-500 mt-0.5">{items.length} item{items.length !== 1 ? 's' : ''}{items.length > 0 ? ': ' + items.slice(0,3).join(', ') + (items.length > 3 ? '…' : '') : ''}</p>
+                  </div>
+                  <div class="flex gap-2 shrink-0">
+                    <button
+                      class="text-xs text-blue-400 hover:text-blue-300"
+                      onclick={() => {
+                        editingTplId = tpl.id
+                        const items = JSON.parse(tpl.items_json || '[]')
+                        tplBuf = { name: tpl.name, items: items.join('\n') }
+                      }}
+                    >Edit</button>
+                    <button class="text-xs text-red-400 hover:text-red-300" onclick={() => removeTemplate(tpl.id)}>Delete</button>
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="text-xs text-gray-500 mb-4">No templates yet.</p>
+      {/if}
+
+      <!-- Create new template -->
+      <div class="p-3 bg-surface-800 rounded border border-surface-600 flex flex-col gap-2">
+        <p class="text-xs font-medium text-gray-400">New Template</p>
+        <input
+          class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent"
+          placeholder="Template name"
+          bind:value={newTplName}
+        />
+        <textarea
+          class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent resize-none font-mono"
+          rows="4"
+          placeholder="One item per line…"
+          bind:value={newTplItems}
+        ></textarea>
+        <div class="flex justify-end">
+          <button
+            class="px-3 py-1 bg-accent hover:bg-accent-hover text-white text-xs rounded disabled:opacity-40"
+            disabled={!newTplName.trim()}
+            onclick={createTemplate}
+          >Create</button>
+        </div>
       </div>
     </section>
   {/if}

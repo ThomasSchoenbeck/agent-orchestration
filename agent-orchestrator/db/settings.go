@@ -79,6 +79,21 @@ func (d *Database) ListSettings(ctx context.Context) ([]*Setting, error) {
 	return settings, rows.Err()
 }
 
+// SeedDefaultPlatformSettings inserts the default platform settings
+// if they don't already exist. Called at server startup.
+func (d *Database) SeedDefaultPlatformSettings(ctx context.Context) error {
+	defaults := []struct{ key, value, description string }{
+		{"platform.debug_mode", "false", "Emit verbose debug events (agent_heartbeat, agent_poll_query, agent_poll_no_task)"},
+		{"platform.charts.autorefresh_ms", "5000", "Chart/log auto-refresh interval in milliseconds"},
+	}
+	for _, s := range defaults {
+		if err := d.SeedSetting(ctx, s.key, s.value, s.description); err != nil {
+			return fmt.Errorf("seed platform setting %q: %w", s.key, err)
+		}
+	}
+	return nil
+}
+
 // SeedDefaultRetentionSettings inserts the default log retention settings
 // if they don't already exist. Called at server startup.
 func (d *Database) SeedDefaultRetentionSettings(ctx context.Context) error {

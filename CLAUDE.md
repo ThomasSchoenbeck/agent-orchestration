@@ -65,6 +65,12 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - define task progress markers for ever task: Format: `[x]` = done · `[ ]` = pending · `[~]` = in progress
 - outline what to do in each task
 - list which files are required to be touched
+- unit test for every new feature or big change is a must
+- testcoverage for backend and frontend should be at least 80%
+
+## 6. Implementing Changes
+- mark the corresponding item from the task list regarding the current status
+- focus on the provided files per task and only explore the codebase when necessary
 
 
 <!-- code-review-graph MCP tools -->

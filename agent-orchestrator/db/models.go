@@ -40,12 +40,49 @@ type Task struct {
 
 // TaskFilters defines optional filters for ListTasks.
 type TaskFilters struct {
-	ProjectID string
-	Status    string
-	Role      string
-	AgentID   string
-	Limit     int
-	Offset    int
+	ProjectID     string
+	Status        string
+	Role          string
+	AgentID       string
+	RequirementID string // filter by linked requirement
+	FeatureID     string // filter by linked feature
+	Limit         int
+	Offset        int
+}
+
+// --- Project Requirements / Features ---
+
+// ProjectRequirement is one requirement entry on a project.
+type ProjectRequirement struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`      // markdown
+	Status    string    `json:"status"`    // proposed | accepted | implemented | obsolete
+	Position  int       `json:"position"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ProjectFeature is one feature entry on a project.
+type ProjectFeature struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`      // markdown
+	Status    string    `json:"status"`    // planned | in_progress | done | dropped
+	Position  int       `json:"position"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// TaskProjectLink links a task to a requirement or feature.
+type TaskProjectLink struct {
+	ID        string    `json:"id"`
+	TaskID    string    `json:"task_id"`
+	Kind      string    `json:"kind"`      // requirement | feature
+	TargetID  string    `json:"target_id"` // FK to requirement or feature
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // --- Agent ---
@@ -151,7 +188,20 @@ type Message struct {
 	Role           string    `json:"role"` // "user" or "assistant"
 	Content        string    `json:"content"`
 	TokensUsed     int       `json:"tokens_used,omitempty"`
+	InputTokens    int       `json:"input_tokens,omitempty"`
+	OutputTokens   int       `json:"output_tokens,omitempty"`
+	DurationMs     int       `json:"duration_ms,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+// --- Chat log ---
+
+// ChatLogEntry is a lightweight view of a message used by the Logs page.
+type ChatLogEntry struct {
+	Timestamp    time.Time `json:"timestamp"`
+	ProviderName string    `json:"provider_name"`
+	Direction    string    `json:"direction"` // user_to_llm | llm_to_user
+	Preview      string    `json:"preview"`   // first 20 chars of content
 }
 
 // --- Metrics ---

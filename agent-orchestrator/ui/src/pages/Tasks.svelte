@@ -1,7 +1,8 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { listTasks, listProjects, createTask, updateTask, deleteTask, getTaskTypes, getTaskRoles, listAllTaskLogs } from '../lib/api.js'
+  import { listTasks, listProjects, createTask, updateTask, deleteTask, getTaskTypes, getTaskRoles, listAllTaskLogs, listSettings, listRequirements, listFeatures, addTaskLink } from '../lib/api.js'
   import { toasts, router } from '../lib/stores.js'
+  import AssistantSidebar from '../components/AssistantSidebar.svelte'
 
   // ── Task list state ───────────────────────────────────────────────────────
   let tasks          = $state([])
@@ -10,9 +11,14 @@
   let taskRoles      = $state([])
   let loading        = $state(false)
   let showForm       = $state(false)
-  let filterStatus   = $state('')
-  let filterProject  = $state('')
-  let selectedTaskId = $state('')
+  let filterStatus        = $state('')
+  let filterProject       = $state('')
+  let filterRequirement   = $state('')
+  let filterFeature       = $state('')
+  let filterReqOptions    = $state([])
+  let filterFeatOptions   = $state([])
+  let selectedTaskId      = $state('')
+  let showSidebar         = $state(false)
 
   const statusColors = {
     pending:     'bg-gray-700 text-gray-300',
@@ -31,6 +37,10 @@
     description: '',
     priority:    5,
   })
+  let formAvailReqs   = $state([])
+  let formAvailFeats  = $state([])
+  let formLinkedReqs  = $state(new Set())
+  let formLinkedFeats = $state(new Set())
 
   // ── Log panel state ────────────────────────────────────────────────────────
   let taskLogs        = $state([])
@@ -38,7 +48,7 @@
   let logEventFilter  = $state('')
   let logSearch       = $state('')
   let hiddenTypes     = $state(new Set())
-  let chartTypeFilter = $state('')
+  let chartTypeFilter = $state(new Set())
   let bucketMinutes   = $state(60)
 
   const TASK_COLORS = {
@@ -50,19 +60,79 @@
     task_completed: '#22c55e',
     task_failed:    '#ef4444',
     task_retried:   '#f97316',
-    task_cancelled: '#6b7280',
-    task_timeout:   '#f43f5e',
-    task_result:    '#38bdf8',
-    task_error:     '#e879f9',
+    task_cancelled:           '#6b7280',
+    task_timeout:             '#f43f5e',
+    task_result:              '#38bdf8',
+    task_error:               '#e879f9',
+    task_dependency_warning:  '#fbbf24',
+    task_dependency_added:    '#a3e635',
+    task_dependency_removed:  '#fb923c',
+    task_checklist_changed:   '#67e8f9',
+    task_comment_added:       '#c084fc',
+    task_link_added:          '#86efac',
+    task_link_removed:        '#fca5a5',
   }
 
   // ── Data loading ──────────────────────────────────────────────────────────
+  async function loadFilterOptions(projectId) {
+    if (!projectId) {
+      filterReqOptions = []; filterFeatOptions = []
+      filterRequirement = ''; filterFeature = ''
+      return
+    }
+    try {
+      const [reqs, feats] = await Promise.all([
+        listRequirements(projectId),
+        listFeatures(projectId),
+      ])
+      filterReqOptions  = reqs ?? []
+      filterFeatOptions = feats ?? []
+    } catch (_) {
+      filterReqOptions = []; filterFeatOptions = []
+    }
+  }
+
+  async function loadFormProject(projectId) {
+    formLinkedReqs = new Set(); formLinkedFeats = new Set()
+    if (!projectId) { formAvailReqs = []; formAvailFeats = []; return }
+    try {
+      const [reqs, feats] = await Promise.all([
+        listRequirements(projectId),
+        listFeatures(projectId),
+      ])
+      formAvailReqs  = reqs ?? []
+      formAvailFeats = feats ?? []
+    } catch (_) {
+      formAvailReqs = []; formAvailFeats = []
+    }
+  }
+
+  function toggleFormReq(id) {
+    const next = new Set(formLinkedReqs)
+    next.has(id) ? next.delete(id) : next.add(id)
+    formLinkedReqs = next
+  }
+
+  function toggleFormFeat(id) {
+    const next = new Set(formLinkedFeats)
+    next.has(id) ? next.delete(id) : next.add(id)
+    formLinkedFeats = next
+  }
+
+  async function onProjectFilterChange() {
+    filterRequirement = ''; filterFeature = ''
+    await loadFilterOptions(filterProject)
+    loadTasks()
+  }
+
   async function loadTasks() {
     loading = true
     try {
       const params = {}
-      if (filterStatus)  params.status     = filterStatus
-      if (filterProject) params.project_id = filterProject
+      if (filterStatus)      params.status         = filterStatus
+      if (filterProject)     params.project_id     = filterProject
+      if (filterRequirement) params.requirement_id = filterRequirement
+      if (filterFeature)     params.feature_id     = filterFeature
       const [tr, pr, tt, tr2] = await Promise.all([
         listTasks(params), listProjects(), getTaskTypes(), getTaskRoles(),
       ])
@@ -106,6 +176,7 @@
 
   function selectTask(id) {
     selectedTaskId = selectedTaskId === id ? '' : id
+    if (!selectedTaskId) showSidebar = false
     fetchLogs()
   }
 
@@ -116,7 +187,10 @@
   }
 
   function clickChart(t) {
-    chartTypeFilter = chartTypeFilter === t ? '' : t
+    const next = new Set(chartTypeFilter)
+    if (next.has(t)) next.delete(t)
+    else next.add(t)
+    chartTypeFilter = next
   }
 
   if (typeof window !== 'undefined') {
@@ -125,7 +199,7 @@
 
   // ── Derived: filtered logs ─────────────────────────────────────────────────
   let visibleLogs = $derived(taskLogs.filter(l => {
-    if (chartTypeFilter && l.event_type !== chartTypeFilter) return false
+    if (chartTypeFilter.size > 0 && !chartTypeFilter.has(l.event_type)) return false
     return true
   }))
 
@@ -188,15 +262,23 @@
     if (!form.type || !form.role) return
     if (!form.project_id) { toasts.error('Please select a project'); return }
     try {
-      await createTask({
+      const created = await createTask({
         project_id: form.project_id,
         type:       form.type.trim(),
         role:       form.role.trim(),
         priority:   Number(form.priority),
         payload:    { title: form.title.trim(), description: form.description.trim() },
       })
+      const ops = []
+      for (const id of formLinkedReqs)  ops.push(addTaskLink(created.id, 'requirement', id))
+      for (const id of formLinkedFeats) ops.push(addTaskLink(created.id, 'feature', id))
+      if (ops.length) await Promise.all(ops)
       toasts.success('Task created')
-      form     = { project_id: '', type: '', role: '', title: '', description: '', priority: 5 }
+      form            = { project_id: '', type: '', role: '', title: '', description: '', priority: 5 }
+      formLinkedReqs  = new Set()
+      formLinkedFeats = new Set()
+      formAvailReqs   = []
+      formAvailFeats  = []
       showForm = false
       await refreshAll()
     } catch (e) {
@@ -218,7 +300,7 @@
     try {
       await deleteTask(id)
       toasts.success('Task deleted')
-      if (selectedTaskId === id) { selectedTaskId = ''; fetchLogs() }
+      if (selectedTaskId === id) { selectedTaskId = ''; showSidebar = false; fetchLogs() }
       await loadTasks()
     } catch (e) {
       toasts.error('Delete failed: ' + e.message)
@@ -227,14 +309,24 @@
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   let timer = null
-  onMount(() => {
+  onMount(async () => {
     refreshAll()
-    timer = setInterval(refreshAll, 5_000)
+    let intervalMs = 5_000
+    try {
+      const all = await listSettings()
+      const s = all.find(s => s.key === 'platform.charts.autorefresh_ms')
+      if (s) {
+        const parsed = parseInt(s.value, 10)
+        if (parsed > 0) intervalMs = parsed
+      }
+    } catch (_) { /* fall back to default */ }
+    timer = setInterval(refreshAll, intervalMs)
   })
   onDestroy(() => clearInterval(timer))
 </script>
 
-<div class="flex flex-col h-full overflow-hidden">
+<div class="flex h-full overflow-hidden">
+<div class="flex-1 flex flex-col overflow-hidden min-w-0">
 
   <!-- ── Task list (top, scrollable) ───────────────────────────────────────── -->
   <div class="shrink-0 max-h-80 overflow-y-auto border-b border-surface-600">
@@ -254,16 +346,40 @@
         <select
           class="bg-surface-700 border border-surface-600 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none"
           bind:value={filterProject}
-          onchange={loadTasks}
+          onchange={onProjectFilterChange}
         >
           <option value="">All projects</option>
           {#each projects as p}
             <option value={p.id}>{p.name}</option>
           {/each}
         </select>
+        {#if filterReqOptions.length > 0}
+          <select
+            class="bg-surface-700 border border-surface-600 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none"
+            bind:value={filterRequirement}
+            onchange={loadTasks}
+          >
+            <option value="">All requirements</option>
+            {#each filterReqOptions as r}<option value={r.id}>{r.title}</option>{/each}
+          </select>
+        {/if}
+        {#if filterFeatOptions.length > 0}
+          <select
+            class="bg-surface-700 border border-surface-600 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none"
+            bind:value={filterFeature}
+            onchange={loadTasks}
+          >
+            <option value="">All features</option>
+            {#each filterFeatOptions as f}<option value={f.id}>{f.title}</option>{/each}
+          </select>
+        {/if}
         {#if selectedTaskId}
           <span class="text-xs text-accent">Filtered to task</span>
-          <button class="text-xs text-gray-500 hover:text-gray-300" onclick={() => { selectedTaskId = ''; fetchLogs() }}>× Clear</button>
+          <button class="text-xs text-gray-500 hover:text-gray-300" onclick={() => { selectedTaskId = ''; showSidebar = false; fetchLogs() }}>× Clear</button>
+          <button
+            class="text-xs px-2 py-1 rounded transition-colors {showSidebar ? 'bg-accent text-white' : 'bg-surface-700 text-gray-400 hover:bg-surface-600'}"
+            onclick={() => showSidebar = !showSidebar}
+          >💬 Assistant</button>
         {/if}
         <button class="text-xs text-gray-500 hover:text-gray-300" onclick={refreshAll}>↻ Refresh</button>
         <button
@@ -281,7 +397,9 @@
         <div class="grid grid-cols-2 gap-2">
           <select
             class="bg-surface-700 border border-surface-500 rounded px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-accent"
-            bind:value={form.project_id} required
+            bind:value={form.project_id}
+            onchange={() => loadFormProject(form.project_id)}
+            required
           >
             <option value="">Select project *</option>
             {#each projects as p}<option value={p.id}>{p.name}</option>{/each}
@@ -314,6 +432,36 @@
           rows="2"
           bind:value={form.description}
         ></textarea>
+        {#if formAvailReqs.length > 0 || formAvailFeats.length > 0}
+          <div class="grid grid-cols-2 gap-2">
+            {#if formAvailReqs.length > 0}
+              <div>
+                <span class="text-xs text-gray-500 mb-1 block">Link Requirements</span>
+                <div class="bg-surface-700 border border-surface-500 rounded p-2 max-h-24 overflow-y-auto flex flex-col gap-0.5">
+                  {#each formAvailReqs as req (req.id)}
+                    <label class="flex items-center gap-1.5 text-xs cursor-pointer hover:text-gray-200 text-gray-300">
+                      <input type="checkbox" checked={formLinkedReqs.has(req.id)} onchange={() => toggleFormReq(req.id)} class="accent-accent" />
+                      {req.title}
+                    </label>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+            {#if formAvailFeats.length > 0}
+              <div>
+                <span class="text-xs text-gray-500 mb-1 block">Link Features</span>
+                <div class="bg-surface-700 border border-surface-500 rounded p-2 max-h-24 overflow-y-auto flex flex-col gap-0.5">
+                  {#each formAvailFeats as feat (feat.id)}
+                    <label class="flex items-center gap-1.5 text-xs cursor-pointer hover:text-gray-200 text-gray-300">
+                      <input type="checkbox" checked={formLinkedFeats.has(feat.id)} onchange={() => toggleFormFeat(feat.id)} class="accent-accent" />
+                      {feat.title}
+                    </label>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
         <div class="flex items-center gap-2">
           <label for="task-priority" class="text-xs text-gray-400 shrink-0">Priority</label>
           <input id="task-priority" type="range" min="1" max="10" bind:value={form.priority} class="flex-1" />
@@ -338,7 +486,10 @@
             <div class="flex items-start justify-between gap-2">
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <span class="text-xs font-medium text-gray-100 truncate">{taskTitle(t)}</span>
+                  <button
+                    class="text-xs font-medium text-gray-100 truncate hover:text-accent text-left"
+                    onclick={(e) => { e.stopPropagation(); router.push('tasks', t.id) }}
+                  >{taskTitle(t)}</button>
                   <span class="text-[10px] px-1.5 py-0.5 rounded-full {statusColors[t.status] || 'bg-gray-700 text-gray-300'}">{t.status}</span>
                   <span class="text-[10px] text-gray-500 font-mono">{t.type}</span>
                   <span class="text-[10px] text-gray-600">{t.role}</span>
@@ -432,12 +583,12 @@
       bind:value={logSearch}
       oninput={fetchLogs}
     />
-    {#if chartTypeFilter}
+    {#each chartTypeFilter as filterType (filterType)}
       <span class="flex items-center gap-1 px-2 py-0.5 bg-accent/20 text-accent text-xs rounded">
-        {chartTypeFilter}
-        <button onclick={() => chartTypeFilter = ''} class="hover:text-white">×</button>
+        {filterType}
+        <button onclick={() => { const next = new Set(chartTypeFilter); next.delete(filterType); chartTypeFilter = next }} class="hover:text-white">×</button>
       </span>
-    {/if}
+    {/each}
   </div>
 
   <!-- ── Log list ────────────────────────────────────────────────────────────── -->
@@ -482,5 +633,11 @@
       </table>
     {/if}
   </div>
+
+</div>
+
+{#if showSidebar && selectedTaskId}
+  <AssistantSidebar scope={{ kind: 'task', id: selectedTaskId }} />
+{/if}
 
 </div>

@@ -20,6 +20,7 @@ type Config struct {
 	Pricing      map[string]ModelPricing   `yaml:"pricing"`      // model → pricing (Phase 4)
 	Server       ServerConfig              `yaml:"server"`
 	Database     DatabaseConfig            `yaml:"database"`
+	LogsDB       LogsDBConfig              `yaml:"logs_db"`
 	Agents        AgentConfig               `yaml:"agents"`
 	LogRetention  LogRetentionConfig         `yaml:"log_retention"`
 }
@@ -59,6 +60,14 @@ type ServerConfig struct {
 type DatabaseConfig struct {
 	Type string `yaml:"type"` // sqlite
 	Path string `yaml:"path"`
+}
+
+// LogsDBConfig optionally points log tables (agent_logs, task_logs, system logs)
+// at a separate SQLite file. When Path is empty the server falls back to the
+// default location (logs.db next to the main database).
+type LogsDBConfig struct {
+	Type string `yaml:"type"` // sqlite (only supported value)
+	Path string `yaml:"path"` // empty → use default path
 }
 
 // AgentConfig holds agent timing defaults.

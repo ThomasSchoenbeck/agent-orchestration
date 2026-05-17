@@ -91,8 +91,12 @@ func runServer(args []string) error {
 	}
 	defer func() { _ = database.Close() }()
 
-	// Open the separate log database (data/logs.db).
-	logDBPath := filepath.Join(filepath.Dir(cfg.Database.Path), "logs.db")
+	// Open the separate log database. Use the configured path when set;
+	// otherwise fall back to logs.db next to the main database.
+	logDBPath := cfg.LogsDB.Path
+	if logDBPath == "" {
+		logDBPath = filepath.Join(filepath.Dir(cfg.Database.Path), "logs.db")
+	}
 	logDB, err := db.OpenLogDB(logDBPath)
 	if err != nil {
 		return fmt.Errorf("open log database: %w", err)
@@ -182,6 +186,11 @@ func runServer(args []string) error {
 		}
 	}
 
+	// Seed default platform settings (debug_mode, autorefresh_ms).
+	if err := database.SeedDefaultPlatformSettings(startCtx); err != nil {
+		log.Printf("warning: seed platform settings: %v", err)
+	}
+
 	// Seed default log retention settings (only if keys don't already exist).
 	if err := database.SeedDefaultRetentionSettings(startCtx); err != nil {
 		log.Printf("warning: seed retention settings: %v", err)
@@ -260,6 +269,7 @@ func runAgent(args []string) error {
 				_ = tools.RegisterTaskTools(toolReg, database)
 				_ = tools.RegisterPlanTools(toolReg, database)
 				_ = tools.RegisterContextTools(toolReg, database)
+				_ = tools.RegisterCommentTools(toolReg, database)
 				a.WithExecutor(rtr, toolReg)
 				log.Printf("agent: executor wired (LLM providers: %d)", len(llmReg.List()))
 			}

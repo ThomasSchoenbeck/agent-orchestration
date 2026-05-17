@@ -118,6 +118,25 @@ tasks:
     cmds:
       - pnpm test:integration
 
+  test:e2e:
+    desc: |
+      Run Playwright end-to-end tests (headless) against a live server.
+      The server must already be running on {{.SERVER_URL}}.
+      Override: task test:e2e BASE_URL=http://localhost:9090
+    dir: '{{.UI_DIR}}'
+    env:
+      BASE_URL: '{{.SERVER_URL}}'
+    cmds:
+      - pnpm e2e
+
+  test:e2e:headed:
+    desc: Run Playwright e2e tests in headed (visible browser) mode.
+    dir: '{{.UI_DIR}}'
+    env:
+      BASE_URL: '{{.SERVER_URL}}'
+    cmds:
+      - pnpm e2e:headed
+
   # ============================================================
   # LINT
   # ============================================================
@@ -161,6 +180,9 @@ tasks:
       - task: build:ui
       - task: test:ui
       - task: build:server
+      # test:e2e is intentionally last — it requires a live server.
+      # Uncomment the line below when the server binary is available in CI:
+      # - task: test:e2e
 
   # ============================================================
   # RUN / DEVELOPMENT
@@ -193,34 +215,37 @@ tasks:
 
   agents:
     desc: |
-      Start one agent process (foreground). Open extra terminals and repeat
-      for multi-agent setups, or use: docker compose up
+      Start N agent processes (foreground). Ctrl+C stops all agents.
 
       Variables:
+        AGENTS=<n>            Number of agents to start     (default: 1)
         ROLES=<r1,r2>         Comma-separated roles         (default: worker)
         SERVER_URL=<url>      Orchestrator URL              (default: http://localhost:8080)
         AGENT_CONFIG=<path>   Config YAML for full LLM mode (default: empty = polling only)
 
       Examples:
         task agents
+        task agents AGENTS=3
         task agents ROLES=worker,reviewer
-        task agents ROLES=worker AGENT_CONFIG=config.yaml
+        task agents AGENTS=2 ROLES=worker AGENT_CONFIG=config.yaml
     cmds:
-      - task: _proc:agent
+      - task: _procs:agents
 
   start:
     desc: |
-      Build everything then start the full stack: server + 1 agent.
-      Ctrl+C stops both. For multi-agent setups use: docker compose up
+      Build everything then start the full stack: server + N agents.
+      Ctrl+C stops all. For persistent multi-agent setups use: docker compose up
 
       Variables:
-        ROLES=<roles>         Agent roles          (default: worker)
-        CONFIG=<path>         Server config        (default: config.yaml)
-        AGENT_CONFIG=<path>   Agent config / LLM   (default: empty)
-        SERVER_URL=<url>      Override server URL  (default: http://localhost:8080)
+        AGENTS=<n>            Number of agents to start (default: 1)
+        ROLES=<roles>         Agent roles               (default: worker)
+        CONFIG=<path>         Server config             (default: config.yaml)
+        AGENT_CONFIG=<path>   Agent config / LLM        (default: empty)
+        SERVER_URL=<url>      Override server URL        (default: http://localhost:8080)
 
       Examples:
         task start
+        task start AGENTS=3
         task start ROLES=worker,reviewer AGENT_CONFIG=config.yaml
     cmds:
       - task: build
@@ -242,7 +267,7 @@ tasks:
     internal: true
     deps:
       - task: _proc:server
-      - task: _proc:agent
+      - task: _procs:agents
 
   _proc:server:
     internal: true
@@ -254,6 +279,21 @@ tasks:
     dir: '{{.UI_DIR}}'
     cmds:
       - pnpm dev
+
+  _procs:agents:
+    internal: true
+    cmds:
+      - |
+        pids=""
+        for i in $(seq 1 {{.AGENTS}}); do
+          ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} agent \
+            --name "agent-$i" \
+            --roles "{{.ROLES}}" \
+            --server "{{.SERVER_URL}}"{{if .AGENT_CONFIG}} --config {{.AGENT_CONFIG}}{{end}} &
+          pids="$pids $!"
+        done
+        trap "kill $pids 2>/dev/null" INT TERM EXIT
+        wait
 
   _proc:agent:
     internal: true

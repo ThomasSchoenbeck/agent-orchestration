@@ -54,6 +54,7 @@ func (s *Server) registerHandlers() {
 	// Conversations
 	s.mux.HandleFunc("/api/conversations", s.handleConversations)
 	s.mux.HandleFunc("/api/conversations/", s.handleConversationDetail)
+	s.mux.HandleFunc("/api/chat-log", s.handleChatLog)
 
 	// Meta (enumerations)
 	s.mux.HandleFunc("/api/meta/task-types", s.handleMetaTaskTypes)
@@ -66,6 +67,10 @@ func (s *Server) registerHandlers() {
 
 	// WebSocket chat
 	s.mux.HandleFunc("/ws/chat", s.handleWSChat)
+
+	// Checklist templates
+	s.mux.HandleFunc("/api/checklist-templates", s.handleChecklistTemplates)
+	s.mux.HandleFunc("/api/checklist-templates/", s.handleChecklistTemplateDetail)
 
 	// Settings
 	s.mux.HandleFunc("/api/settings", s.handleSettings)
@@ -149,6 +154,26 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if sub == "requirements" {
+		rid := pathSegment(r.URL.Path, "/api/projects/", 2)
+		if rid == "" {
+			s.handleProjectRequirements(w, r, id)
+		} else {
+			s.handleProjectRequirementDetail(w, r, id, rid)
+		}
+		return
+	}
+
+	if sub == "features" {
+		fid := pathSegment(r.URL.Path, "/api/projects/", 2)
+		if fid == "" {
+			s.handleProjectFeatures(w, r, id)
+		} else {
+			s.handleProjectFeatureDetail(w, r, id, fid)
+		}
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		p, err := s.db.GetProject(r.Context(), id)
@@ -212,10 +237,12 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		f := db.TaskFilters{
-			ProjectID: r.URL.Query().Get("project_id"),
-			Status:    r.URL.Query().Get("status"),
-			Role:      r.URL.Query().Get("role"),
-			AgentID:   r.URL.Query().Get("agent_id"),
+			ProjectID:     r.URL.Query().Get("project_id"),
+			Status:        r.URL.Query().Get("status"),
+			Role:          r.URL.Query().Get("role"),
+			AgentID:       r.URL.Query().Get("agent_id"),
+			RequirementID: r.URL.Query().Get("requirement_id"),
+			FeatureID:     r.URL.Query().Get("feature_id"),
 		}
 		tasks, err := s.db.ListTasks(r.Context(), f)
 		if err != nil {
@@ -356,6 +383,32 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			logs = []*db.TaskLog{}
 		}
 		api.WriteJSON(w, http.StatusOK, logs)
+
+	case "links":
+		s.handleTaskLinks(w, r, id)
+
+	case "dependencies":
+		s.handleTaskDependencies(w, r, id)
+
+	case "checklist":
+		sub2 := ""
+		if len(parts) > 2 {
+			sub2 = parts[2]
+		}
+		switch sub2 {
+		case "":
+			s.handleTaskChecklist(w, r, id)
+		case "iterations":
+			s.handleTaskChecklistIterations(w, r, id)
+		default:
+			s.handleTaskChecklistItem(w, r, id, sub2)
+		}
+
+	case "comments":
+		s.handleTaskComments(w, r, id, parts)
+
+	case "chat":
+		s.handleTaskChat(w, r, id)
 
 	default:
 		switch r.Method {
@@ -507,6 +560,12 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, err)
 			return
 		}
+		if s.isDebugMode(r.Context()) {
+			_ = s.db.CreateAgentLog(r.Context(), &db.AgentLog{
+				AgentID:   agentID,
+				EventType: db.EventAgentHeartbeat,
+			})
+		}
 		api.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
@@ -545,6 +604,16 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 			taskFoundID = task.ID
 		}
 		s.recordPoll(agentID, roles, taskFoundID)
+		if s.isDebugMode(r.Context()) {
+			eventType := db.EventAgentPollQuery
+			if task == nil {
+				eventType = db.EventAgentPollNoTask
+			}
+			_ = s.db.CreateAgentLog(r.Context(), &db.AgentLog{
+				AgentID:   agentID,
+				EventType: eventType,
+			})
+		}
 		if task == nil {
 			api.WriteJSON(w, http.StatusOK, nil)
 			return

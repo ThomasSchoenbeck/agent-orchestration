@@ -1,6 +1,8 @@
 // Package llm defines the LLM provider abstraction and common types.
 package llm
 
+import "context"
+
 // Message represents a single message in a conversation.
 type Message struct {
 	Role    string `json:"role"` // system | user | assistant | tool
@@ -22,10 +24,24 @@ type ChatRequest struct {
 
 // ChatResponse represents a completion response.
 type ChatResponse struct {
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	StopReason string     `json:"stop_reason"` // end_turn | tool_use | max_tokens | error
-	TokensUsed int        `json:"tokens_used"`
+	Content      string     `json:"content"`
+	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
+	StopReason   string     `json:"stop_reason"` // end_turn | tool_use | max_tokens | error
+	TokensUsed   int        `json:"tokens_used"`
+	InputTokens  int        `json:"input_tokens"`
+	OutputTokens int        `json:"output_tokens"`
+	DurationMs   int        `json:"duration_ms"`
+}
+
+// ChunkHandler is called by streaming providers for each token chunk.
+type ChunkHandler func(chunk string)
+
+// Streamer is an optional interface implemented by providers that support token streaming.
+// Providers that don't implement it fall back to whole-message Chat.
+type Streamer interface {
+	// ChatStream calls onChunk for each token as it arrives and returns the
+	// full response (with usage stats) when generation is complete.
+	ChatStream(ctx context.Context, req ChatRequest, onChunk ChunkHandler) (ChatResponse, error)
 }
 
 // EmbedRequest represents an embedding request.

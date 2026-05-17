@@ -35,6 +35,7 @@ export const createProject  = (data)   => post('/api/projects', data)
 export const updateProject  = (id, d)  => put(`/api/projects/${id}`, d)
 export const deleteProject  = (id)     => del(`/api/projects/${id}`)
 export const projectChat = (projectId, data) => post(`/api/projects/${projectId}/chat`, data)
+export const taskChat    = (taskId, data)    => post(`/api/tasks/${taskId}/chat`, data)
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
 export const listTasks        = (params = {}) => {
@@ -107,6 +108,12 @@ export const addMessage = (conversationId, data) =>
 // ── LLM Chat (one-shot, non-WS) ──────────────────────────────────────────────
 export const llmChat = (data) => post('/api/llm/chat', data)
 
+// ── Chat log ──────────────────────────────────────────────────────────────────
+export const listChatLog = (params = {}) => {
+  const qs = new URLSearchParams(params).toString()
+  return get(`/api/chat-log${qs ? '?' + qs : ''}`)
+}
+
 // ── Agent logs ────────────────────────────────────────────────────────────────
 export const listAgentLogs = (params = {}) => {
   const qs = new URLSearchParams(params).toString()
@@ -118,6 +125,45 @@ export const listAllTaskLogs = (params = {}) => {
   const qs = new URLSearchParams(params).toString()
   return get(`/api/task-logs${qs ? '?' + qs : ''}`)
 }
+
+// ── Requirements ─────────────────────────────────────────────────────────────
+export const listRequirements  = (projectId)       => get(`/api/projects/${projectId}/requirements`)
+export const createRequirement = (projectId, data) => post(`/api/projects/${projectId}/requirements`, data)
+export const updateRequirement = (projectId, id, data) => request('PATCH', `/api/projects/${projectId}/requirements/${id}`, data)
+export const deleteRequirement = (projectId, id)   => del(`/api/projects/${projectId}/requirements/${id}`)
+
+// ── Features ──────────────────────────────────────────────────────────────────
+export const listFeatures  = (projectId)       => get(`/api/projects/${projectId}/features`)
+export const createFeature = (projectId, data) => post(`/api/projects/${projectId}/features`, data)
+export const updateFeature = (projectId, id, data) => request('PATCH', `/api/projects/${projectId}/features/${id}`, data)
+export const deleteFeature = (projectId, id)   => del(`/api/projects/${projectId}/features/${id}`)
+
+// ── Comments ──────────────────────────────────────────────────────────────────
+export const listComments   = (taskId, reviewId = '') =>
+  get(`/api/tasks/${taskId}/comments${reviewId ? '?review_id=' + reviewId : ''}`)
+export const createComment  = (taskId, data)         => post(`/api/tasks/${taskId}/comments`, data)
+export const deleteComment  = (taskId, commentId)    => del(`/api/tasks/${taskId}/comments/${commentId}`)
+
+// ── Checklist ─────────────────────────────────────────────────────────────────
+export const listChecklistItems     = (taskId)         => get(`/api/tasks/${taskId}/checklist`)
+export const createChecklistItem    = (taskId, data)   => post(`/api/tasks/${taskId}/checklist`, data)
+export const updateChecklistItem    = (taskId, id, d)  => request('PATCH', `/api/tasks/${taskId}/checklist/${id}`, d)
+export const deleteChecklistItem    = (taskId, id)     => del(`/api/tasks/${taskId}/checklist/${id}`)
+export const cloneChecklistIteration = (taskId)        => post(`/api/tasks/${taskId}/checklist/iterations`)
+export const listChecklistTemplates  = ()              => get('/api/checklist-templates')
+export const createChecklistTemplate = (data)          => post('/api/checklist-templates', data)
+export const updateChecklistTemplate = (id, d)         => put(`/api/checklist-templates/${id}`, d)
+export const deleteChecklistTemplate = (id)            => del(`/api/checklist-templates/${id}`)
+
+// ── Task dependencies ─────────────────────────────────────────────────────────
+export const listTaskDependencies  = (taskId)              => get(`/api/tasks/${taskId}/dependencies`)
+export const addTaskDependency     = (taskId, dependsOnId) => post(`/api/tasks/${taskId}/dependencies`, { depends_on_id: dependsOnId })
+export const removeTaskDependency  = (taskId, dependsOnId) => request('DELETE', `/api/tasks/${taskId}/dependencies`, { depends_on_id: dependsOnId })
+
+// ── Task links ────────────────────────────────────────────────────────────────
+export const listTaskLinks  = (taskId)              => get(`/api/tasks/${taskId}/links`)
+export const addTaskLink    = (taskId, kind, targetId) => post(`/api/tasks/${taskId}/links`, { kind, target_id: targetId })
+export const removeTaskLink = (taskId, kind, targetId) => request('DELETE', `/api/tasks/${taskId}/links`, { kind, target_id: targetId })
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 export async function listSettings() {

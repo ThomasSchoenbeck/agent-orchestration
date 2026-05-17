@@ -147,6 +147,32 @@ func TestProviderByName(t *testing.T) {
 	}
 }
 
+func TestLoad_LogsDB_Explicit(t *testing.T) {
+	yaml := minimalValidYAML + `
+logs_db:
+  path: ./data/logs.db
+`
+	path := writeTemp(t, yaml)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LogsDB.Path != "./data/logs.db" {
+		t.Errorf("expected logs_db.path './data/logs.db', got %q", cfg.LogsDB.Path)
+	}
+}
+
+func TestLoad_LogsDB_DefaultsEmpty(t *testing.T) {
+	path := writeTemp(t, minimalValidYAML)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LogsDB.Path != "" {
+		t.Errorf("expected empty logs_db.path by default, got %q", cfg.LogsDB.Path)
+	}
+}
+
 func TestProviderForRole(t *testing.T) {
 	path := writeTemp(t, minimalValidYAML)
 	cfg, err := config.Load(path)

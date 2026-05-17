@@ -44,11 +44,20 @@ func (c *wsConn) Close() error { return c.conn.Close() }
 
 // WSMessage is the JSON envelope exchanged over /ws/chat.
 type WSMessage struct {
-	Type       string      `json:"type"`                // "chat" | "ping" | "pong" | "error"
-	Role       string      `json:"role"`                // LLM role: "worker" | "orchestrator" | ...
-	Content    string      `json:"content"`             // user message or assistant reply
-	ProviderID string      `json:"provider_id,omitempty"`
+	Type       string    `json:"type"`                // "chat" | "chat_chunk" | "chat_done" | "ping" | "pong" | "error"
+	Role       string    `json:"role,omitempty"`      // LLM role: "worker" | "orchestrator" | ...
+	Content    string    `json:"content,omitempty"`   // user message, assistant reply, or streaming chunk
+	ProviderID string    `json:"provider_id,omitempty"`
+	Usage      *WSUsage  `json:"usage,omitempty"`
 	Data       interface{} `json:"data,omitempty"`
+}
+
+// WSUsage carries token and timing stats on assistant replies.
+type WSUsage struct {
+	TokensUsed   int `json:"tokens_used"`
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	DurationMs   int `json:"duration_ms"`
 }
 
 // handleWSChat handles GET /ws/chat — upgrades to WebSocket, then runs a
@@ -107,15 +116,57 @@ func (s *Server) handleWSChat(w http.ResponseWriter, r *http.Request) {
 
 			// Route to LLM in a goroutine so the read loop continues.
 			go func(history []llm.Message, role, providerID string) {
-				reply, err := s.chatWithLLM(r.Context(), role, providerID, history)
+				prov, model, err := s.resolveProvider(r.Context(), role, providerID)
 				if err != nil {
 					_ = wsSendJSON(wsc, WSMessage{Type: "error", Content: err.Error()})
 					return
 				}
-				mu.Lock()
-				messages = append(messages, llm.Message{Role: "assistant", Content: reply})
-				mu.Unlock()
-				_ = wsSendJSON(wsc, WSMessage{Type: "chat", Role: "assistant", Content: reply})
+
+				req := llm.ChatRequest{Model: model, Messages: history, MaxTokens: 4096}
+
+				if streamer, ok := prov.(llm.Streamer); ok {
+					// Streaming path: send chat_chunk frames then chat_done.
+					resp, err := streamer.ChatStream(r.Context(), req, func(chunk string) {
+						_ = wsSendJSON(wsc, WSMessage{Type: "chat_chunk", Content: chunk})
+					})
+					if err != nil {
+						_ = wsSendJSON(wsc, WSMessage{Type: "error", Content: err.Error()})
+						return
+					}
+					mu.Lock()
+					messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content})
+					mu.Unlock()
+					_ = wsSendJSON(wsc, WSMessage{
+						Type: "chat_done",
+						Usage: &WSUsage{
+							TokensUsed:   resp.TokensUsed,
+							InputTokens:  resp.InputTokens,
+							OutputTokens: resp.OutputTokens,
+							DurationMs:   resp.DurationMs,
+						},
+					})
+				} else {
+					// Non-streaming path: single whole-message reply.
+					resp, err := prov.Chat(r.Context(), req)
+					if err != nil {
+						_ = wsSendJSON(wsc, WSMessage{Type: "error", Content: err.Error()})
+						return
+					}
+					mu.Lock()
+					messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content})
+					mu.Unlock()
+					_ = wsSendJSON(wsc, WSMessage{
+						Type:    "chat",
+						Role:    "assistant",
+						Content: resp.Content,
+						Usage: &WSUsage{
+							TokensUsed:   resp.TokensUsed,
+							InputTokens:  resp.InputTokens,
+							OutputTokens: resp.OutputTokens,
+							DurationMs:   resp.DurationMs,
+						},
+					})
+				}
 			}(snap, env.Role, env.ProviderID)
 
 		default:
@@ -124,58 +175,39 @@ func (s *Server) handleWSChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// chatWithLLM resolves the role to a provider and runs a single chat turn.
-func (s *Server) chatWithLLM(ctx context.Context, role, providerID string, messages []llm.Message) (string, error) {
+// resolveProvider finds the LLM provider and model string for a given role/providerID.
+func (s *Server) resolveProvider(ctx context.Context, role, providerID string) (llm.LLMProvider, string, error) {
 	if s.router == nil {
-		return "", fmt.Errorf("router not configured")
+		return nil, "", fmt.Errorf("router not configured")
 	}
 
-	// If a specific provider ID was requested, look it up directly.
 	if providerID != "" {
 		p, err := s.db.GetProvider(ctx, providerID)
 		if err == nil {
 			prov, err := s.llmReg.Get(p.Name)
 			if err == nil {
-				resp, err := prov.Chat(ctx, llm.ChatRequest{
-					Model:     p.ModelName,
-					Messages:  messages,
-					MaxTokens: 4096,
-				})
-				if err != nil {
-					return "", fmt.Errorf("llm error: %w", err)
-				}
-				return resp.Content, nil
+				return prov, p.ModelName, nil
 			}
 		}
-		// Fall through to role-based routing if provider lookup fails.
+		// Fall through to role-based routing if lookup fails.
 	}
 
 	targetRole := role
 	if targetRole == "" {
-		targetRole = "orchestrator" // sensible default for chat
+		targetRole = "orchestrator"
 	}
 
 	result, err := s.router.RouteByRole(targetRole)
 	if err != nil {
-		// Try orchestrator as fallback.
 		result, err = s.router.RouteByRole("orchestrator")
 		if err != nil {
-			return "", fmt.Errorf("no provider for role %q: %w", targetRole, err)
+			return nil, "", fmt.Errorf("no provider for role %q: %w", targetRole, err)
 		}
 	}
 	if result.Provider == nil {
-		return "", fmt.Errorf("provider for role %q is nil", targetRole)
+		return nil, "", fmt.Errorf("provider for role %q is nil", targetRole)
 	}
-
-	resp, err := result.Provider.Chat(ctx, llm.ChatRequest{
-		Model:     result.Model,
-		Messages:  messages,
-		MaxTokens: 4096,
-	})
-	if err != nil {
-		return "", fmt.Errorf("llm error: %w", err)
-	}
-	return resp.Content, nil
+	return result.Provider, result.Model, nil
 }
 
 // ---------------------------------------------------------------------------

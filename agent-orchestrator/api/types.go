@@ -59,6 +59,92 @@ type RegisterAgentResponse struct {
 	AgentID string `json:"agent_id"`
 }
 
+// --- Requirements / Features / Task Links ---
+
+type CreateRequirementRequest struct {
+	Title    string `json:"title"`
+	Body     string `json:"body"`
+	Status   string `json:"status"`
+	Position int    `json:"position"`
+}
+
+type UpdateRequirementRequest struct {
+	Title    *string `json:"title,omitempty"`
+	Body     *string `json:"body,omitempty"`
+	Status   *string `json:"status,omitempty"`
+	Position *int    `json:"position,omitempty"`
+}
+
+type CreateFeatureRequest struct {
+	Title    string `json:"title"`
+	Body     string `json:"body"`
+	Status   string `json:"status"`
+	Position int    `json:"position"`
+}
+
+type UpdateFeatureRequest struct {
+	Title    *string `json:"title,omitempty"`
+	Body     *string `json:"body,omitempty"`
+	Status   *string `json:"status,omitempty"`
+	Position *int    `json:"position,omitempty"`
+}
+
+// --- Comments ---
+
+type CreateCommentRequest struct {
+	Body       string `json:"body"`
+	ReviewID   string `json:"review_id,omitempty"`
+	AuthorType string `json:"author_type,omitempty"` // defaults to "user"
+	AuthorRole string `json:"author_role,omitempty"`
+	AuthorID   string `json:"author_id,omitempty"`
+}
+
+// --- Checklist ---
+
+type CreateChecklistItemRequest struct {
+	GroupLabel string `json:"group_label"`
+	Position   int    `json:"position"`
+	Label      string `json:"label"`
+	Status     string `json:"status"`
+}
+
+type UpdateChecklistItemRequest struct {
+	GroupLabel *string `json:"group_label,omitempty"`
+	Position   *int    `json:"position,omitempty"`
+	Label      *string `json:"label,omitempty"`
+	Status     *string `json:"status,omitempty"`
+}
+
+type CreateChecklistTemplateRequest struct {
+	Name      string `json:"name"`
+	ItemsJSON string `json:"items_json"`
+}
+
+type UpdateChecklistTemplateRequest struct {
+	Name      *string `json:"name,omitempty"`
+	ItemsJSON *string `json:"items_json,omitempty"`
+}
+
+// --- Task dependencies ---
+
+type AddDependencyRequest struct {
+	DependsOnID string `json:"depends_on_id"`
+}
+
+type RemoveDependencyRequest struct {
+	DependsOnID string `json:"depends_on_id"`
+}
+
+type AddTaskLinkRequest struct {
+	Kind     string `json:"kind"`      // requirement | feature
+	TargetID string `json:"target_id"`
+}
+
+type RemoveTaskLinkRequest struct {
+	Kind     string `json:"kind"`
+	TargetID string `json:"target_id"`
+}
+
 // --- Generic paginated list response ---
 
 type ListResponse struct {

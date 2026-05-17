@@ -229,8 +229,10 @@ func parseAnthropicResponse(data []byte) (ChatResponse, error) {
 	}
 
 	resp := ChatResponse{
-		StopReason: mapAnthropicStopReason(raw.StopReason),
-		TokensUsed: raw.Usage.InputTokens + raw.Usage.OutputTokens,
+		StopReason:   mapAnthropicStopReason(raw.StopReason),
+		TokensUsed:   raw.Usage.InputTokens + raw.Usage.OutputTokens,
+		InputTokens:  raw.Usage.InputTokens,
+		OutputTokens: raw.Usage.OutputTokens,
 	}
 
 	for _, block := range raw.Content {

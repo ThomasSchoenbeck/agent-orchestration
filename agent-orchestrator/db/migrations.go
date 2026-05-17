@@ -164,6 +164,91 @@ CREATE TABLE IF NOT EXISTS messages (
     FOREIGN KEY (conversation_id) REFERENCES conversations(id)
 );
 
+-- Project requirements
+CREATE TABLE IF NOT EXISTS project_requirements (
+    id         TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    body       TEXT NOT NULL DEFAULT '',
+    status     TEXT NOT NULL DEFAULT 'proposed',
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
+-- Project features
+CREATE TABLE IF NOT EXISTS project_features (
+    id         TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    body       TEXT NOT NULL DEFAULT '',
+    status     TEXT NOT NULL DEFAULT 'planned',
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
+-- Task comments
+CREATE TABLE IF NOT EXISTS task_comments (
+    id          TEXT PRIMARY KEY,
+    task_id     TEXT NOT NULL,
+    review_id   TEXT,
+    author_type TEXT NOT NULL DEFAULT 'user',
+    author_role TEXT NOT NULL DEFAULT '',
+    author_id   TEXT NOT NULL DEFAULT '',
+    body        TEXT NOT NULL DEFAULT '',
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id, created_at ASC);
+
+-- Task checklist items (grouped by iteration label)
+CREATE TABLE IF NOT EXISTS task_checklist_items (
+    id          TEXT PRIMARY KEY,
+    task_id     TEXT NOT NULL,
+    group_label TEXT NOT NULL DEFAULT '',
+    position    INTEGER NOT NULL DEFAULT 0,
+    label       TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'pending',
+    updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+CREATE INDEX IF NOT EXISTS idx_checklist_task ON task_checklist_items(task_id, group_label, position);
+
+-- Checklist templates (reusable item sets)
+CREATE TABLE IF NOT EXISTS checklist_templates (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    items_json TEXT NOT NULL DEFAULT '[]',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Task dependencies (soft warning only — no scheduler blocking)
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    task_id        TEXT NOT NULL,
+    depends_on_id  TEXT NOT NULL,
+    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (task_id, depends_on_id),
+    FOREIGN KEY (task_id)       REFERENCES tasks(id),
+    FOREIGN KEY (depends_on_id) REFERENCES tasks(id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_deps_task ON task_dependencies(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_deps_dep  ON task_dependencies(depends_on_id);
+
+-- Task <-> requirement/feature links
+CREATE TABLE IF NOT EXISTS task_project_links (
+    id         TEXT PRIMARY KEY,
+    task_id    TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    target_id  TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (task_id, kind, target_id),
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_agent_status   ON tasks(assigned_agent_id, status);
@@ -187,6 +272,10 @@ CREATE TABLE IF NOT EXISTS platform_settings (
     updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_platform_settings_key ON platform_settings(key);
+CREATE INDEX IF NOT EXISTS idx_requirements_project  ON project_requirements(project_id, position);
+CREATE INDEX IF NOT EXISTS idx_features_project      ON project_features(project_id, position);
+CREATE INDEX IF NOT EXISTS idx_task_links_task        ON task_project_links(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_links_target      ON task_project_links(kind, target_id);
 `
 
 	_, err := d.db.Exec(schema)
@@ -207,6 +296,18 @@ func (d *Database) applyColumnMigrations() error {
 		{
 			name: "add_enabled_to_providers",
 			sql:  "ALTER TABLE providers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
+		},
+		{
+			name: "add_input_tokens_to_messages",
+			sql:  "ALTER TABLE messages ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			name: "add_output_tokens_to_messages",
+			sql:  "ALTER TABLE messages ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			name: "add_duration_ms_to_messages",
+			sql:  "ALTER TABLE messages ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0",
 		},
 	}
 

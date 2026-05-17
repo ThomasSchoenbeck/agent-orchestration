@@ -1,9 +1,15 @@
 <script>
   import { onMount } from 'svelte'
   import { toasts } from '../lib/stores.js'
-  import { projectChat, listProviders } from '../lib/api.js'
+  import { projectChat, taskChat, listProviders } from '../lib/api.js'
 
-  let { projectId, onApplyToDescription = null } = $props()
+  // scope: { kind: 'project' | 'task', id } — preferred.
+  // projectId: kept for backwards compatibility with ProjectDetail.svelte.
+  let { projectId = null, scope = null, onApplyToDescription = null } = $props()
+
+  let effectiveScope = $derived(
+    scope ?? (projectId ? { kind: 'project', id: projectId } : null)
+  )
 
   // ── State ─────────────────────────────────────────────────────────────────
   let messages = $state([])
@@ -41,11 +47,10 @@
     scrollBottom()
 
     try {
-      const resp = await projectChat(projectId, {
-        message: text,
-        provider_id: selectedProvider,
-        conversation_id: conversationId,
-      })
+      const payload = { message: text, provider_id: selectedProvider, conversation_id: conversationId }
+      const chatFn  = effectiveScope?.kind === 'task' ? taskChat : projectChat
+      const scopeId = effectiveScope?.id ?? projectId
+      const resp = await chatFn(scopeId, payload)
 
       messages.push({ role: 'assistant', content: resp.reply, isUser: false, canApply: true })
       conversationId = resp.conversation_id
@@ -84,7 +89,9 @@
 <div class="w-96 shrink-0 bg-surface-800 border-l border-surface-600 flex flex-col overflow-hidden">
   <!-- Header -->
   <div class="shrink-0 px-4 py-3 border-b border-surface-600">
-    <h3 class="text-sm font-semibold text-gray-200 mb-2">Project Assistant</h3>
+    <h3 class="text-sm font-semibold text-gray-200 mb-2">
+      {effectiveScope?.kind === 'task' ? 'Task Assistant' : 'Project Assistant'}
+    </h3>
     {#if providers.length > 0}
       <select
         class="w-full bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs text-gray-300

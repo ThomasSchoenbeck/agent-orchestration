@@ -172,9 +172,12 @@ func (s *Server) handleConversationMessages(w http.ResponseWriter, r *http.Reque
 
 	case http.MethodPost:
 		var req struct {
-			Role   string `json:"role"`
-			Content string `json:"content"`
-			TokensUsed int `json:"tokens_used,omitempty"`
+			Role         string `json:"role"`
+			Content      string `json:"content"`
+			TokensUsed   int    `json:"tokens_used,omitempty"`
+			InputTokens  int    `json:"input_tokens,omitempty"`
+			OutputTokens int    `json:"output_tokens,omitempty"`
+			DurationMs   int    `json:"duration_ms,omitempty"`
 		}
 		if !s.decodeJSON(w, r, &req) {
 			return
@@ -190,6 +193,9 @@ func (s *Server) handleConversationMessages(w http.ResponseWriter, r *http.Reque
 			Role:           req.Role,
 			Content:        req.Content,
 			TokensUsed:     req.TokensUsed,
+			InputTokens:    req.InputTokens,
+			OutputTokens:   req.OutputTokens,
+			DurationMs:     req.DurationMs,
 		}
 		if err := s.db.AddMessage(r.Context(), m); err != nil {
 			s.internalError(w, err)
@@ -200,4 +206,28 @@ func (s *Server) handleConversationMessages(w http.ResponseWriter, r *http.Reque
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+// handleChatLog handles GET /api/chat-log — returns recent messages across all
+// conversations with provider name, direction, and a short content preview.
+func (s *Server) handleChatLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	entries, err := s.db.ListChatLog(r.Context(), limit)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if entries == nil {
+		entries = []*db.ChatLogEntry{}
+	}
+	api.WriteJSON(w, http.StatusOK, entries)
 }

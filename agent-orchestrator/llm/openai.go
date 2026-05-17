@@ -1,11 +1,13 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -180,7 +182,9 @@ func parseOpenAIResponse(data []byte) (ChatResponse, error) {
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
-			TotalTokens int `json:"total_tokens"`
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
 		} `json:"usage"`
 	}
 
@@ -193,9 +197,11 @@ func parseOpenAIResponse(data []byte) (ChatResponse, error) {
 
 	choice := raw.Choices[0]
 	resp := ChatResponse{
-		Content:    choice.Message.Content,
-		StopReason: mapOpenAIStopReason(choice.FinishReason),
-		TokensUsed: raw.Usage.TotalTokens,
+		Content:      choice.Message.Content,
+		StopReason:   mapOpenAIStopReason(choice.FinishReason),
+		TokensUsed:   raw.Usage.TotalTokens,
+		InputTokens:  raw.Usage.PromptTokens,
+		OutputTokens: raw.Usage.CompletionTokens,
 	}
 
 	for _, tc := range choice.Message.ToolCalls {
@@ -209,6 +215,118 @@ func parseOpenAIResponse(data []byte) (ChatResponse, error) {
 	}
 
 	return resp, nil
+}
+
+// ChatStream streams a chat completion using SSE, calling onChunk for each token.
+// Returns a ChatResponse with the assembled content and usage stats when done.
+func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk ChunkHandler) (ChatResponse, error) {
+	model := req.Model
+	if model == "" {
+		model = p.model
+	}
+
+	body := map[string]interface{}{
+		"model":    model,
+		"messages": openaiMessages(req.Messages),
+		"stream":   true,
+		// stream_options lets OpenAI include usage in the stream's final event.
+		"stream_options": map[string]interface{}{"include_usage": true},
+	}
+	if req.Temperature > 0 {
+		body["temperature"] = req.Temperature
+	}
+	if req.MaxTokens > 0 {
+		body["max_tokens"] = req.MaxTokens
+	}
+	if len(req.Tools) > 0 {
+		body["tools"] = openaiTools(req.Tools)
+		if req.ToolChoice != "" {
+			body["tool_choice"] = req.ToolChoice
+		}
+	}
+
+	b, err := json.Marshal(body)
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("marshal request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(b))
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if p.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(resp.Body)
+		return ChatResponse{}, fmt.Errorf("provider %q returned status %d: %s", p.name, resp.StatusCode, buf.String())
+	}
+
+	var (
+		fullContent  strings.Builder
+		inputTokens  int
+		outputTokens int
+		finishReason string
+	)
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		var chunk struct {
+			Choices []struct {
+				Delta        struct{ Content string `json:"content"` } `json:"delta"`
+				FinishReason string                                    `json:"finish_reason"`
+			} `json:"choices"`
+			Usage *struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+		if chunk.Usage != nil {
+			inputTokens = chunk.Usage.PromptTokens
+			outputTokens = chunk.Usage.CompletionTokens
+		}
+		if len(chunk.Choices) > 0 {
+			c := chunk.Choices[0].Delta.Content
+			if c != "" {
+				fullContent.WriteString(c)
+				onChunk(c)
+			}
+			if chunk.Choices[0].FinishReason != "" {
+				finishReason = chunk.Choices[0].FinishReason
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return ChatResponse{}, fmt.Errorf("stream read: %w", err)
+	}
+
+	return ChatResponse{
+		Content:      fullContent.String(),
+		StopReason:   mapOpenAIStopReason(finishReason),
+		TokensUsed:   inputTokens + outputTokens,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+	}, nil
 }
 
 func parseOpenAIEmbedResponse(data []byte) (EmbedResponse, error) {

@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -127,9 +128,10 @@ func parseOllamaChatResponse(data []byte) (ChatResponse, error) {
 				} `json:"function"`
 			} `json:"tool_calls"`
 		} `json:"message"`
-		DoneReason    string `json:"done_reason"`
-		PromptEvalCount int  `json:"prompt_eval_count"`
-		EvalCount     int    `json:"eval_count"`
+		DoneReason      string `json:"done_reason"`
+		PromptEvalCount int    `json:"prompt_eval_count"`
+		EvalCount       int    `json:"eval_count"`
+		EvalDuration    int64  `json:"eval_duration"` // nanoseconds
 	}
 
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -137,9 +139,12 @@ func parseOllamaChatResponse(data []byte) (ChatResponse, error) {
 	}
 
 	resp := ChatResponse{
-		Content:    raw.Message.Content,
-		StopReason: mapOllamaStopReason(raw.DoneReason),
-		TokensUsed: raw.PromptEvalCount + raw.EvalCount,
+		Content:      raw.Message.Content,
+		StopReason:   mapOllamaStopReason(raw.DoneReason),
+		TokensUsed:   raw.PromptEvalCount + raw.EvalCount,
+		InputTokens:  raw.PromptEvalCount,
+		OutputTokens: raw.EvalCount,
+		DurationMs:   int(raw.EvalDuration / 1_000_000),
 	}
 
 	for i, tc := range raw.Message.ToolCalls {
@@ -153,6 +158,93 @@ func parseOllamaChatResponse(data []byte) (ChatResponse, error) {
 	}
 
 	return resp, nil
+}
+
+// ChatStream streams a chat using Ollama's NDJSON streaming format.
+func (p *OllamaProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk ChunkHandler) (ChatResponse, error) {
+	model := req.Model
+	if model == "" {
+		model = p.model
+	}
+
+	body := map[string]interface{}{
+		"model":    model,
+		"messages": openaiMessages(req.Messages),
+		"stream":   true,
+	}
+	if len(req.Tools) > 0 {
+		body["tools"] = openaiTools(req.Tools)
+	}
+
+	b, err := json.Marshal(body)
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("marshal request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/api/chat", bytes.NewReader(b))
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("http request to ollama: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(resp.Body)
+		return ChatResponse{}, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, buf.String())
+	}
+
+	var (
+		fullContent     bytes.Buffer
+		promptEvalCount int
+		evalCount       int
+		evalDuration    int64
+		doneReason      string
+	)
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		var chunk struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			Done            bool   `json:"done"`
+			DoneReason      string `json:"done_reason"`
+			PromptEvalCount int    `json:"prompt_eval_count"`
+			EvalCount       int    `json:"eval_count"`
+			EvalDuration    int64  `json:"eval_duration"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &chunk); err != nil {
+			continue
+		}
+		if chunk.Message.Content != "" {
+			fullContent.WriteString(chunk.Message.Content)
+			onChunk(chunk.Message.Content)
+		}
+		if chunk.Done {
+			promptEvalCount = chunk.PromptEvalCount
+			evalCount = chunk.EvalCount
+			evalDuration = chunk.EvalDuration
+			doneReason = chunk.DoneReason
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return ChatResponse{}, fmt.Errorf("stream read: %w", err)
+	}
+
+	return ChatResponse{
+		Content:      fullContent.String(),
+		StopReason:   mapOllamaStopReason(doneReason),
+		TokensUsed:   promptEvalCount + evalCount,
+		InputTokens:  promptEvalCount,
+		OutputTokens: evalCount,
+		DurationMs:   int(evalDuration / 1_000_000),
+	}, nil
 }
 
 func parseOllamaEmbedResponse(data []byte) (EmbedResponse, error) {

@@ -66,6 +66,16 @@ func (d *Database) ListTasks(ctx context.Context, f TaskFilters) ([]*Task, error
 		where = append(where, "assigned_agent_id=?")
 		args = append(args, f.AgentID)
 	}
+	if f.RequirementID != "" {
+		where = append(where,
+			"id IN (SELECT task_id FROM task_project_links WHERE kind='requirement' AND target_id=?)")
+		args = append(args, f.RequirementID)
+	}
+	if f.FeatureID != "" {
+		where = append(where,
+			"id IN (SELECT task_id FROM task_project_links WHERE kind='feature' AND target_id=?)")
+		args = append(args, f.FeatureID)
+	}
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
@@ -135,6 +145,16 @@ func (d *Database) ClaimTask(ctx context.Context, taskID, agentID string) error 
 		return err
 	}
 	d.logTaskEvent(ctx, taskID, "", agentID, "task_claimed", "planned", "in_progress", "Task claimed by agent")
+	// Emit a soft warning if any dependencies are not yet completed.
+	if unfinished, err := d.uncompletedDeps(ctx, taskID); err == nil && len(unfinished) > 0 {
+		msg := fmt.Sprintf("claimed with %d uncompleted dependenc", len(unfinished))
+		if len(unfinished) == 1 {
+			msg += "y"
+		} else {
+			msg += "ies"
+		}
+		d.logTaskEvent(ctx, taskID, "", agentID, EventTaskDependencyWarning, "", "in_progress", msg)
+	}
 	return nil
 }
 

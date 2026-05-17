@@ -36,6 +36,11 @@ type Server struct {
 	mux        *http.ServeMux
 	pollMu     sync.RWMutex
 	pollStatus map[string]*AgentPollStatus
+
+	// Cached debug-mode flag — re-read from DB at most once per 30 s.
+	debugMu        sync.RWMutex
+	debugModeValue bool
+	debugModeFetAt time.Time
 }
 
 // ServeHTTP implements http.Handler — delegates to the internal mux.
@@ -134,6 +139,30 @@ func (s *Server) getPollStatus(agentID string) *AgentPollStatus {
 	// Return a copy to avoid races.
 	copy := *ps
 	return &copy
+}
+
+// isDebugMode returns true when platform.debug_mode is set to "true" in the
+// platform_settings table. The value is cached for 30 s to avoid per-request
+// DB reads on high-frequency paths like heartbeat and poll.
+func (s *Server) isDebugMode(ctx context.Context) bool {
+	s.debugMu.RLock()
+	if time.Since(s.debugModeFetAt) < 30*time.Second {
+		v := s.debugModeValue
+		s.debugMu.RUnlock()
+		return v
+	}
+	s.debugMu.RUnlock()
+
+	s.debugMu.Lock()
+	defer s.debugMu.Unlock()
+	// Re-check after acquiring the write lock.
+	if time.Since(s.debugModeFetAt) < 30*time.Second {
+		return s.debugModeValue
+	}
+	setting, err := s.db.GetSetting(ctx, "platform.debug_mode")
+	s.debugModeValue = err == nil && setting.Value == "true"
+	s.debugModeFetAt = time.Now()
+	return s.debugModeValue
 }
 
 // runMaintenance performs periodic tasks: marking stale agents offline and
