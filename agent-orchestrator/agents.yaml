@@ -1,0 +1,29 @@
+# agents.yaml — start multiple agents from a single config file.
+#
+# Usage:
+#   agent-orchestrator agents --config agents.yaml
+#   task start:agents
+#
+# workdir resolution (highest → lowest priority):
+#   1. per-agent "workdir"  — used as-is
+#   2. top-level "workdir"/{agent-name}  — unique sub-dir per agent
+#   3. .agent-work/{agent-name}  — default when no workdir is set at all
+#
+# Per-agent "config" overrides the top-level "config" the same way.
+
+server_url: http://localhost:8080
+workdir: .agent-work          # agents without an explicit workdir get {workdir}/{name}
+# config: config.yaml         # uncomment to enable LLM execution
+
+agents:
+  - name: worker-1
+    roles: [worker]
+    # workdir not set → .agent-work/worker-1
+
+  - name: worker-2
+    roles: [worker]
+    workdir: /tmp/worker-2    # override to a completely different path
+
+  - name: reviewer-1
+    roles: [reviewer]
+    # workdir not set → .agent-work/reviewer-1

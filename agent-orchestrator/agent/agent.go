@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"time"
 
 	"agent-orchestrator/config"
@@ -23,6 +24,7 @@ type Agent struct {
 	client    *ServerClient
 	executor  *Executor
 	done      chan struct{}
+	workdir   string // local root for agent code checkouts (remote mode)
 }
 
 // NewAgent creates a new agent (not yet registered). rtr and toolReg are
@@ -45,6 +47,25 @@ func (a *Agent) WithMode(mode string) *Agent {
 	return a
 }
 
+// WithWorkdir sets the local filesystem root under which the agent creates
+// per-task checkout directories. Used in remote mode; ignored in colocated mode.
+// If never called (or set to ""), LocalWorkspacePath falls back to ".agent-work".
+func (a *Agent) WithWorkdir(dir string) *Agent {
+	a.workdir = dir
+	return a
+}
+
+// LocalWorkspacePath returns the path the agent should use as its working
+// directory for the given task: {workdir}/{taskID}.
+// Defaults to ".agent-work/{taskID}" when no workdir is configured.
+func (a *Agent) LocalWorkspacePath(taskID string) string {
+	root := a.workdir
+	if root == "" {
+		root = ".agent-work"
+	}
+	return filepath.Join(root, taskID)
+}
+
 // WithExecutor attaches an LLM router and tool registry so the agent can
 // fully execute tasks. Call before Start.
 func (a *Agent) WithExecutor(rtr *router.Router, toolReg *tools.Registry) *Agent {
@@ -58,6 +79,9 @@ func (a *Agent) WithExecutor(rtr *router.Router, toolReg *tools.Registry) *Agent
 
 // ID returns the agent's server-assigned ID (empty before Start).
 func (a *Agent) ID() string { return a.id }
+
+// Roles returns the agent's configured roles.
+func (a *Agent) Roles() []string { return a.roles }
 
 // Start registers with the server and begins the heartbeat + polling loops.
 // It returns after the loops are started; call Stop to terminate them.

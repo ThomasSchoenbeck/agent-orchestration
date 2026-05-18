@@ -82,6 +82,7 @@ type AgentConfig struct {
 	PortPoolStart                int    `yaml:"port_pool_start"`           // first port in agent test-port pool
 	PortPoolSize                 int    `yaml:"port_pool_size"`            // number of ports in pool
 	MergeSupervisorIntervalSec   int    `yaml:"merge_supervisor_interval_sec"`
+	Workdir                      string `yaml:"workdir"` // local root for agent code checkouts (remote mode)
 }
 
 // StorageConfig holds paths for server-managed git repos and worktrees.

@@ -1,5 +1,5 @@
 // agent-orchestrator is an autonomous AI development platform packaged as a
-// single Go binary with two operating modes: server and agent.
+// single Go binary with three operating modes: server, agent, and agents.
 //
 // Build:
 //
@@ -9,9 +9,13 @@
 //
 //	./agent-orchestrator server --config config.yaml
 //
-// Run as agent:
+// Run as a single agent:
 //
 //	./agent-orchestrator agent --name worker-1 --roles worker --server http://localhost:8080
+//
+// Run multiple agents from a config file:
+//
+//	./agent-orchestrator agents --config agents.yaml
 package main
 
 import (
@@ -23,6 +27,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"agent-orchestrator/agent"
@@ -32,6 +37,8 @@ import (
 	"agent-orchestrator/router"
 	"agent-orchestrator/server"
 	"agent-orchestrator/tools"
+
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -51,6 +58,8 @@ func main() {
 		err = runServer(args)
 	case "agent":
 		err = runAgent(args)
+	case "agents":
+		err = runAgents(args)
 	case "version":
 		fmt.Println("agent-orchestrator v0.1.0-phase1")
 		return
@@ -223,6 +232,7 @@ func runAgent(args []string) error {
 	name := fs.String("name", "", "agent name (required)")
 	rolesStr := fs.String("roles", "", "comma-separated roles, e.g. worker,reviewer (required)")
 	serverURL := fs.String("server", "http://localhost:8080", "orchestrator server URL")
+	workdir := fs.String("workdir", "", "local workspace root for agent code checkouts (default: .agent-work)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -234,35 +244,66 @@ func runAgent(args []string) error {
 		return fmt.Errorf("--roles is required")
 	}
 
-	roles := parseRoles(*rolesStr)
+	a, cleanup, err := buildAgent(*name, parseRoles(*rolesStr), *serverURL, *configPath, *workdir)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
-	// Config is optional for agents; fall back to defaults.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := a.Start(ctx); err != nil {
+		return err
+	}
+	log.Printf("agent %q running (roles: %v) → %s  [Ctrl-C to stop]", *name, a.Roles(), *serverURL)
+
+	<-ctx.Done()
+	log.Println("agent: shutting down…")
+	a.Stop()
+	return nil
+}
+
+// buildAgent constructs and optionally wires a fully configured Agent.
+// configPath is optional — when empty, a minimal default config is used and
+// the LLM executor is not wired up (polling-only mode).
+// The returned cleanup func must be called when the agent is done.
+func buildAgent(name string, roles []string, serverURL, configPath, workdir string) (*agent.Agent, func(), error) {
 	var cfg *config.Config
-	if *configPath != "" {
+	if configPath != "" {
 		var err error
-		cfg, err = config.Load(*configPath)
+		cfg, err = config.Load(configPath)
 		if err != nil {
-			return fmt.Errorf("load config: %w", err)
+			return nil, nil, fmt.Errorf("load config: %w", err)
 		}
 	} else {
 		cfg = defaultAgentConfig()
 	}
 
-	a := agent.NewAgent(*name, roles, *serverURL, cfg)
+	// Workdir: explicit arg wins; fall back to config key; fall back to default.
+	wd := workdir
+	if wd == "" {
+		wd = cfg.Agents.Workdir
+	}
 
-	// If a full config is provided, wire up the LLM router and tool registry
-	// so the agent can actually execute tasks.
-	if *configPath != "" {
+	a := agent.NewAgent(name, roles, serverURL, cfg)
+	if wd != "" {
+		a.WithWorkdir(wd)
+	}
+
+	cleanup := func() {}
+
+	// Wire LLM executor only when a full config is provided.
+	if configPath != "" {
 		database, err := db.Open(cfg.Database.Path)
 		if err != nil {
-			log.Printf("agent: could not open database (%v) — running without tool execution", err)
+			log.Printf("agent %q: could not open database (%v) — running without tool execution", name, err)
 		} else {
-			defer func() { _ = database.Close() }()
 			llmReg := llm.NewRegistry()
 			if err := llmReg.InitFromConfig(cfg); err != nil {
-				log.Printf("agent: could not init LLM providers (%v) — running without LLM execution", err)
+				log.Printf("agent %q: could not init LLM providers (%v) — running without LLM execution", name, err)
+				_ = database.Close()
 			} else {
-				defer llmReg.CloseAll()
 				rtr := router.New(cfg, llmReg)
 				toolReg := tools.NewRegistry()
 				_ = tools.RegisterCodeTools(toolReg)
@@ -271,22 +312,111 @@ func runAgent(args []string) error {
 				_ = tools.RegisterContextTools(toolReg, database)
 				_ = tools.RegisterCommentTools(toolReg, database)
 				a.WithExecutor(rtr, toolReg)
-				log.Printf("agent: executor wired (LLM providers: %d)", len(llmReg.List()))
+				log.Printf("agent %q: executor wired (LLM providers: %d)", name, len(llmReg.List()))
+				cleanup = func() {
+					llmReg.CloseAll()
+					_ = database.Close()
+				}
 			}
 		}
+	}
+
+	return a, cleanup, nil
+}
+
+// -------------------------------------------------------------------------
+// agents subcommand — start multiple agents from a YAML config file
+// -------------------------------------------------------------------------
+
+// agentsFile is the top-level structure of an agents.yaml config file.
+type agentsFile struct {
+	ServerURL string      `yaml:"server_url"` // default: http://localhost:8080
+	Workdir   string      `yaml:"workdir"`    // default workdir for all agents
+	Config    string      `yaml:"config"`     // default LLM config path (optional)
+	Agents    []agentSpec `yaml:"agents"`
+}
+
+// agentSpec defines one agent entry inside an agents.yaml file.
+type agentSpec struct {
+	Name    string   `yaml:"name"`
+	Roles   []string `yaml:"roles"`
+	Workdir string   `yaml:"workdir"` // overrides top-level workdir when set
+	Config  string   `yaml:"config"`  // overrides top-level config when set
+}
+
+func runAgents(args []string) error {
+	fs := flag.NewFlagSet("agents", flag.ExitOnError)
+	filePath := fs.String("config", "agents.yaml", "path to agents config YAML")
+	serverOverride := fs.String("server", "", "override server_url from config file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	data, err := os.ReadFile(*filePath)
+	if err != nil {
+		return fmt.Errorf("read agents config %q: %w", *filePath, err)
+	}
+
+	var af agentsFile
+	if err := yaml.Unmarshal(data, &af); err != nil {
+		return fmt.Errorf("parse agents config: %w", err)
+	}
+
+	if *serverOverride != "" {
+		af.ServerURL = *serverOverride
+	}
+	if af.ServerURL == "" {
+		af.ServerURL = "http://localhost:8080"
+	}
+	if len(af.Agents) == 0 {
+		return fmt.Errorf("agents config %q defines no agents", *filePath)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := a.Start(ctx); err != nil {
-		return err
-	}
-	log.Printf("agent %q running (roles: %v) → %s  [Ctrl-C to stop]", *name, roles, *serverURL)
+	var wg sync.WaitGroup
+	for _, spec := range af.Agents {
+		// Per-agent workdir: use explicit value when set; otherwise derive a
+		// unique sub-directory from the top-level workdir + agent name so
+		// multiple agents never share the same checkout root.
+		workdir := spec.Workdir
+		if workdir == "" {
+			root := af.Workdir
+			if root == "" {
+				root = ".agent-work"
+			}
+			workdir = filepath.Join(root, spec.Name)
+		}
+		configPath := spec.Config
+		if configPath == "" {
+			configPath = af.Config
+		}
 
-	<-ctx.Done()
-	log.Println("agent: shutting down…")
-	a.Stop()
+		a, cleanup, err := buildAgent(spec.Name, spec.Roles, af.ServerURL, configPath, workdir)
+		if err != nil {
+			return fmt.Errorf("build agent %q: %w", spec.Name, err)
+		}
+
+		if err := a.Start(ctx); err != nil {
+			cleanup()
+			return fmt.Errorf("start agent %q: %w", spec.Name, err)
+		}
+		log.Printf("agent %q started (roles: %v)", spec.Name, spec.Roles)
+
+		wg.Add(1)
+		go func(a *agent.Agent, cleanup func(), name string) {
+			defer wg.Done()
+			defer cleanup()
+			<-ctx.Done()
+			log.Printf("agent %q: shutting down…", name)
+			a.Stop()
+		}(a, cleanup, spec.Name)
+	}
+
+	log.Printf("agents: %d agent(s) running — Ctrl-C to stop", len(af.Agents))
+	wg.Wait()
+	log.Println("agents: all stopped")
 	return nil
 }
 
@@ -323,6 +453,7 @@ func printUsage() {
 Usage:
   agent-orchestrator server [flags]
   agent-orchestrator agent  [flags]
+  agent-orchestrator agents [flags]
   agent-orchestrator version
 
 Server flags:
@@ -330,14 +461,20 @@ Server flags:
   --port   int      Override server port
 
 Agent flags:
-  --name   string   Agent name (required)
-  --roles  string   Comma-separated roles: worker,reviewer,orchestrator (required)
-  --server string   Server URL (default "http://localhost:8080")
-  --config string   Optional config YAML path
+  --name    string   Agent name (required)
+  --roles   string   Comma-separated roles: worker,reviewer,orchestrator (required)
+  --server  string   Server URL (default "http://localhost:8080")
+  --workdir string   Local workspace root for code checkouts (default: .agent-work)
+  --config  string   Optional config YAML path
+
+Agents flags (start multiple agents from a config file):
+  --config string   Path to agents YAML (default "agents.yaml")
+  --server string   Override server_url from config file
 
 Examples:
   agent-orchestrator server --config config.yaml --port 8080
   agent-orchestrator agent --name worker-1 --roles worker --server http://localhost:8080
   agent-orchestrator agent --name orch-1   --roles orchestrator,reviewer
+  agent-orchestrator agents --config agents.yaml
 `)
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -126,6 +127,40 @@ func TestAgent_Stop(t *testing.T) {
 	if heartbeats.Load() > countAfterStop+1 {
 		t.Errorf("heartbeats continued after Stop: before=%d after=%d",
 			countAfterStop, heartbeats.Load())
+	}
+}
+
+func TestAgent_LocalWorkspacePath_ExplicitWorkdir(t *testing.T) {
+	cfg := testConfig()
+	a := agent.NewAgent("test-agent", []string{"worker"}, "http://localhost", cfg)
+	a.WithWorkdir("/my/workdir")
+
+	got := a.LocalWorkspacePath("task-abc")
+	want := filepath.Join("/my/workdir", "task-abc")
+	if got != want {
+		t.Errorf("LocalWorkspacePath = %q, want %q", got, want)
+	}
+}
+
+func TestAgent_LocalWorkspacePath_Default(t *testing.T) {
+	cfg := testConfig()
+	a := agent.NewAgent("test-agent", []string{"worker"}, "http://localhost", cfg)
+	// No workdir set — must fall back to ".agent-work".
+
+	got := a.LocalWorkspacePath("task-xyz")
+	want := filepath.Join(".agent-work", "task-xyz")
+	if got != want {
+		t.Errorf("LocalWorkspacePath = %q, want %q", got, want)
+	}
+}
+
+func TestAgent_LocalWorkspacePath_UniquePerTask(t *testing.T) {
+	cfg := testConfig()
+	a := agent.NewAgent("test-agent", []string{"worker"}, "http://localhost", cfg)
+	a.WithWorkdir("/workdir")
+
+	if a.LocalWorkspacePath("task-1") == a.LocalWorkspacePath("task-2") {
+		t.Error("different taskIDs must produce different paths")
 	}
 }
 

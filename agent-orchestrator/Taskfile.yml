@@ -16,8 +16,14 @@ vars:
   UI_DIR:     ui
   CONFIG:     config.yaml
   SERVER_URL: http://localhost:8080
+  # ── Agent variables ───────────────────────────────────────────────────────
+  # Number of agents to start (all share the same ROLES value).
+  # For mixed roles start two agent groups separately — see start:mixed below.
   AGENTS:     '1'
   ROLES:      worker
+  # Local workspace root for agent code checkouts (remote/default mode).
+  # Each agent gets its own sub-directory: {WORKDIR}/agent-{n}
+  WORKDIR: .agent-work
   # Agents can be given a full config path for LLM-executor access.
   # Leave empty to run lightweight polling-only agents.
   AGENT_CONFIG: ''
@@ -106,6 +112,14 @@ tasks:
     dir: '{{.UI_DIR}}'
     cmds:
       - pnpm test:coverage
+
+  test:go:integration:
+    desc: |
+      Run Go integration tests (spin up a real server + git repos internally).
+      No running server needed — each test manages its own resources.
+      Add -run=<TestName> to target a single scenario.
+    cmds:
+      - go test -tags=integration -v -race -count=1 ./integration/...
 
   test:integration:
     desc: |
@@ -220,13 +234,15 @@ tasks:
       Variables:
         AGENTS=<n>            Number of agents to start     (default: 1)
         ROLES=<r1,r2>         Comma-separated roles         (default: worker)
+        WORKDIR=<path>        Local workspace root          (default: .agent-work)
         SERVER_URL=<url>      Orchestrator URL              (default: http://localhost:8080)
         AGENT_CONFIG=<path>   Config YAML for full LLM mode (default: empty = polling only)
 
       Examples:
-        task agents
-        task agents AGENTS=3
-        task agents ROLES=worker,reviewer
+        task agents                                              # 1 worker
+        task agents AGENTS=3                                     # 3 workers
+        task agents AGENTS=2 ROLES=reviewer                      # 2 reviewers
+        task agents AGENTS=2 WORKDIR=/data/agent-work            # custom workspace root
         task agents AGENTS=2 ROLES=worker AGENT_CONFIG=config.yaml
     cmds:
       - task: _procs:agents
@@ -239,17 +255,66 @@ tasks:
       Variables:
         AGENTS=<n>            Number of agents to start (default: 1)
         ROLES=<roles>         Agent roles               (default: worker)
+        WORKDIR=<path>        Local workspace root      (default: .agent-work)
         CONFIG=<path>         Server config             (default: config.yaml)
         AGENT_CONFIG=<path>   Agent config / LLM        (default: empty)
         SERVER_URL=<url>      Override server URL        (default: http://localhost:8080)
 
       Examples:
-        task start
-        task start AGENTS=3
-        task start ROLES=worker,reviewer AGENT_CONFIG=config.yaml
+        task start                                      # 1 worker agent
+        task start AGENTS=3                             # 3 worker agents
+        task start AGENTS=2 ROLES=worker,reviewer       # 2 all-role agents
+        task start AGENTS=2 WORKDIR=/data/agent-work    # custom workspace
+        task start ROLES=worker AGENT_CONFIG=config.yaml
     cmds:
       - task: build
       - task: _start:run
+
+  start:agents:
+    desc: |
+      Build everything then start agents defined in an agents YAML config file.
+      Ctrl+C stops all.
+
+      Variables:
+        AGENTS_CONFIG=<path>   Path to agents config YAML (default: agents.yaml)
+        SERVER_URL=<url>       Override server_url from config (default: "")
+
+      Examples:
+        task start:agents
+        task start:agents AGENTS_CONFIG=my-agents.yaml
+        task start:agents SERVER_URL=http://remote-host:8080
+    vars:
+      AGENTS_CONFIG: '{{.AGENTS_CONFIG | default "agents.yaml"}}'
+    cmds:
+      - task: build
+      - ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} agents --config {{.AGENTS_CONFIG}}{{if .SERVER_URL}} --server {{.SERVER_URL}}{{end}}
+
+  start:mixed:
+    desc: |
+      Build everything then start server + separate worker and reviewer pools.
+      Ctrl+C stops all.
+
+      Variables:
+        WORKERS=<n>           Number of worker agents   (default: 2)
+        REVIEWERS=<n>         Number of reviewer agents (default: 1)
+        WORKDIR=<path>        Local workspace root      (default: .agent-work)
+        CONFIG=<path>         Server config             (default: config.yaml)
+        AGENT_CONFIG=<path>   Agent config / LLM        (default: empty)
+        SERVER_URL=<url>      Override server URL        (default: http://localhost:8080)
+
+      Examples:
+        task start:mixed                              # 2 workers + 1 reviewer
+        task start:mixed WORKERS=4 REVIEWERS=2
+        task start:mixed WORKDIR=/data/agent-work AGENT_CONFIG=config.yaml
+    vars:
+      WORKERS:   '{{.WORKERS   | default "2"}}'
+      REVIEWERS: '{{.REVIEWERS | default "1"}}'
+    cmds:
+      - task: build
+      - task: _start:run:mixed
+        vars:
+          WORKERS:   '{{.WORKERS}}'
+          REVIEWERS: '{{.REVIEWERS}}'
 
   # ============================================================
   # INTERNAL PROCESS HELPERS  (used by dev / agents / start)
@@ -269,6 +334,15 @@ tasks:
       - task: _proc:server
       - task: _procs:agents
 
+  _start:run:mixed:
+    internal: true
+    deps:
+      - task: _proc:server
+      - task: _procs:workers
+        vars: {COUNT: '{{.WORKERS}}'}
+      - task: _procs:reviewers
+        vars: {COUNT: '{{.REVIEWERS}}'}
+
   _proc:server:
     internal: true
     cmds:
@@ -280,6 +354,8 @@ tasks:
     cmds:
       - pnpm dev
 
+  # Starts {{.AGENTS}} agents, all with role {{.ROLES}}.
+  # Each agent gets its own workdir sub-directory: {{.WORKDIR}}/agent-{n}
   _procs:agents:
     internal: true
     cmds:
@@ -289,16 +365,46 @@ tasks:
           ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} agent \
             --name "agent-$i" \
             --roles "{{.ROLES}}" \
-            --server "{{.SERVER_URL}}"{{if .AGENT_CONFIG}} --config {{.AGENT_CONFIG}}{{end}} &
+            --workdir "{{.WORKDIR}}/agent-$i" \
+            --server "{{.SERVER_URL}}"{{if .AGENT_CONFIG}} --config "{{.AGENT_CONFIG}}"{{end}} &
           pids="$pids $!"
         done
         trap "kill $pids 2>/dev/null" INT TERM EXIT
         wait
 
-  _proc:agent:
+  # Starts {{.COUNT}} worker agents.
+  _procs:workers:
     internal: true
     cmds:
-      - ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} agent --name "agent-1" --roles "{{.ROLES}}" --server "{{.SERVER_URL}}"{{if .AGENT_CONFIG}} --config {{.AGENT_CONFIG}}{{end}}
+      - |
+        pids=""
+        for i in $(seq 1 {{.COUNT}}); do
+          ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} agent \
+            --name "worker-$i" \
+            --roles "worker" \
+            --workdir "{{.WORKDIR}}/worker-$i" \
+            --server "{{.SERVER_URL}}"{{if .AGENT_CONFIG}} --config "{{.AGENT_CONFIG}}"{{end}} &
+          pids="$pids $!"
+        done
+        trap "kill $pids 2>/dev/null" INT TERM EXIT
+        wait
+
+  # Starts {{.COUNT}} reviewer agents.
+  _procs:reviewers:
+    internal: true
+    cmds:
+      - |
+        pids=""
+        for i in $(seq 1 {{.COUNT}}); do
+          ./{{.BIN_DIR}}/{{.BINARY}}{{.EXT}} agent \
+            --name "reviewer-$i" \
+            --roles "reviewer" \
+            --workdir "{{.WORKDIR}}/reviewer-$i" \
+            --server "{{.SERVER_URL}}"{{if .AGENT_CONFIG}} --config "{{.AGENT_CONFIG}}"{{end}} &
+          pids="$pids $!"
+        done
+        trap "kill $pids 2>/dev/null" INT TERM EXIT
+        wait
 
   # ============================================================
   # CLEAN
