@@ -193,8 +193,10 @@ func (h *HTTPHandler) serveReceivePack(w http.ResponseWriter, r *http.Request, s
 // --- helpers ---
 
 // endpointFor builds a minimal transport.Endpoint for the given slug.
+// The slug must appear in the URL path (not the host) so that ep.Path is set
+// and fsLoader.Load can extract it correctly.
 func endpointFor(slug string) *transport.Endpoint {
-	ep, _ := transport.NewEndpoint(fmt.Sprintf("git://%s.git", slug))
+	ep, _ := transport.NewEndpoint(fmt.Sprintf("git://localhost/%s.git", slug))
 	return ep
 }
 

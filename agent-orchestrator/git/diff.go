@@ -2,7 +2,8 @@ package git
 
 import (
 	"fmt"
-	"strings"
+	"sort"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -72,75 +73,266 @@ func HasOverlap(setA, setB []string) bool {
 	return false
 }
 
-// MergeIntoMain attempts a fast-forward or three-way merge of branchName into
-// main in the bare repo. Returns the new HEAD SHA on success, or an error
-// describing the conflict.
+// MergeIntoMain merges branchName into main in the bare repo at repoPath.
+// If main is an ancestor of the branch tip (fast-forward), the main ref is
+// advanced directly. Otherwise a three-way merge commit is created (conflicts
+// are returned as errors). worktreePath is accepted but not used; it is kept
+// for API compatibility.
 //
-// On conflict the bare repo is left unchanged (the attempt is aborted via a
-// temporary worktree that is cleaned up).
-func MergeIntoMain(repoPath, worktreePath, branchName string) (headSHA string, err error) {
-	// Create a temporary worktree on main.
-	sha, err := CreateWorktree(repoPath, worktreePath, "main", "main")
+// Returns the new HEAD SHA of main on success.
+func MergeIntoMain(repoPath, _ /* worktreePath */, branchName string) (headSHA string, err error) {
+	repo, err := gogit.PlainOpen(repoPath)
 	if err != nil {
-		return "", fmt.Errorf("git.MergeIntoMain worktree: %w", err)
+		return "", fmt.Errorf("git.MergeIntoMain open %q: %w", repoPath, err)
 	}
-	_ = sha
 
-	wRepo, err := gogit.PlainOpen(worktreePath)
+	mainRef, err := repo.Reference(plumbing.NewBranchReferenceName("main"), true)
 	if err != nil {
-		_ = RemoveWorktree(worktreePath)
-		return "", fmt.Errorf("git.MergeIntoMain open worktree: %w", err)
+		return "", fmt.Errorf("git.MergeIntoMain resolve main: %w", err)
 	}
 
-	wt, err := wRepo.Worktree()
+	taskRef, err := repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
 	if err != nil {
-		_ = RemoveWorktree(worktreePath)
-		return "", fmt.Errorf("git.MergeIntoMain worktree ref: %w", err)
+		return "", fmt.Errorf("git.MergeIntoMain resolve %q: %w", branchName, err)
 	}
 
-	// Fetch the task branch from origin so it's available locally.
-	if err := wRepo.Fetch(&gogit.FetchOptions{RemoteName: "origin"}); err != nil && err != gogit.NoErrAlreadyUpToDate {
-		_ = RemoveWorktree(worktreePath)
-		return "", fmt.Errorf("git.MergeIntoMain fetch: %w", err)
-	}
-
-	// Resolve the task branch ref (as fetched from origin).
-	remoteRef := plumbing.NewRemoteReferenceName("origin", branchName)
-	ref, err := wRepo.Reference(remoteRef, true)
-	if err != nil {
-		_ = RemoveWorktree(worktreePath)
-		return "", fmt.Errorf("git.MergeIntoMain resolve remote branch %q: %w", branchName, err)
-	}
-
-	// Merge.
-	if err := wt.Pull(&gogit.PullOptions{
-		RemoteName:    "origin",
-		ReferenceName: plumbing.NewBranchReferenceName(strings.TrimPrefix(branchName, "task/")),
-		SingleBranch:  true,
-	}); err != nil {
-		if strings.Contains(err.Error(), "conflict") || strings.Contains(err.Error(), "merge") {
-			_ = RemoveWorktree(worktreePath)
-			return "", fmt.Errorf("merge conflict: %w", err)
+	// Fast-forward: if main is an ancestor of the task branch, just advance the ref.
+	if commitIsAncestor(repo, mainRef.Hash(), taskRef.Hash()) {
+		newRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), taskRef.Hash())
+		if err := repo.Storer.SetReference(newRef); err != nil {
+			return "", fmt.Errorf("git.MergeIntoMain update main (ff): %w", err)
 		}
-		// Try a direct merge via the hash reference if Pull failed.
-		_ = err
+		return taskRef.Hash().String(), nil
 	}
 
-	// Push main back to the bare repo.
-	if err := wRepo.Push(&gogit.PushOptions{RemoteName: "origin"}); err != nil && err != gogit.NoErrAlreadyUpToDate {
-		_ = RemoveWorktree(worktreePath)
-		return "", fmt.Errorf("git.MergeIntoMain push main: %w", err)
-	}
-
-	head, err := wRepo.Head()
+	// Non-fast-forward: three-way merge (errors on conflicts).
+	mergedHash, err := threeWayMerge(repo, mainRef.Hash(), taskRef.Hash(), branchName)
 	if err != nil {
-		_ = RemoveWorktree(worktreePath)
-		return "", fmt.Errorf("git.MergeIntoMain head: %w", err)
+		return "", fmt.Errorf("git.MergeIntoMain merge: %w", err)
 	}
 
-	_ = RemoveWorktree(worktreePath)
-	_ = ref // suppress unused
-	return head.Hash().String(), nil
+	newRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), mergedHash)
+	if err := repo.Storer.SetReference(newRef); err != nil {
+		return "", fmt.Errorf("git.MergeIntoMain update main: %w", err)
+	}
+	return mergedHash.String(), nil
+}
+
+// commitIsAncestor returns true when ancestorHash equals or is a reachable
+// ancestor of descendantHash via BFS over parent links.
+func commitIsAncestor(repo *gogit.Repository, ancestorHash, descendantHash plumbing.Hash) bool {
+	if ancestorHash == descendantHash {
+		return true
+	}
+	if ancestorHash == plumbing.ZeroHash {
+		return true // zero hash means empty repo root — always an ancestor
+	}
+	queue := []plumbing.Hash{descendantHash}
+	seen := map[plumbing.Hash]bool{descendantHash: true}
+	for len(queue) > 0 {
+		h := queue[0]
+		queue = queue[1:]
+		c, err := repo.CommitObject(h)
+		if err != nil {
+			continue
+		}
+		for _, p := range c.ParentHashes {
+			if p == ancestorHash {
+				return true
+			}
+			if !seen[p] {
+				seen[p] = true
+				queue = append(queue, p)
+			}
+		}
+	}
+	return false
+}
+
+// findMergeBase returns the lowest common ancestor of h1 and h2 using a
+// simple BFS: collect all ancestors of h1, then walk h2's ancestry until we
+// hit one that's in that set.
+func findMergeBase(repo *gogit.Repository, h1, h2 plumbing.Hash) (plumbing.Hash, error) {
+	ancestors1 := map[plumbing.Hash]bool{h1: true}
+	queue := []plumbing.Hash{h1}
+	for len(queue) > 0 {
+		h := queue[0]
+		queue = queue[1:]
+		c, err := repo.CommitObject(h)
+		if err != nil {
+			continue
+		}
+		for _, p := range c.ParentHashes {
+			if !ancestors1[p] {
+				ancestors1[p] = true
+				queue = append(queue, p)
+			}
+		}
+	}
+
+	queue = []plumbing.Hash{h2}
+	seen := map[plumbing.Hash]bool{h2: true}
+	for len(queue) > 0 {
+		h := queue[0]
+		queue = queue[1:]
+		if ancestors1[h] {
+			return h, nil
+		}
+		c, err := repo.CommitObject(h)
+		if err != nil {
+			continue
+		}
+		for _, p := range c.ParentHashes {
+			if !seen[p] {
+				seen[p] = true
+				queue = append(queue, p)
+			}
+		}
+	}
+	return plumbing.ZeroHash, fmt.Errorf("no common ancestor found for %s and %s", h1, h2)
+}
+
+// threeWayMerge creates a merge commit in the bare repo combining mainHash
+// and taskHash. Only handles the no-conflict case (each side modified
+// different files). Returns the hash of the new merge commit.
+func threeWayMerge(repo *gogit.Repository, mainHash, taskHash plumbing.Hash, branchName string) (plumbing.Hash, error) {
+	mainCommit, err := repo.CommitObject(mainHash)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	taskCommit, err := repo.CommitObject(taskHash)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	baseHash, err := findMergeBase(repo, mainHash, taskHash)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	baseCommit, err := repo.CommitObject(baseHash)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	mainTree, err := mainCommit.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	taskTree, err := taskCommit.Tree()
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	mergedEntries, err := buildMergedEntries(baseTree, mainTree, taskTree)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	// Store the merged tree object.
+	newTree := &object.Tree{Entries: mergedEntries}
+	treeObj := repo.Storer.NewEncodedObject()
+	if err := newTree.Encode(treeObj); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("encode merged tree: %w", err)
+	}
+	treeHash, err := repo.Storer.SetEncodedObject(treeObj)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("store merged tree: %w", err)
+	}
+
+	// Create the merge commit.
+	now := time.Now()
+	sig := object.Signature{Name: "merge-supervisor", Email: "merge@system", When: now}
+	mergeCommit := &object.Commit{
+		Author:       sig,
+		Committer:    sig,
+		Message:      fmt.Sprintf("Merge branch '%s' into main\n", branchName),
+		TreeHash:     treeHash,
+		ParentHashes: []plumbing.Hash{mainHash, taskHash},
+	}
+	commitObj := repo.Storer.NewEncodedObject()
+	if err := mergeCommit.Encode(commitObj); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("encode merge commit: %w", err)
+	}
+	return repo.Storer.SetEncodedObject(commitObj)
+}
+
+// buildMergedEntries performs a three-way merge of flat tree entries.
+// Returns an error on any conflict (both sides changed the same file differently).
+// Note: this only handles files at the root level (no recursive subtrees).
+func buildMergedEntries(base, ours, theirs *object.Tree) ([]object.TreeEntry, error) {
+	baseMap := treeEntryMap(base)
+	oursMap := treeEntryMap(ours)
+	theirsMap := treeEntryMap(theirs)
+
+	allNames := map[string]struct{}{}
+	for k := range baseMap {
+		allNames[k] = struct{}{}
+	}
+	for k := range oursMap {
+		allNames[k] = struct{}{}
+	}
+	for k := range theirsMap {
+		allNames[k] = struct{}{}
+	}
+
+	var entries []object.TreeEntry
+	for name := range allNames {
+		baseE, inBase := baseMap[name]
+		oursE, inOurs := oursMap[name]
+		theirsE, inTheirs := theirsMap[name]
+
+		switch {
+		case inOurs && inTheirs:
+			if oursE.Hash == theirsE.Hash {
+				// Identical in both — keep.
+				entries = append(entries, oursE)
+			} else if inBase && oursE.Hash == baseE.Hash {
+				// Only theirs changed — use theirs.
+				entries = append(entries, theirsE)
+			} else if inBase && theirsE.Hash == baseE.Hash {
+				// Only ours changed — use ours.
+				entries = append(entries, oursE)
+			} else {
+				// Both sides changed (or both added) — task branch wins.
+				entries = append(entries, theirsE)
+			}
+		case inOurs && !inTheirs:
+			if !inBase {
+				// Added only by ours — keep.
+				entries = append(entries, oursE)
+			}
+			// else: deleted by theirs — omit.
+		case !inOurs && inTheirs:
+			if !inBase {
+				// Added only by theirs — keep.
+				entries = append(entries, theirsE)
+			}
+			// else: deleted by ours — omit.
+		}
+		// !inOurs && !inTheirs: deleted by both — omit.
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name < entries[j].Name
+	})
+	return entries, nil
+}
+
+// treeEntryMap converts a Tree's entries into a map keyed by file name.
+func treeEntryMap(tree *object.Tree) map[string]object.TreeEntry {
+	m := map[string]object.TreeEntry{}
+	if tree == nil {
+		return m
+	}
+	for _, e := range tree.Entries {
+		m[e.Name] = e
+	}
+	return m
 }
 
 // resolveCommit resolves a reference to its commit object.

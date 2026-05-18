@@ -34,6 +34,11 @@ func NewMergeSupervisor(database *db.Database, paths *storage.Paths, intervalSec
 	}
 }
 
+// TickOnce runs one supervisor cycle synchronously. For testing only.
+func (ms *MergeSupervisor) TickOnce(ctx context.Context) {
+	ms.tick(ctx)
+}
+
 // Run starts the merge supervisor loop. It blocks until ctx is cancelled.
 func (ms *MergeSupervisor) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(ms.intervalSec) * time.Second)
@@ -99,6 +104,7 @@ func (ms *MergeSupervisor) processTask(ctx context.Context, task *db.Task) {
 		log.Printf("merge_supervisor: TransitionTaskState %q: %v", task.ID, err)
 		return
 	}
+	task.Status = db.TaskStatusMerging // keep in-memory copy in sync with DB
 
 	// Perform the merge in a temporary worktree.
 	mergeWorktreePath := filepath.Join(ms.paths.WorktreePath(task.ID) + "-merge")
