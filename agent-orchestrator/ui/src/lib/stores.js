@@ -27,12 +27,19 @@ export const router = createRouter()
 const { subscribe: toastSub, update: toastUpdate } = writable([])
 
 let toastSeq = 0
+const TOAST_MAX = 3
 export const toasts = {
   subscribe: toastSub,
-  add(message, type = 'info', duration = 4000) {
+  add(message, type = 'info', duration) {
     const id = ++toastSeq
-    toastUpdate(ts => [...ts, { id, message, type }])
-    setTimeout(() => toasts.remove(id), duration)
+    // errors persist until dismissed; success=5s; others=4s
+    const ms = duration ?? (type === 'error' ? 0 : type === 'success' ? 5000 : 4000)
+    toastUpdate(ts => {
+      const next = [...ts, { id, message, type, persistent: ms === 0 }]
+      // keep only the most recent TOAST_MAX
+      return next.length > TOAST_MAX ? next.slice(next.length - TOAST_MAX) : next
+    })
+    if (ms > 0) setTimeout(() => toasts.remove(id), ms)
   },
   remove(id) {
     toastUpdate(ts => ts.filter(t => t.id !== id))

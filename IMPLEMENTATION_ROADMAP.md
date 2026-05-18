@@ -1,8 +1,28 @@
 # Agent Orchestrator - Implementation Roadmap
 
 **Date**: May 2026  
-**Status**: Planning  
-**Total Tasks**: 41 across 5 phases
+**Status**: Phases 1–5 complete + Agentic Development Lifecycle (ADL) shipped  
+**Total Tasks**: 41 across 5 phases + ADL workflow (see plan files below)
+
+## Implementation Plan Files
+
+The implementation is tracked across two sequential plan documents:
+
+| File | Scope | Status |
+|---|---|---|
+| [`2026-05-16-plan.md`](./2026-05-16-plan.md) | Phase 1–5 foundation: core server, agents, LLM routing, UI, testing | ✅ Complete |
+| [`2026-05-16-workflow-plan.md`](./2026-05-16-workflow-plan.md) | Agentic Development Lifecycle: git server, state machine, review loop, merge orchestration, visibility, tests | ✅ Complete |
+
+The workflow plan (W1–W9) builds on top of the foundation plan and delivers:
+- Embedded smart-HTTP git server (pure Go, `go-git/v5`)
+- Full ADL state machine: `BACKLOG → DEVELOPING → AWAITING_REVIEW → REVIEWING → AWAITING_REVISION → AWAITING_MERGE → MERGING → COMPLETED`
+- Colocated and remote agent modes with per-task worktrees
+- Code review schema with markdown reviews driving state transitions
+- Parallel merge orchestration with file-lock conflict detection
+- State-transition history persisted and rendered as UI timeline
+- Comprehensive Go unit + integration tests and Playwright e2e tests
+
+---
 
 ---
 
@@ -661,5 +681,5 @@ This roadmap breaks down the Agent Orchestrator implementation into 5 progressiv
 
 ---
 
-**Next Steps**: Begin Phase 1 tasks in order. Start with Project Setup (#1), then Database (#2) and Config (#3) in parallel, then proceed to Provider Abstraction (#4), Server CLI (#5), and API (#6).
+**Status**: All five phases and the ADL workflow plan (W1–W9) are complete. See `2026-05-16-workflow-plan.md` for the full ADL implementation details and `SPEC.md` §10 for the state machine, git server, review schema, and merge orchestration specifications.
 

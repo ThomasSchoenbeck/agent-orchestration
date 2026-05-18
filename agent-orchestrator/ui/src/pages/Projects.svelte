@@ -3,6 +3,7 @@
   import { listProjects, createProject, deleteProject } from '../lib/api.js'
   import { router, toasts } from '../lib/stores.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
 
   // ── Svelte 5 runes ────────────────────────────────────────────────────────
   let projects = $state([])
@@ -110,9 +111,9 @@
   {/if}
 
   {#if loading}
-    <p class="text-gray-500 text-sm">Loading…</p>
+    <Skeleton rows={3} />
   {:else if projects.length === 0}
-    <p class="text-gray-500 text-sm">No projects yet. Create one to get started.</p>
+    <p class="text-gray-400 text-sm">No projects yet. Create one to get started.</p>
   {:else}
     <div class="flex flex-col gap-3">
       {#each projects as p (p.id)}

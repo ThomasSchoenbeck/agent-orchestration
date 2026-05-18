@@ -94,11 +94,19 @@ agents:
   heartbeat_interval_sec: 30
   task_poll_interval_sec: 5
   task_timeout_sec: 300
-  # port_pool_start: 18000        # first port assigned to agent test servers
-  # port_pool_size: 100           # number of ports in the pool
+
+  # Port pool for agent test/build servers.
+  # Each colocated agent is assigned a unique port from this range when it
+  # claims an execution-state task. Released when the agent exits the state.
+  # port_pool_start: 18000   # first port in the pool (default 18000)
+  # port_pool_size: 100      # number of ports available (default 100)
+
+  # How often the merge supervisor polls for AWAITING_MERGE tasks (seconds).
   # merge_supervisor_interval_sec: 10
 
 # Server-managed git storage (bare repos + agent worktrees).
+# The storage root holds one bare repo per project and one worktree directory
+# per colocated agent task. Defaults shown below.
 # storage:
-#   root: ./data                          # default; repos → ./data/repos/, worktrees → ./data/worktrees/
-#   worktree_retention_failed_hours: 168  # keep worktrees for failed tasks for 7 days
+#   root: ./data                          # repos → {root}/repos/{id}.git, worktrees → {root}/worktrees/{task_id}
+#   worktree_retention_failed_hours: 168  # retain failed-task worktrees for this many hours (default 168 = 7 days)

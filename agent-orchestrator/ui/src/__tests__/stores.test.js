@@ -90,6 +90,49 @@ describe('toasts store', () => {
     expect(get(toasts)).toHaveLength(0)
     vi.useRealTimers()
   })
+
+  it('error toasts are persistent (no auto-dismiss)', async () => {
+    vi.useFakeTimers()
+    const { toasts } = await import('../lib/stores.js')
+    toasts.error('something broke')
+    expect(get(toasts)).toHaveLength(1)
+    expect(get(toasts)[0].persistent).toBe(true)
+    vi.advanceTimersByTime(10000)
+    expect(get(toasts)).toHaveLength(1)
+    vi.useRealTimers()
+  })
+
+  it('success toasts auto-dismiss after 5s', async () => {
+    vi.useFakeTimers()
+    const { toasts } = await import('../lib/stores.js')
+    toasts.success('done')
+    expect(get(toasts)).toHaveLength(1)
+    vi.advanceTimersByTime(4999)
+    expect(get(toasts)).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(get(toasts)).toHaveLength(0)
+    vi.useRealTimers()
+  })
+
+  it('info toasts auto-dismiss after 4s', async () => {
+    vi.useFakeTimers()
+    const { toasts } = await import('../lib/stores.js')
+    toasts.info('heads up')
+    vi.advanceTimersByTime(4000)
+    expect(get(toasts)).toHaveLength(0)
+    vi.useRealTimers()
+  })
+
+  it('caps visible toasts at 3, dropping oldest', async () => {
+    const { toasts } = await import('../lib/stores.js')
+    toasts.error('e1')
+    toasts.error('e2')
+    toasts.error('e3')
+    toasts.error('e4')
+    const list = get(toasts)
+    expect(list).toHaveLength(3)
+    expect(list.map(t => t.message)).toEqual(['e2', 'e3', 'e4'])
+  })
 })
 
 // ── Loading counter ───────────────────────────────────────────────────────────

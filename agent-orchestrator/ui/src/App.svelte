@@ -83,11 +83,20 @@
 {#if $toasts.length > 0}
   <div class="fixed bottom-4 right-4 flex flex-col gap-2 z-50" role="status" aria-live="polite">
     {#each $toasts as t (t.id)}
-      <div class="px-4 py-3 rounded text-sm shadow-lg max-w-xs
+      <div class="flex items-start gap-3 px-4 py-3 rounded text-sm shadow-lg max-w-xs
         {t.type === 'success' ? 'bg-green-800 text-green-100' :
-         t.type === 'error'   ? 'bg-red-900  text-red-100'   :
+         t.type === 'error'   ? 'bg-red-900   text-red-100'   :
+         t.type === 'warning' ? 'bg-yellow-800 text-yellow-100' :
                                 'bg-surface-700 text-gray-200'}">
-        {t.message}
+        <span class="mt-0.5 shrink-0" aria-hidden="true">
+          {#if t.type === 'success'}✓{:else if t.type === 'error'}✕{:else if t.type === 'warning'}⚠{:else}ℹ{/if}
+        </span>
+        <span class="flex-1">{t.message}</span>
+        <button
+          onclick={() => toasts.remove(t.id)}
+          class="shrink-0 opacity-70 hover:opacity-100 leading-none"
+          aria-label="Dismiss notification"
+        >✕</button>
       </div>
     {/each}
   </div>

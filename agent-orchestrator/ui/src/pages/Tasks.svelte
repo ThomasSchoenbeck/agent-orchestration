@@ -3,6 +3,7 @@
   import { listTasks, listProjects, createTask, updateTask, deleteTask, getTaskTypes, getTaskRoles, listAllTaskLogs, listSettings, listRequirements, listFeatures, addTaskLink } from '../lib/api.js'
   import { toasts, router } from '../lib/stores.js'
   import AssistantSidebar from '../components/AssistantSidebar.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
 
   // ── Task list state ───────────────────────────────────────────────────────
   let tasks          = $state([])
@@ -482,9 +483,9 @@
     {/if}
 
     {#if loading && tasks.length === 0}
-      <p class="px-6 pb-4 text-gray-500 text-sm">Loading…</p>
+      <Skeleton rows={4} />
     {:else if tasks.length === 0}
-      <p class="px-6 pb-4 text-gray-500 text-sm">No tasks found.</p>
+      <p class="px-6 pb-4 text-gray-400 text-sm">No tasks found.</p>
     {:else}
       <div class="px-6 pb-4 flex flex-col gap-1.5">
         {#each tasks as t (t.id)}
@@ -596,7 +597,7 @@
     {#each chartTypeFilter as filterType (filterType)}
       <span class="flex items-center gap-1 px-2 py-0.5 bg-accent/20 text-accent text-xs rounded">
         {filterType}
-        <button onclick={() => { const next = new Set(chartTypeFilter); next.delete(filterType); chartTypeFilter = next }} class="hover:text-white">×</button>
+        <button onclick={() => { const next = new Set(chartTypeFilter); next.delete(filterType); chartTypeFilter = next }} class="hover:text-white" aria-label={`Remove ${filterType} filter`}>×</button>
       </span>
     {/each}
   </div>
@@ -604,9 +605,9 @@
   <!-- ── Log list ────────────────────────────────────────────────────────────── -->
   <div class="flex-1 overflow-y-auto text-xs">
     {#if logsLoading && taskLogs.length === 0}
-      <p class="p-4 text-gray-500">Loading…</p>
+      <Skeleton rows={4} mode="table" />
     {:else if visibleLogs.length === 0}
-      <p class="p-4 text-gray-500">No events match current filters.</p>
+      <p class="p-4 text-gray-400">No events match current filters.</p>
     {:else}
       <table class="w-full">
         <thead class="sticky top-0 bg-surface-800 z-10">

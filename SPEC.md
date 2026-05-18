@@ -819,23 +819,72 @@ The provider client exposes a single canonical tool schema (JSON Schema for `par
      done / re-plan if blocked
 ```
 
-### 10.2 Task state machine
+### 10.2 Task state machine (Agentic Development Lifecycle)
+
+The platform implements a full software-development lifecycle as a strict state machine. Every state change is recorded in `task_state_transitions` for audit and UI timeline rendering.
 
 ```
-queued ──claim──▶ claimed ──start──▶ running ──┬─▶ needs_review (if review required)
-                                               ├─▶ failed (with retry budget)
-                                               └─▶ done (auto-approved)
+                        ┌──────────┐
+                        │  BACKLOG │  task created / re-queued after failure
+                        └────┬─────┘
+                             │ dev agent claims
+                             ▼
+                        ┌──────────────┐
+           ┌──────────▶ │  DEVELOPING  │  worker agent has a worktree / clone
+           │            └──────┬───────┘
+           │                   │ agent pushes branch (post-receive hook)
+           │                   │  — or — POST /tasks/{id}/submit-for-review
+           │                   ▼
+           │            ┌──────────────────┐
+           │            │ AWAITING_REVIEW  │  waiting for a reviewer agent
+           │            └──────┬───────────┘
+           │                   │ reviewer agent claims
+           │                   ▼
+           │            ┌───────────┐
+           │            │ REVIEWING │  reviewer reads diff, writes markdown review
+           │            └──────┬────┘
+           │          ┌────────┴──────────────┐
+           │          │ changes_requested      │ approved
+           │          ▼                        ▼
+           │   ┌──────────────────┐    ┌───────────────────┐
+           └───│ AWAITING_REVISION│    │  AWAITING_MERGE   │
+               └──────────────────┘    └────────┬──────────┘
+                                                │ merge supervisor releases lock
+                                                ▼
+                                        ┌─────────┐
+                                        │ MERGING │  supervisor merges branch → main
+                                        └────┬────┘
+                                   ┌─────────┴──────────────┐
+                                   │ conflict / test fail    │ success
+                                   ▼                         ▼
+                          ┌──────────────────┐       ┌───────────┐
+                          │ AWAITING_REVISION │       │ COMPLETED │
+                          └──────────────────┘       └───────────┘
 
-needs_review ──approve──▶ approved ──integrate──▶ done
-needs_review ──reject ──▶ queued (new attempt) | cancelled
-failed ──retry──▶ queued (decrement budget)
-* ──cancel──▶ cancelled
+FAILED is a terminal state reachable from any execution state; retried by moving back to BACKLOG.
 ```
 
-Invariants:
-- A task in `claimed` or `running` always has a `claimed_by_agent_id` and a lease with TTL.
-- A task with `attempts >= max_attempts` cannot transition back to `queued` without human override.
-- All transitions are recorded in `AuditEvent`.
+**State categories**
+
+| Category | States |
+|---|---|
+| Queue (waiting for agent) | `BACKLOG`, `AWAITING_REVIEW`, `AWAITING_REVISION`, `AWAITING_MERGE` |
+| Execution (agent holds the task) | `DEVELOPING`, `REVIEWING`, `MERGING` |
+| Terminal | `COMPLETED`, `FAILED` |
+
+**Claim routing by role**
+
+| Agent role | Picks up from | Transitions to |
+|---|---|---|
+| `worker` | `BACKLOG`, `AWAITING_REVISION` | `DEVELOPING` |
+| `reviewer` | `AWAITING_REVIEW` | `REVIEWING` |
+| `merge_supervisor` | `AWAITING_MERGE` _(background)_ | `MERGING` |
+
+**Invariants**
+- Every state change writes a `task_state_transitions` row with `from_state`, `to_state`, `actor_agent_id`, `reason`, and `created_at`.
+- A task in any execution state always has `assigned_agent_id` set.
+- `COMPLETED` and `FAILED` are terminal; no further transitions without explicit human override.
+- A task with `attempts >= max_attempts` cannot auto-retry; requires human re-queue.
 
 ### 10.3 Workflows are declarative
 
@@ -846,6 +895,100 @@ Workflows live in `internal/workflow/defs/*.yaml` and declare nodes (task types)
 - Only the workflow engine, the chat brain (via tools), and explicit user actions can create tasks.
 - Every task has an `idempotency_key`. Repeat creations are merged.
 - Tasks created for a self-modifying workflow against the Forge repo itself carry a `target=self` flag and require an extra `human_approval` gate.
+
+### 10.5 Embedded git server
+
+The platform embeds a smart-HTTP git server (pure Go, no `git` binary required) using `github.com/go-git/go-git/v5`. It serves one bare repository per project under `/git/{project_slug}.git/`.
+
+**Endpoints**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/git/{slug}.git/info/refs?service=git-upload-pack` | Clone / fetch advertisement |
+| `POST` | `/git/{slug}.git/git-upload-pack` | Clone / fetch pack transfer |
+| `GET` | `/git/{slug}.git/info/refs?service=git-receive-pack` | Push advertisement |
+| `POST` | `/git/{slug}.git/git-receive-pack` | Push pack transfer + post-receive hook |
+
+**Post-receive hook**: when an agent pushes a branch matching `task/{task_id}` and the task is in `DEVELOPING`, the server atomically transitions it to `AWAITING_REVIEW` and records the pushed commit SHA on the task row (`branch_head_sha`, `last_push_at`).
+
+**Repository layout** (under `storage.root`, default `./data`):
+
+```
+./data/
+  repos/{project_id}.git/    ← bare repo; canonical source of truth
+  worktrees/{task_id}/       ← colocated-agent working tree (task-lifetime)
+```
+
+**Agent modes**
+
+| Mode | Claim response includes | Agent operation |
+|---|---|---|
+| `colocated` | `worktree_path` (on-disk path) | Server creates worktree; agent `cd`s there |
+| `remote` | `repo_url` + `branch` | Agent clones / fetches over HTTP |
+
+**Upstream mirroring**: if a project has `remote_url` configured, the server pushes `main` to the `upstream` remote after every successful merge. Push failures are logged and do not roll back the merge.
+
+**Auth**: out of scope for v1. Assume trusted network or reverse-proxy off-load.
+
+### 10.6 Code-review schema
+
+Every formal review of a task is a `task_reviews` row. Reviews drive state transitions; informal back-and-forth uses `task_comments` threaded under the review via `review_id`.
+
+**Schema**
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | TEXT | ULID primary key |
+| `task_id` | TEXT | FK → tasks |
+| `author_type` | TEXT | `user` \| `agent` |
+| `author_role` | TEXT | `reviewer`, `merge_supervisor`, etc. |
+| `author_id` | TEXT | agent ID or empty for users |
+| `status` | TEXT | `approved` \| `changes_requested` \| `revision_requested` |
+| `body` | TEXT | Markdown (fenced diff blocks, inline severity tags) |
+| `branch_head_sha` | TEXT | Commit the review was made against |
+| `created_at` | DATETIME | |
+
+**Status → state transition**
+
+| Review status | Task must be in | Transitions to |
+|---|---|---|
+| `approved` | `REVIEWING` | `AWAITING_MERGE` |
+| `changes_requested` | `REVIEWING` | `AWAITING_REVISION` |
+| `revision_requested` | `REVIEWING` | `AWAITING_REVISION` |
+
+**Synthetic reviews**: on merge failure, the merge supervisor creates a review with `author_type=system`, `author_role=merge_supervisor`, `status=revision_requested`, and the merge-fail log as the body. This moves the task to `AWAITING_REVISION` and surfaces the conflict to the developer.
+
+**API**
+
+- `GET /api/tasks/{id}/reviews` — list all reviews, oldest first
+- `POST /api/tasks/{id}/reviews` — create review (drives state transition)
+- `GET /api/tasks/{id}/reviews/{reviewID}` — single review
+
+### 10.7 Parallel merge orchestration
+
+The merge supervisor is a background goroutine that polls `AWAITING_MERGE` tasks and orchestrates conflict-free parallel merges.
+
+**File-lock algorithm**
+
+1. For each `AWAITING_MERGE` candidate, compute its changed-path set via `git diff main...task/{id} --name-only` (go-git tree walk).
+2. Check the `merge_locks` table (persisted; survives restarts) for any in-flight task whose path set overlaps with the candidate's.
+3. If **no overlap**: acquire a lock (insert row), transition task to `MERGING`, perform merge in a temporary worktree, release lock.
+4. If **overlap**: leave task in `AWAITING_MERGE`; retry next poll tick.
+
+Non-overlapping tasks merge **concurrently**. Overlapping tasks merge **serially** in arrival order.
+
+**Merge steps**
+
+1. Create a temporary worktree off current `main`.
+2. `git merge task/{id}` (go-git).
+3. On success: push updated `main` to bare repo, transition task to `COMPLETED`, optionally push to upstream remote.
+4. On failure (conflict or test fail): create synthetic review (§ 10.6), transition task to `AWAITING_REVISION`.
+
+**Configuration**
+
+| Key | Default | Description |
+|---|---|---|
+| `agents.merge_supervisor_interval_sec` | `10` | Polling interval |
 
 ---
 

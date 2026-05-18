@@ -5,6 +5,7 @@
     testProvider, seedProviders, getMetrics,
   } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
+  import Skeleton from '../components/Skeleton.svelte'
 
   // ── State ─────────────────────────────────────────────────────────────────
   let providers   = $state([])
@@ -302,9 +303,9 @@
 
   <!-- Provider list -->
   {#if loading}
-    <p class="text-gray-500 text-sm">Loading…</p>
+    <Skeleton rows={3} />
   {:else if providers.length === 0}
-    <p class="text-gray-500 text-sm mb-8">
+    <p class="text-gray-400 text-sm mb-8">
       No providers configured. Add one above or
       <button class="underline hover:text-gray-300" onclick={runSeed}>import from config</button>.
     </p>

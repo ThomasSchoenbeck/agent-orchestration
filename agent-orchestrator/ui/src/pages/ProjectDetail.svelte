@@ -11,6 +11,7 @@
   } from '../lib/api.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
   import AssistantSidebar from '../components/AssistantSidebar.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
 
   let { projectId } = $props()
 
@@ -317,10 +318,10 @@
     </nav>
 
   {#if loading}
-    <p class="text-gray-500 text-sm">Loading…</p>
+    <Skeleton rows={3} />
 
   {:else if !project}
-    <p class="text-gray-500 text-sm">Project not found.</p>
+    <p class="text-gray-400 text-sm">Project not found.</p>
 
   {:else}
     <!-- ── Project header ─────────────────────────────────────────────────── -->
@@ -439,7 +440,7 @@
                 <MarkdownEditor value={project.description} readonly={true} minHeight="0px" />
               </div>
             {:else}
-              <p class="text-sm text-gray-500 italic mb-3">No description.</p>
+              <p class="text-sm text-gray-400 italic mb-3">No description.</p>
             {/if}
 
             <div class="flex gap-4 flex-wrap text-xs text-gray-500 font-mono">
@@ -560,9 +561,9 @@
             </div>
           {:else}
             {#if filteredReqs.length === 0 && requirements.length === 0}
-              <p class="text-xs text-gray-500 py-2">No requirements yet. Use requirements to define what the project must do.</p>
+              <p class="text-xs text-gray-400 py-2">No requirements yet. Use requirements to define what the project must do.</p>
             {:else if filteredReqs.length === 0}
-              <p class="text-xs text-gray-500 py-2">No requirements match the current status filter.</p>
+              <p class="text-xs text-gray-400 py-2">No requirements match the current status filter.</p>
             {/if}
           {/each}
         </div>
@@ -666,9 +667,9 @@
             </div>
           {:else}
             {#if filteredFeats.length === 0 && features.length === 0}
-              <p class="text-xs text-gray-500 py-2">No features yet. Use features to track what the project ships.</p>
+              <p class="text-xs text-gray-400 py-2">No features yet. Use features to track what the project ships.</p>
             {:else if filteredFeats.length === 0}
-              <p class="text-xs text-gray-500 py-2">No features match the current status filter.</p>
+              <p class="text-xs text-gray-400 py-2">No features match the current status filter.</p>
             {/if}
           {/each}
         </div>
@@ -777,7 +778,7 @@
 
       <!-- Task list -->
       {#if tasks.length === 0}
-        <p class="text-gray-500 text-sm py-4">No tasks yet. Add the first one above.</p>
+        <p class="text-gray-400 text-sm py-4">No tasks yet. Add the first one above.</p>
       {:else}
         <div class="flex flex-col gap-2">
           {#each tasks as t (t.id)}

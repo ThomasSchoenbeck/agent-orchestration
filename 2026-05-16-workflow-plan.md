@@ -490,9 +490,9 @@ Verify: `task test:e2e` green.
 
 ## W9. Documentation & config example
 
-- [ ] Update `SPEC.md` with the ADL (state machine, review manifest schema, merge logic, git transports).
-- [ ] Update `config.yaml` with commented `storage:`, `remote_url:` (project-level), `agents.port_pool_start`, `agents.merge_supervisor_interval_sec`, `agents.worktree_retention_failed_hours`.
-- [ ] Update `IMPLEMENTATION_ROADMAP.md` to reference both plan files in order.
+- [x] Update `SPEC.md` with the ADL (state machine, review manifest schema, merge logic, git transports).
+- [x] Update `config.yaml` with commented `storage:`, `remote_url:` (project-level), `agents.port_pool_start`, `agents.merge_supervisor_interval_sec`, `agents.worktree_retention_failed_hours`.
+- [x] Update `IMPLEMENTATION_ROADMAP.md` to reference both plan files in order.
 
 Files:
 - `SPEC.md`, `IMPLEMENTATION_ROADMAP.md`, `agent-orchestrator/config.yaml`

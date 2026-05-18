@@ -13,6 +13,7 @@
     listComments, createComment, deleteComment,
   } from '../lib/api.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
 
   let { taskId } = $props()
 
@@ -357,10 +358,10 @@
   </nav>
 
   {#if loading}
-    <p class="text-gray-500 text-sm">Loading…</p>
+    <Skeleton rows={4} />
 
   {:else if !task}
-    <p class="text-gray-500 text-sm">Task not found.</p>
+    <p class="text-gray-400 text-sm">Task not found.</p>
 
   {:else}
     <!-- ── Task header ────────────────────────────────────────────────────── -->
@@ -479,7 +480,7 @@
                 <MarkdownEditor value={task.payload.description} readonly={true} minHeight="0px" />
               </div>
             {:else}
-              <p class="text-sm text-gray-500 italic mb-4">No description.</p>
+              <p class="text-sm text-gray-400 italic mb-4">No description.</p>
             {/if}
 
             <!-- Metadata -->
@@ -580,7 +581,7 @@
       {/if}
 
       {#if deps.length === 0}
-        <p class="text-xs text-gray-500">No dependencies. Add one to get soft warnings when this task is claimed while deps are incomplete.</p>
+        <p class="text-xs text-gray-400">No dependencies. Add one to get soft warnings when this task is claimed while deps are incomplete.</p>
       {:else}
         <div class="flex flex-col gap-2">
           {#each deps as dep (dep.depends_on_id)}
@@ -593,6 +594,7 @@
               <button
                 class="text-[10px] text-red-400 hover:text-red-300 shrink-0"
                 onclick={() => removeDep(dep.depends_on_id)}
+                aria-label="Remove dependency"
               >×</button>
             </div>
           {/each}
@@ -623,12 +625,12 @@
       </div>
 
       {#if checklist.length === 0}
-        <p class="text-xs text-gray-500 mb-3">No checklist items yet.</p>
+        <p class="text-xs text-gray-400 mb-3">No checklist items yet.</p>
       {:else}
         {#each checklistGroups as [groupLabel, items] (groupLabel)}
           <div class="mb-3">
             {#if groupLabel}
-              <p class="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">{groupLabel}</p>
+              <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">{groupLabel}</p>
             {/if}
             <div class="flex flex-col gap-1">
               {#each items as item (item.id)}
@@ -643,6 +645,7 @@
                   <button
                     class="text-[10px] text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity"
                     onclick={() => removeChecklistItem(item.id)}
+                    aria-label="Remove checklist item"
                   >×</button>
                 </div>
               {/each}
@@ -684,7 +687,7 @@
       </h3>
 
       {#if comments.length === 0}
-        <p class="text-xs text-gray-500 mb-3">No comments yet.</p>
+        <p class="text-xs text-gray-400 mb-3">No comments yet.</p>
       {:else}
         <div class="flex flex-col gap-3 mb-4">
           {#each comments as c (c.id)}
@@ -705,6 +708,7 @@
                   <button
                     class="ml-auto text-[10px] text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity"
                     onclick={() => removeComment(c.id)}
+                    aria-label="Delete comment"
                   >×</button>
                 </div>
                 <div class="text-xs text-gray-300 whitespace-pre-wrap break-words">{c.body}</div>
@@ -827,9 +831,9 @@
       <div class="mt-6">
         <h3 class="text-sm font-semibold text-gray-300 mb-3">Task Events</h3>
         {#if logsLoading}
-          <p class="text-xs text-gray-500">Loading events…</p>
+          <p class="text-xs text-gray-400">Loading events…</p>
         {:else if taskLogs.length === 0}
-          <p class="text-xs text-gray-500">No events yet.</p>
+          <p class="text-xs text-gray-400">No events yet.</p>
         {:else}
           <div class="flex flex-col gap-2">
             {#each taskLogs as log (log.id)}

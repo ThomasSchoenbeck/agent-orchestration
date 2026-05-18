@@ -5,6 +5,7 @@
   } from '../lib/api.js'
   import { listProviders } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
+  import Skeleton from '../components/Skeleton.svelte'
 
   // ── State ─────────────────────────────────────────────────────────────────
   let roles     = $state([])
@@ -393,9 +394,9 @@
 
   <!-- Role list -->
   {#if loading}
-    <p class="text-gray-500 text-sm">Loading…</p>
+    <Skeleton rows={3} />
   {:else if roles.length === 0}
-    <p class="text-gray-500 text-sm mb-8">
+    <p class="text-gray-400 text-sm mb-8">
       No role definitions yet. Add one above or
       <button class="underline hover:text-gray-300" onclick={runSeed}>import from config</button>.
     </p>
@@ -415,7 +416,7 @@
               </div>
 
               {#if role.description}
-                <p class="text-xs text-gray-500 mb-2">{role.description}</p>
+                <p class="text-xs text-gray-400 mb-2">{role.description}</p>
               {/if}
 
               <!-- Provider / model -->

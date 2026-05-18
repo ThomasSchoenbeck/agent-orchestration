@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { listAgents, listRoles, listAgentLogs } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
+  import Skeleton from '../components/Skeleton.svelte'
 
   // ── Agent list state ───────────────────────────────────────────────────────
   let agents         = $state([])
@@ -186,9 +187,9 @@
     </div>
 
     {#if loadingAgents && agents.length === 0}
-      <p class="px-6 pb-4 text-gray-500 text-sm">Loading…</p>
+      <Skeleton rows={3} />
     {:else if agents.length === 0}
-      <p class="px-6 pb-4 text-gray-500 text-sm">No agents registered.</p>
+      <p class="px-6 pb-4 text-gray-400 text-sm">No agents registered.</p>
     {:else}
       <div class="px-6 pb-4 grid gap-2">
         {#each agents as a (a.id)}
@@ -284,9 +285,9 @@
   <!-- ── Log list ────────────────────────────────────────────────────────────── -->
   <div class="flex-1 overflow-y-auto text-xs">
     {#if logsLoading && agentLogs.length === 0}
-      <p class="p-4 text-gray-500">Loading…</p>
+      <Skeleton rows={4} mode="table" />
     {:else if visibleLogs.length === 0}
-      <p class="p-4 text-gray-500">No events match current filters.</p>
+      <p class="p-4 text-gray-400">No events match current filters.</p>
     {:else}
       <table class="w-full">
         <thead class="sticky top-0 bg-surface-800 z-10">

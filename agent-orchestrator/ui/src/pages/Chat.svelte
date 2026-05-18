@@ -341,7 +341,7 @@
 
     <div class="flex-1 overflow-y-auto">
       {#if conversations.length === 0}
-        <p class="p-3 text-xs text-gray-500 text-center">No conversations yet</p>
+        <p class="p-3 text-xs text-gray-400 text-center">No conversations yet</p>
       {:else}
         {#each conversations as conv (conv.id)}
           <div
@@ -370,11 +370,13 @@
                   class="text-xs text-gray-600 hover:text-gray-400 transition-colors opacity-0 group-hover:opacity-100"
                   onclick={(e) => { e.stopPropagation(); startRename(conv.id, conv.title) }}
                   title="Rename"
+                  aria-label="Rename conversation"
                 >✎</button>
                 <button
                   class="text-xs text-red-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
                   onclick={(e) => { e.stopPropagation(); handleDelete(conv.id) }}
                   title="Delete"
+                  aria-label="Delete conversation"
                 >×</button>
               </div>
             {/if}
@@ -423,7 +425,7 @@
         aria-live="polite"
       >
         {#if messages.length === 0}
-          <p class="text-gray-500 text-sm text-center mt-12">Start a conversation with the orchestrator.</p>
+          <p class="text-gray-400 text-sm text-center mt-12">Start a conversation with the orchestrator.</p>
         {:else}
           {#each messages as m, i (i)}
             <div class="flex {m.role === 'user' ? 'justify-end' : 'justify-start'}">

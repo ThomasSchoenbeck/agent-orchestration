@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { listSettings, updateSetting, listChecklistTemplates, createChecklistTemplate, updateChecklistTemplate, deleteChecklistTemplate } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
+  import Skeleton from '../components/Skeleton.svelte'
 
   const AGENT_EVENTS = [
     { key: 'agent_registered', label: 'Agent Registered', desc: 'Agent joined or re-registered' },
@@ -199,12 +200,12 @@
   <h1 class="text-xl font-semibold text-gray-100 mb-6">Settings</h1>
 
   {#if loading}
-    <p class="text-gray-500 text-sm">Loading…</p>
+    <Skeleton rows={4} />
   {:else}
     <!-- Platform -->
     <section class="mb-8">
       <h2 class="text-base font-semibold text-gray-200 mb-1">Platform</h2>
-      <p class="text-xs text-gray-500 mb-4">Global behaviour settings that take effect immediately.</p>
+      <p class="text-xs text-gray-400 mb-4">Global behaviour settings that take effect immediately.</p>
 
       <div class="flex flex-col gap-4">
         <!-- Debug mode -->
@@ -252,7 +253,7 @@
     <!-- Agent Log Retention -->
     <section class="mb-8">
       <h2 class="text-base font-semibold text-gray-200 mb-1">Agent Log Retention</h2>
-      <p class="text-xs text-gray-500 mb-3">Note: rows for short-retention types may persist up to 24 h extra (partition boundary).</p>
+      <p class="text-xs text-gray-400 mb-3">Note: rows for short-retention types may persist up to 24 h extra (partition boundary).</p>
 
       <div class="flex items-center gap-3 mb-4">
         <label class="text-sm text-gray-400 w-40 shrink-0">Default (days)</label>
@@ -304,7 +305,7 @@
     <!-- Task Log Retention -->
     <section class="mb-8">
       <h2 class="text-base font-semibold text-gray-200 mb-1">Task Log Retention</h2>
-      <p class="text-xs text-gray-500 mb-3">Note: rows for short-retention types may persist up to 24 h extra (partition boundary).</p>
+      <p class="text-xs text-gray-400 mb-3">Note: rows for short-retention types may persist up to 24 h extra (partition boundary).</p>
 
       <div class="flex items-center gap-3 mb-4">
         <label class="text-sm text-gray-400 w-40 shrink-0">Default (days)</label>
@@ -375,7 +376,7 @@
     <!-- ── Checklist Templates ──────────────────────────────────────────────── -->
     <section class="mb-8">
       <h2 class="text-base font-semibold text-gray-200 mb-1">Checklist Templates</h2>
-      <p class="text-xs text-gray-500 mb-4">Reusable item lists you can apply to any task's checklist.</p>
+      <p class="text-xs text-gray-400 mb-4">Reusable item lists you can apply to any task's checklist.</p>
 
       {#if templates.length > 0}
         <div class="flex flex-col gap-2 mb-4">
@@ -404,7 +405,7 @@
                 <div class="flex items-start justify-between gap-3">
                   <div>
                     <p class="text-sm font-medium text-gray-200">{tpl.name}</p>
-                    <p class="text-xs text-gray-500 mt-0.5">{items.length} item{items.length !== 1 ? 's' : ''}{items.length > 0 ? ': ' + items.slice(0,3).join(', ') + (items.length > 3 ? '…' : '') : ''}</p>
+                    <p class="text-xs text-gray-400 mt-0.5">{items.length} item{items.length !== 1 ? 's' : ''}{items.length > 0 ? ': ' + items.slice(0,3).join(', ') + (items.length > 3 ? '…' : '') : ''}</p>
                   </div>
                   <div class="flex gap-2 shrink-0">
                     <button
@@ -423,7 +424,7 @@
           {/each}
         </div>
       {:else}
-        <p class="text-xs text-gray-500 mb-4">No templates yet.</p>
+        <p class="text-xs text-gray-400 mb-4">No templates yet.</p>
       {/if}
 
       <!-- Create new template -->

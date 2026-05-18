@@ -49,7 +49,7 @@ describe('Settings — rendering', () => {
 
   it('shows loading state initially', () => {
     render(Settings)
-    expect(screen.getByText(/Loading/i)).toBeInTheDocument()
+    expect(screen.getByRole('generic', { name: /Loading/i })).toBeInTheDocument()
   })
 
   it('renders Agent Log Retention section', async () => {

@@ -553,18 +553,18 @@ exactly matches the task's `role` field.
 
 ## Cross-cutting
 
-- [ ] **#59 Toast / error system improvements**
+- [x] **#59 Toast / error system improvements**
   - Currently toasts are plain text; add a `type` field (`success | error |
     warning | info`) with matching icon and colour
   - Auto-dismiss after 5 s for success; persist until dismissed for errors
   - Stack up to 3 visible toasts; older ones slide out the top
 
-- [ ] **#60 Loading skeletons**
+- [x] **#60 Loading skeletons**
   - Replace the plain "Loading…" text in every page with animated skeleton
     placeholder cards that match the real layout
   - `src/components/Skeleton.svelte` — configurable rows, card vs. table mode
 
-- [ ] **#61 Keyboard navigation and accessibility**
+- [x] **#61 Keyboard navigation and accessibility**
   - All modals trap focus (focus-trap-svelte or a small bespoke implementation)
   - All icon-only buttons have `aria-label`
   - Color contrast passes WCAG AA for both light and dark modes

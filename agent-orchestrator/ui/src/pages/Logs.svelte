@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { listLogs, listChatLog, listSettings } from '../lib/api.js'
   import { toasts, router } from '../lib/stores.js'
+  import Skeleton from '../components/Skeleton.svelte'
 
   // ── State ─────────────────────────────────────────────────────────────────
   let chatLog         = $state([])
@@ -273,9 +274,9 @@
   <!-- ── Log stream ─────────────────────────────────────────────────────────── -->
   <div class="flex-1 overflow-y-auto font-mono text-xs">
     {#if loading && logs.length === 0}
-      <p class="p-4 text-gray-500">Loading…</p>
+      <Skeleton rows={5} mode="table" />
     {:else if visibleLogs.length === 0}
-      <p class="p-4 text-gray-500">No log entries match current filters.</p>
+      <p class="p-4 text-gray-400">No log entries match current filters.</p>
     {:else}
       <table class="w-full">
         <thead class="sticky top-0 bg-surface-800 z-10">
