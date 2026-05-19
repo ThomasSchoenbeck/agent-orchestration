@@ -71,24 +71,43 @@ type LogsDBConfig struct {
 	Path string `yaml:"path"` // empty → use default path
 }
 
-// AgentConfig holds agent timing defaults.
+// AgentDefinition describes a single agent instance to launch.
+// Used under agents.definitions in config.yaml.
+type AgentDefinition struct {
+	Name    string   `yaml:"name"`
+	Roles   []string `yaml:"roles"`
+	Workdir string   `yaml:"workdir"` // overrides agents.workdir when set
+	Config  string   `yaml:"config"`  // overrides the main config path for this agent's LLM setup
+}
+
+// AgentConfig holds agent timing defaults and the list of agent instances.
 type AgentConfig struct {
-	HeartbeatIntervalSec         int    `yaml:"heartbeat_interval_sec"`
-	TaskPollIntervalSec          int    `yaml:"task_poll_interval_sec"`
-	TaskTimeoutSec               int    `yaml:"task_timeout_sec"`
-	MaxRetries                   int    `yaml:"max_retries"`               // max LLM call retries (Phase 4)
-	FallbackProvider             string `yaml:"fallback_provider"`         // provider name to fall back to (Phase 4)
-	CircuitBreakerThreshold      int    `yaml:"circuit_breaker_threshold"` // failures before opening circuit (Phase 4)
-	PortPoolStart                int    `yaml:"port_pool_start"`           // first port in agent test-port pool
-	PortPoolSize                 int    `yaml:"port_pool_size"`            // number of ports in pool
-	MergeSupervisorIntervalSec   int    `yaml:"merge_supervisor_interval_sec"`
-	Workdir                      string `yaml:"workdir"` // local root for agent code checkouts (remote mode)
+	HeartbeatIntervalSec         int               `yaml:"heartbeat_interval_sec"`
+	TaskPollIntervalSec          int               `yaml:"task_poll_interval_sec"`
+	TaskTimeoutSec               int               `yaml:"task_timeout_sec"`
+	MaxRetries                   int               `yaml:"max_retries"`               // max LLM call retries (Phase 4)
+	FallbackProvider             string            `yaml:"fallback_provider"`         // provider name to fall back to (Phase 4)
+	CircuitBreakerThreshold      int               `yaml:"circuit_breaker_threshold"` // failures before opening circuit (Phase 4)
+	PortPoolStart                int               `yaml:"port_pool_start"`           // first port in agent test-port pool
+	PortPoolSize                 int               `yaml:"port_pool_size"`            // number of ports in pool
+	MergeSupervisorIntervalSec   int               `yaml:"merge_supervisor_interval_sec"`
+	Workdir                      string            `yaml:"workdir"`     // default workdir root; per-agent gets {workdir}/{name}
+	ServerURL                    string            `yaml:"server_url"`  // orchestrator URL for agent-mode connections
+	Definitions                  []AgentDefinition `yaml:"definitions"` // agent instances to launch via "agents" subcommand
+
+	// Startup connection retry settings (used when the server may not be ready yet).
+	// Retry uses exponential backoff: delay doubles each attempt from InitialDelay up to MaxDelay.
+	ConnectInitialDelayMs int `yaml:"connect_initial_delay_ms"` // initial backoff after first failure (ms)
+	ConnectMaxDelayMs     int `yaml:"connect_max_delay_ms"`     // backoff ceiling (ms)
+	ConnectMaxRetries     int `yaml:"connect_max_retries"`      // 0 = retry indefinitely
 }
 
 // StorageConfig holds paths for server-managed git repos and worktrees.
 type StorageConfig struct {
-	Root                          string `yaml:"root"`
-	WorktreeRetentionFailedHours  int    `yaml:"worktree_retention_failed_hours"`
+	Root                         string `yaml:"root"`
+	ReposDir                     string `yaml:"repos_dir"`      // subdirectory under Root for bare repos (default: "repos")
+	WorktreesDir                 string `yaml:"worktrees_dir"`  // subdirectory under Root for agent worktrees (default: "worktrees")
+	WorktreeRetentionFailedHours int    `yaml:"worktree_retention_failed_hours"`
 }
 
 // ModelPricing holds per-model cost config (USD per 1M tokens).
@@ -230,6 +249,12 @@ func (c *Config) applyDefaults() {
 	if c.Storage.Root == "" {
 		c.Storage.Root = DefaultStorageRoot
 	}
+	if c.Storage.ReposDir == "" {
+		c.Storage.ReposDir = DefaultReposDir
+	}
+	if c.Storage.WorktreesDir == "" {
+		c.Storage.WorktreesDir = DefaultWorktreesDir
+	}
 	if c.Storage.WorktreeRetentionFailedHours == 0 {
 		c.Storage.WorktreeRetentionFailedHours = DefaultWorktreeRetentionFailedHours
 	}
@@ -241,6 +266,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Agents.MergeSupervisorIntervalSec == 0 {
 		c.Agents.MergeSupervisorIntervalSec = DefaultMergeSupervisorIntervalSec
+	}
+	if c.Agents.ConnectInitialDelayMs == 0 {
+		c.Agents.ConnectInitialDelayMs = DefaultConnectInitialDelayMs
+	}
+	if c.Agents.ConnectMaxDelayMs == 0 {
+		c.Agents.ConnectMaxDelayMs = DefaultConnectMaxDelayMs
+	}
+	if c.Agents.ConnectMaxRetries == 0 {
+		c.Agents.ConnectMaxRetries = DefaultConnectMaxRetries
 	}
 }
 

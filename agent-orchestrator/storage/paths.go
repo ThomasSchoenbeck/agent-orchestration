@@ -3,24 +3,44 @@ package storage
 
 import "path/filepath"
 
+const (
+	defaultReposDir     = "repos"
+	defaultWorktreesDir = "worktrees"
+)
+
 // Paths holds the resolved storage root and exposes path helpers.
 type Paths struct {
-	root string
+	root         string
+	reposDir     string
+	worktreesDir string
 }
 
-// New returns a Paths rooted at root (e.g. "./data").
-func New(root string) *Paths {
-	return &Paths{root: root}
+// New returns a Paths rooted at root.  reposDir and worktreesDir name the
+// subdirectories for bare repos and agent worktrees respectively; empty strings
+// fall back to "repos" and "worktrees".
+func New(root, reposDir, worktreesDir string) *Paths {
+	if reposDir == "" {
+		reposDir = defaultReposDir
+	}
+	if worktreesDir == "" {
+		worktreesDir = defaultWorktreesDir
+	}
+	return &Paths{root: root, reposDir: reposDir, worktreesDir: worktreesDir}
+}
+
+// Dirs returns the repos and worktrees subdirectory names.
+func (p *Paths) Dirs() (reposDir, worktreesDir string) {
+	return p.reposDir, p.worktreesDir
 }
 
 // RepoPath returns the absolute path for the bare git repo of a project.
-// Layout: {root}/repos/{projectID}.git/
+// Layout: {root}/{reposDir}/{projectID}.git/
 func (p *Paths) RepoPath(projectID string) string {
-	return filepath.Join(p.root, "repos", projectID+".git")
+	return filepath.Join(p.root, p.reposDir, projectID+".git")
 }
 
 // WorktreePath returns the absolute path for an agent worktree for a task.
-// Layout: {root}/worktrees/{taskID}/
+// Layout: {root}/{worktreesDir}/{taskID}/
 func (p *Paths) WorktreePath(taskID string) string {
-	return filepath.Join(p.root, "worktrees", taskID)
+	return filepath.Join(p.root, p.worktreesDir, taskID)
 }

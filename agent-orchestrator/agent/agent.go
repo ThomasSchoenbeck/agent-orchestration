@@ -84,14 +84,16 @@ func (a *Agent) ID() string { return a.id }
 func (a *Agent) Roles() []string { return a.roles }
 
 // Start registers with the server and begins the heartbeat + polling loops.
-// It returns after the loops are started; call Stop to terminate them.
+// It makes a single registration attempt and returns an error if it fails.
+// For automatic retry on startup, use StartWithReconnect instead.
 func (a *Agent) Start(ctx context.Context) error {
 	caps := map[string]interface{}{
 		"go_version": "1.22",
 	}
+
 	id, err := a.client.Register(ctx, a.name, a.roles, a.mode, caps)
 	if err != nil {
-		return fmt.Errorf("agent %q registration failed: %w", a.name, err)
+		return fmt.Errorf("agent %q: registration failed: %w", a.name, err)
 	}
 	a.id = id
 	log.Printf("agent %q registered (id=%s)", a.name, a.id)

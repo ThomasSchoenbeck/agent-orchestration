@@ -52,7 +52,7 @@ func TestFullLifecycleCompleted(t *testing.T) {
 	}
 
 	// Drive the merge supervisor one cycle.
-	sup := workflow.NewMergeSupervisor(srv.DB, storage.New(srv.StorageRoot), 0)
+	sup := workflow.NewMergeSupervisor(srv.DB, storage.New(srv.StorageRoot, "", ""), 0)
 	sup.TickOnce(ctx)
 
 	// Task must be COMPLETED.

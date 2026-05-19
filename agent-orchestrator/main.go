@@ -13,9 +13,9 @@
 //
 //	./agent-orchestrator agent --name worker-1 --roles worker --server http://localhost:8080
 //
-// Run multiple agents from a config file:
+// Run multiple agents defined in config.yaml:
 //
-//	./agent-orchestrator agents --config agents.yaml
+//	./agent-orchestrator agents --config config.yaml
 package main
 
 import (
@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"time"
 	"strings"
 	"sync"
 	"syscall"
@@ -37,8 +38,6 @@ import (
 	"agent-orchestrator/router"
 	"agent-orchestrator/server"
 	"agent-orchestrator/tools"
-
-	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -244,7 +243,7 @@ func runAgent(args []string) error {
 		return fmt.Errorf("--roles is required")
 	}
 
-	a, cleanup, err := buildAgent(*name, parseRoles(*rolesStr), *serverURL, *configPath, *workdir)
+	a, cleanup, cfg, err := buildAgent(*name, parseRoles(*rolesStr), *serverURL, *configPath, *workdir)
 	if err != nil {
 		return err
 	}
@@ -253,7 +252,7 @@ func runAgent(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := a.Start(ctx); err != nil {
+	if err := a.StartWithReconnect(ctx, reconnectCfg(cfg)); err != nil {
 		return err
 	}
 	log.Printf("agent %q running (roles: %v) → %s  [Ctrl-C to stop]", *name, a.Roles(), *serverURL)
@@ -268,13 +267,13 @@ func runAgent(args []string) error {
 // configPath is optional — when empty, a minimal default config is used and
 // the LLM executor is not wired up (polling-only mode).
 // The returned cleanup func must be called when the agent is done.
-func buildAgent(name string, roles []string, serverURL, configPath, workdir string) (*agent.Agent, func(), error) {
+func buildAgent(name string, roles []string, serverURL, configPath, workdir string) (*agent.Agent, func(), *config.Config, error) {
 	var cfg *config.Config
 	if configPath != "" {
 		var err error
 		cfg, err = config.Load(configPath)
 		if err != nil {
-			return nil, nil, fmt.Errorf("load config: %w", err)
+			return nil, nil, nil, fmt.Errorf("load config: %w", err)
 		}
 	} else {
 		cfg = defaultAgentConfig()
@@ -321,88 +320,70 @@ func buildAgent(name string, roles []string, serverURL, configPath, workdir stri
 		}
 	}
 
-	return a, cleanup, nil
+	return a, cleanup, cfg, nil
 }
 
 // -------------------------------------------------------------------------
-// agents subcommand — start multiple agents from a YAML config file
+// agents subcommand — start multiple agents from the main config file
 // -------------------------------------------------------------------------
-
-// agentsFile is the top-level structure of an agents.yaml config file.
-type agentsFile struct {
-	ServerURL string      `yaml:"server_url"` // default: http://localhost:8080
-	Workdir   string      `yaml:"workdir"`    // default workdir for all agents
-	Config    string      `yaml:"config"`     // default LLM config path (optional)
-	Agents    []agentSpec `yaml:"agents"`
-}
-
-// agentSpec defines one agent entry inside an agents.yaml file.
-type agentSpec struct {
-	Name    string   `yaml:"name"`
-	Roles   []string `yaml:"roles"`
-	Workdir string   `yaml:"workdir"` // overrides top-level workdir when set
-	Config  string   `yaml:"config"`  // overrides top-level config when set
-}
 
 func runAgents(args []string) error {
 	fs := flag.NewFlagSet("agents", flag.ExitOnError)
-	filePath := fs.String("config", "agents.yaml", "path to agents config YAML")
-	serverOverride := fs.String("server", "", "override server_url from config file")
+	configPath := fs.String("config", "config.yaml", "path to config YAML")
+	serverOverride := fs.String("server", "", "override agents.server_url from config")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	data, err := os.ReadFile(*filePath)
+	cfg, err := config.Load(*configPath)
 	if err != nil {
-		return fmt.Errorf("read agents config %q: %w", *filePath, err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
-	var af agentsFile
-	if err := yaml.Unmarshal(data, &af); err != nil {
-		return fmt.Errorf("parse agents config: %w", err)
+	if len(cfg.Agents.Definitions) == 0 {
+		return fmt.Errorf("config %q defines no agents under agents.definitions", *configPath)
 	}
 
+	serverURL := cfg.Agents.ServerURL
 	if *serverOverride != "" {
-		af.ServerURL = *serverOverride
+		serverURL = *serverOverride
 	}
-	if af.ServerURL == "" {
-		af.ServerURL = "http://localhost:8080"
-	}
-	if len(af.Agents) == 0 {
-		return fmt.Errorf("agents config %q defines no agents", *filePath)
+	if serverURL == "" {
+		serverURL = "http://localhost:8080"
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	var wg sync.WaitGroup
-	for _, spec := range af.Agents {
+	for _, def := range cfg.Agents.Definitions {
 		// Per-agent workdir: use explicit value when set; otherwise derive a
 		// unique sub-directory from the top-level workdir + agent name so
 		// multiple agents never share the same checkout root.
-		workdir := spec.Workdir
+		workdir := def.Workdir
 		if workdir == "" {
-			root := af.Workdir
+			root := cfg.Agents.Workdir
 			if root == "" {
 				root = ".agent-work"
 			}
-			workdir = filepath.Join(root, spec.Name)
+			workdir = filepath.Join(root, def.Name)
 		}
-		configPath := spec.Config
-		if configPath == "" {
-			configPath = af.Config
+		// Per-agent config override; fall back to the main config file.
+		agentConfig := def.Config
+		if agentConfig == "" {
+			agentConfig = *configPath
 		}
 
-		a, cleanup, err := buildAgent(spec.Name, spec.Roles, af.ServerURL, configPath, workdir)
+		a, cleanup, _, err := buildAgent(def.Name, def.Roles, serverURL, agentConfig, workdir)
 		if err != nil {
-			return fmt.Errorf("build agent %q: %w", spec.Name, err)
+			return fmt.Errorf("build agent %q: %w", def.Name, err)
 		}
 
-		if err := a.Start(ctx); err != nil {
+		if err := a.StartWithReconnect(ctx, reconnectCfg(cfg)); err != nil {
 			cleanup()
-			return fmt.Errorf("start agent %q: %w", spec.Name, err)
+			return fmt.Errorf("start agent %q: %w", def.Name, err)
 		}
-		log.Printf("agent %q started (roles: %v)", spec.Name, spec.Roles)
+		log.Printf("agent %q started (roles: %v)", def.Name, def.Roles)
 
 		wg.Add(1)
 		go func(a *agent.Agent, cleanup func(), name string) {
@@ -411,10 +392,10 @@ func runAgents(args []string) error {
 			<-ctx.Done()
 			log.Printf("agent %q: shutting down…", name)
 			a.Stop()
-		}(a, cleanup, spec.Name)
+		}(a, cleanup, def.Name)
 	}
 
-	log.Printf("agents: %d agent(s) running — Ctrl-C to stop", len(af.Agents))
+	log.Printf("agents: %d agent(s) running — Ctrl-C to stop", len(cfg.Agents.Definitions))
 	wg.Wait()
 	log.Println("agents: all stopped")
 	return nil
@@ -440,10 +421,22 @@ func defaultAgentConfig() *config.Config {
 		Server:   config.ServerConfig{Port: config.DefaultServerPort, Host: config.DefaultServerHost},
 		Database: config.DatabaseConfig{Type: config.DefaultDBType, Path: config.DefaultDBPath},
 		Agents: config.AgentConfig{
-			HeartbeatIntervalSec: config.DefaultHeartbeatIntervalSec,
-			TaskPollIntervalSec:  config.DefaultTaskPollIntervalSec,
-			TaskTimeoutSec:       config.DefaultTaskTimeoutSec,
+			HeartbeatIntervalSec:  config.DefaultHeartbeatIntervalSec,
+			TaskPollIntervalSec:   config.DefaultTaskPollIntervalSec,
+			TaskTimeoutSec:        config.DefaultTaskTimeoutSec,
+			ConnectInitialDelayMs: config.DefaultConnectInitialDelayMs,
+			ConnectMaxDelayMs:     config.DefaultConnectMaxDelayMs,
+			ConnectMaxRetries:     config.DefaultConnectMaxRetries,
 		},
+	}
+}
+
+// reconnectCfg builds an agent.ReconnectConfig from the loaded Config.
+func reconnectCfg(cfg *config.Config) agent.ReconnectConfig {
+	return agent.ReconnectConfig{
+		InitialDelay: time.Duration(cfg.Agents.ConnectInitialDelayMs) * time.Millisecond,
+		MaxDelay:     time.Duration(cfg.Agents.ConnectMaxDelayMs) * time.Millisecond,
+		MaxAttempts:  cfg.Agents.ConnectMaxRetries,
 	}
 }
 
@@ -467,14 +460,14 @@ Agent flags:
   --workdir string   Local workspace root for code checkouts (default: .agent-work)
   --config  string   Optional config YAML path
 
-Agents flags (start multiple agents from a config file):
-  --config string   Path to agents YAML (default "agents.yaml")
-  --server string   Override server_url from config file
+Agents flags (start multiple agents defined in config.yaml):
+  --config string   Path to config YAML (default "config.yaml")
+  --server string   Override agents.server_url from config
 
 Examples:
   agent-orchestrator server --config config.yaml --port 8080
   agent-orchestrator agent --name worker-1 --roles worker --server http://localhost:8080
   agent-orchestrator agent --name orch-1   --roles orchestrator,reviewer
-  agent-orchestrator agents --config agents.yaml
+  agent-orchestrator agents --config config.yaml
 `)
 }

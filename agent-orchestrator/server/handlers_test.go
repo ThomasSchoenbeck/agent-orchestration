@@ -30,6 +30,7 @@ func newTestServer(t *testing.T) (*server.Server, *db.Database) {
 			HeartbeatIntervalSec: 30,
 			TaskTimeoutSec:       300,
 		},
+		Storage: config.StorageConfig{Root: t.TempDir()},
 	}
 	reg := llm.NewRegistry()
 	srv := server.New(cfg, database, reg)

@@ -65,7 +65,7 @@ func New(cfg *config.Config, database *db.Database, llmReg *llm.Registry) *Serve
 	if err := rtr.LoadFromDB(database); err != nil {
 		log.Printf("server: router.LoadFromDB: %v", err)
 	}
-	stor := storage.New(cfg.Storage.Root)
+	stor := storage.New(cfg.Storage.Root, cfg.Storage.ReposDir, cfg.Storage.WorktreesDir)
 
 	poolStart := cfg.Agents.PortPoolStart
 	if poolStart == 0 {
@@ -94,10 +94,11 @@ func New(cfg *config.Config, database *db.Database, llmReg *llm.Registry) *Serve
 	return s
 }
 
-// ensureStorageDirs creates the repos/ and worktrees/ subdirectories under the
+// ensureStorageDirs creates the repos and worktrees subdirectories under the
 // storage root on startup (idempotent).
 func (s *Server) ensureStorageDirs() {
-	for _, sub := range []string{"repos", "worktrees"} {
+	reposDir, worktreesDir := s.storage.Dirs()
+	for _, sub := range []string{reposDir, worktreesDir} {
 		dir := filepath.Join(s.cfg.Storage.Root, sub)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			log.Printf("server: ensureStorageDirs %q: %v", dir, err)

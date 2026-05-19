@@ -26,7 +26,7 @@ func TestParallelMergeNonOverlappingFiles(t *testing.T) {
 	projectID, slug := makeProject(t, srv.BaseURL, "parallel-merge-test")
 	seedMainBranch(t, srv.BaseURL, slug)
 
-	sup := workflow.NewMergeSupervisor(srv.DB, storage.New(srv.StorageRoot), 0)
+	sup := workflow.NewMergeSupervisor(srv.DB, storage.New(srv.StorageRoot, "", ""), 0)
 
 	// --- Task A (touches a.go) ---
 	taskA := makeTask(t, srv.BaseURL, projectID)

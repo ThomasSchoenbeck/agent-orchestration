@@ -33,7 +33,7 @@ func TestSerialMergeOverlappingFiles(t *testing.T) {
 	projectID, slug := makeProject(t, srv.BaseURL, "serial-merge-test")
 	seedMainBranch(t, srv.BaseURL, slug)
 
-	sup := workflow.NewMergeSupervisor(srv.DB, storage.New(srv.StorageRoot), 0)
+	sup := workflow.NewMergeSupervisor(srv.DB, storage.New(srv.StorageRoot, "", ""), 0)
 
 	// --- Task A (shared.go v1) ---
 	taskA := makeTask(t, srv.BaseURL, projectID)

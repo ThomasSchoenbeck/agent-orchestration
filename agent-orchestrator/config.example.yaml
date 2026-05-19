@@ -59,6 +59,51 @@ agents:
   # Default: 5
   circuit_breaker_threshold: 5
 
+  # ── Startup connection retry ─────────────────────────────────────────────────
+  #
+  # When agents start at the same time as the server they may reach it before it
+  # is listening.  Retry uses exponential backoff: delay doubles after each
+  # failure, from connect_initial_delay_ms up to connect_max_delay_ms.
+  #
+  # Initial backoff after the first registration failure (milliseconds).  Default: 1000
+  connect_initial_delay_ms: 1000
+
+  # Backoff ceiling — delay will not grow beyond this (milliseconds).  Default: 30000
+  connect_max_delay_ms: 30000
+
+  # Maximum number of registration attempts.  0 = retry indefinitely.  Default: 10
+  connect_max_retries: 10
+
+  # ── Agent instances (used by the "agents" subcommand) ───────────────────────
+  #
+  # server_url: orchestrator URL that agents connect to.  Default: http://localhost:8080
+  server_url: "http://localhost:8080"
+
+  # workdir: root directory for agent code checkouts.
+  # Each agent without an explicit workdir gets {workdir}/{agent-name}.
+  workdir: ".agent-work"
+
+  # definitions: list of agent instances to launch with "agent-orchestrator agents".
+  #
+  # workdir resolution (highest → lowest priority):
+  #   1. per-agent workdir  — used as-is
+  #   2. agents.workdir/{agent-name}  — unique sub-dir per agent
+  #   3. .agent-work/{agent-name}  — default when no workdir is set at all
+  #
+  # config: per-agent override for the LLM config path.
+  # When omitted, the same config.yaml is reused (recommended).
+  definitions:
+    - name: worker-1
+      roles: [worker]
+      # workdir not set → .agent-work/worker-1
+
+    - name: worker-2
+      roles: [worker]
+      # workdir: /tmp/worker-2   # uncomment to use a custom path
+
+    - name: reviewer-1
+      roles: [reviewer]
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LLM Providers
 #
@@ -263,3 +308,25 @@ log_retention:
     task_failed: 90
     task_llm_round: 3
     task_tool_call: 3
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Storage
+#
+# Server-managed git storage. The storage root holds one bare repo per project
+# and one worktree directory per colocated agent task.
+# ─────────────────────────────────────────────────────────────────────────────
+storage:
+  # Base directory for all server-managed storage. Run the server from a
+  # dedicated work directory outside the source tree, or set an absolute path.
+  root: ./data
+
+  # Subdirectory under root where bare git repos are stored.
+  # Full path: {root}/{repos_dir}/{project_id}.git
+  repos_dir: repos
+
+  # Subdirectory under root where agent worktrees are checked out.
+  # Full path: {root}/{worktrees_dir}/{task_id}
+  worktrees_dir: worktrees
+
+  # How long to retain worktrees for failed tasks before cleanup (hours).
+  worktree_retention_failed_hours: 168

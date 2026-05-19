@@ -95,6 +95,26 @@ agents:
   task_poll_interval_sec: 5
   task_timeout_sec: 300
 
+  # Startup connection retry — exponential backoff from initial to max delay.
+  # Agents use these when the server may not be ready yet (e.g. started together).
+  connect_initial_delay_ms: 1000  # initial backoff after first failure (doubles each retry)
+  connect_max_delay_ms: 30000     # backoff ceiling
+  connect_max_retries: 10         # 0 = retry indefinitely
+
+  # Agent instances launched by "agent-orchestrator agents --config config.yaml"
+  server_url: "http://localhost:8080"
+  workdir: ".agent-work"
+  definitions:
+    - name: worker-1
+      roles: [worker]
+
+    - name: worker-2
+      roles: [worker]
+      workdir: ./tmp/worker-2
+
+    - name: reviewer-1
+      roles: [reviewer]
+
   # Port pool for agent test/build servers.
   # Each colocated agent is assigned a unique port from this range when it
   # claims an execution-state task. Released when the agent exits the state.
@@ -108,5 +128,7 @@ agents:
 # The storage root holds one bare repo per project and one worktree directory
 # per colocated agent task. Defaults shown below.
 # storage:
-#   root: ./data                          # repos → {root}/repos/{id}.git, worktrees → {root}/worktrees/{task_id}
+#   root: ./data                          # base directory for all server-managed storage
+#   repos_dir: repos                      # subdirectory for bare git repos  → {root}/{repos_dir}/{id}.git
+#   worktrees_dir: worktrees              # subdirectory for agent worktrees → {root}/{worktrees_dir}/{task_id}
 #   worktree_retention_failed_hours: 168  # retain failed-task worktrees for this many hours (default 168 = 7 days)

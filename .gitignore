@@ -8,6 +8,12 @@ node_modules
 *.db-wal
 *.db-shm
 
+## server runtime data (repos, worktrees, agent workdirs)
+## these are created relative to CWD when running the server from the project root
+agent-orchestrator/data/
+agent-orchestrator/data/repos/
+agent-orchestrator/data/worktrees/
+
 *.log
 # Added by code-review-graph
 .code-review-graph/
