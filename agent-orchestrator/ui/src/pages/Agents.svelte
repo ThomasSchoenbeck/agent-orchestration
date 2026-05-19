@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { listAgents, listRoles, listAgentLogs } from '../lib/api.js'
+  import { formatTimestamp } from '../lib/time.js'
   import { toasts } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
 
@@ -302,7 +303,7 @@
           {#each visibleLogs as l (l.id)}
             <tr class="border-t border-surface-700 hover:bg-surface-700/20">
               <td class="px-4 py-1 font-mono text-gray-500 whitespace-nowrap">
-                {new Date(l.timestamp).toLocaleTimeString()}
+                {formatTimestamp(l.timestamp)}
               </td>
               <td class="px-4 py-1 font-mono text-gray-400 truncate max-w-[7rem]">
                 {l.agent_name || l.agent_id?.slice(0,8) || '—'}

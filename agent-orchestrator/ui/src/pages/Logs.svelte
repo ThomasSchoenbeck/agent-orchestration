@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { listLogs, listChatLog, listSettings } from '../lib/api.js'
+  import { formatTimestamp } from '../lib/time.js'
   import { toasts, router } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
 
@@ -123,10 +124,7 @@
     return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="w-full h-full">${slices}<circle cx="${CX}" cy="${CY}" r="${R * 0.55}" fill="#1f2937"/></svg>`
   }
 
-  function formatTime(ts) {
-    if (!ts) return ''
-    try { return new Date(ts).toLocaleTimeString() } catch { return ts }
-  }
+  const formatTime = formatTimestamp
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   let timer = null

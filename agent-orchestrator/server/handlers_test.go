@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"agent-orchestrator/config"
@@ -564,5 +565,203 @@ func TestGetReviewByID(t *testing.T) {
 	_ = json.Unmarshal(gw.Body.Bytes(), &got)
 	if got.Body != "LGTM" {
 		t.Errorf("body = %q, want LGTM", got.Body)
+	}
+}
+
+// --- Concurrent claim exclusivity ---
+
+// TestClaimTask_OnlyOneAgentSucceeds sends two sequential claim requests for
+// the same task from two different agents and asserts exactly one succeeds
+// (200) and the other is rejected (409).
+func TestClaimTask_OnlyOneAgentSucceeds(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	if tw.Code != http.StatusCreated {
+		t.Fatalf("create task: expected 201, got %d", tw.Code)
+	}
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	// Register two agents.
+	registerAgent := func(name string) string {
+		t.Helper()
+		aw := do(t, srv, http.MethodPost, "/api/agents/register", map[string]interface{}{
+			"name": name, "roles": []string{"worker"},
+		})
+		var r map[string]string
+		_ = json.Unmarshal(aw.Body.Bytes(), &r)
+		return r["agent_id"]
+	}
+	agent1 := registerAgent("worker-a")
+	agent2 := registerAgent("worker-b")
+
+	c1 := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/claim", map[string]string{"agent_id": agent1})
+	c2 := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/claim", map[string]string{"agent_id": agent2})
+
+	s1, s2 := c1.Code, c2.Code
+	if !((s1 == http.StatusOK && s2 == http.StatusConflict) ||
+		(s1 == http.StatusConflict && s2 == http.StatusOK)) {
+		t.Fatalf("expected one 200 and one 409; got %d and %d", s1, s2)
+	}
+
+	// The winning agent should own the task.
+	var winner string
+	if s1 == http.StatusOK {
+		winner = agent1
+	} else {
+		winner = agent2
+	}
+	gw := do(t, srv, http.MethodGet, "/api/tasks/"+task.ID, nil)
+	var t2 db.Task
+	_ = json.Unmarshal(gw.Body.Bytes(), &t2)
+	if t2.AssignedAgentID != winner {
+		t.Errorf("task owned by %q, want %q", t2.AssignedAgentID, winner)
+	}
+}
+
+// TestClaimTask_OnlyOneAgentSucceeds_Concurrent is the same scenario driven
+// by two goroutines to stress the race detector.
+func TestClaimTask_OnlyOneAgentSucceeds_Concurrent(t *testing.T) {
+	// Use a real HTTP server so both goroutines make independent requests.
+	baseSrv, _ := newTestServer(t)
+	httpSrv := httptest.NewServer(baseSrv)
+	t.Cleanup(httpSrv.Close)
+
+	makeRequest := func(method, path string, body interface{}) *http.Response {
+		b, _ := json.Marshal(body)
+		req, _ := http.NewRequest(method, httpSrv.URL+path, bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		resp, _ := http.DefaultClient.Do(req)
+		return resp
+	}
+
+	// Create project and task.
+	projResp := makeRequest(http.MethodPost, "/api/projects", map[string]string{"name": "Test"})
+	var proj db.Project
+	_ = json.NewDecoder(projResp.Body).Decode(&proj)
+	_ = projResp.Body.Close()
+
+	taskResp := makeRequest(http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": proj.ID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.NewDecoder(taskResp.Body).Decode(&task)
+	_ = taskResp.Body.Close()
+
+	// Register two agents.
+	registerAgent := func(name string) string {
+		r := makeRequest(http.MethodPost, "/api/agents/register", map[string]interface{}{
+			"name": name, "roles": []string{"worker"},
+		})
+		var resp map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&resp)
+		_ = r.Body.Close()
+		return resp["agent_id"]
+	}
+	a1, a2 := registerAgent("concurrent-a"), registerAgent("concurrent-b")
+
+	// Both agents claim concurrently.
+	codes := make([]int, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		r := makeRequest(http.MethodPost, "/api/tasks/"+task.ID+"/claim", map[string]string{"agent_id": a1})
+		codes[0] = r.StatusCode
+		_ = r.Body.Close()
+	}()
+	go func() {
+		defer wg.Done()
+		r := makeRequest(http.MethodPost, "/api/tasks/"+task.ID+"/claim", map[string]string{"agent_id": a2})
+		codes[1] = r.StatusCode
+		_ = r.Body.Close()
+	}()
+	wg.Wait()
+
+	s1, s2 := codes[0], codes[1]
+	if !((s1 == http.StatusOK && s2 == http.StatusConflict) ||
+		(s1 == http.StatusConflict && s2 == http.StatusOK)) {
+		t.Fatalf("expected one 200 and one 409 from concurrent claims; got %d and %d", s1, s2)
+	}
+}
+
+// --- Role filtering on tasks/next ---
+
+// TestGetNextTask_RoleFiltering verifies that GetNextTask filters by role:
+// a worker agent only receives worker tasks and vice-versa.
+func TestGetNextTask_RoleFiltering(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	// Register a worker and a reviewer agent.
+	regAgent := func(name string, roles []string) string {
+		t.Helper()
+		aw := do(t, srv, http.MethodPost, "/api/agents/register", map[string]interface{}{
+			"name": name, "roles": roles,
+		})
+		var r map[string]string
+		_ = json.Unmarshal(aw.Body.Bytes(), &r)
+		return r["agent_id"]
+	}
+	workerID := regAgent("role-worker", []string{"worker"})
+	reviewerID := regAgent("role-reviewer", []string{"reviewer"})
+
+	// Create one task per role.
+	createTask := func(role string) string {
+		t.Helper()
+		tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+			"project_id": projectID, "type": "implement", "role": role,
+		})
+		var task db.Task
+		_ = json.Unmarshal(tw.Body.Bytes(), &task)
+		return task.ID
+	}
+	workerTaskID := createTask("worker")
+	reviewerTaskID := createTask("reviewer")
+
+	getNext := func(agentID, roles string) map[string]interface{} {
+		t.Helper()
+		w := do(t, srv, http.MethodGet, "/api/agents/"+agentID+"/tasks/next?roles="+roles, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("tasks/next: expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Task map[string]interface{} `json:"task"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return resp.Task
+	}
+
+	// Worker agent should receive the worker task.
+	workerNext := getNext(workerID, "worker")
+	if workerNext == nil {
+		t.Fatal("worker agent: expected a task, got nil")
+	}
+	if got := workerNext["id"].(string); got != workerTaskID {
+		t.Errorf("worker got task %q, want %q", got, workerTaskID)
+	}
+
+	// Reviewer agent should receive the reviewer task.
+	reviewerNext := getNext(reviewerID, "reviewer")
+	if reviewerNext == nil {
+		t.Fatal("reviewer agent: expected a task, got nil")
+	}
+	if got := reviewerNext["id"].(string); got != reviewerTaskID {
+		t.Errorf("reviewer got task %q, want %q", got, reviewerTaskID)
+	}
+
+	// After the worker task is claimed, worker agent should get nil.
+	cw := do(t, srv, http.MethodPost, "/api/tasks/"+workerTaskID+"/claim", map[string]string{"agent_id": workerID})
+	if cw.Code != http.StatusOK {
+		t.Fatalf("claim worker task: expected 200, got %d", cw.Code)
+	}
+
+	noNext := getNext(workerID, "worker")
+	if noNext != nil {
+		t.Errorf("worker agent: expected nil after task claimed, got %v", noNext)
 	}
 }

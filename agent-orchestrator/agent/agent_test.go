@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"agent-orchestrator/agent"
 	"agent-orchestrator/api"
 	"agent-orchestrator/config"
+	"agent-orchestrator/db"
 )
 
 func testConfig() *config.Config {
@@ -186,5 +188,169 @@ func TestServerClient_Heartbeat(t *testing.T) {
 	_, _ = c.Register(ctx, "test", []string{"worker"}, "remote", nil)
 	if err := c.Heartbeat(ctx, "agent-test-123"); err != nil {
 		t.Fatalf("Heartbeat: %v", err)
+	}
+}
+
+// taskOnceServer builds a mock server that serves the given task from
+// tasks/next exactly once, then returns nil. It also handles register,
+// heartbeat, and claim endpoints.
+// Returns the server, a pointer to the tasks/next call counter, and a pointer
+// to the claim call counter.
+func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
+	t.Helper()
+	const agentID = "agent-poll-test"
+	var nextCalls, claimCalls atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/agents/register", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(api.RegisterAgentResponse{AgentID: agentID})
+	})
+	mux.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/heartbeat"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case strings.Contains(r.URL.Path, "/tasks/next"):
+			if nextCalls.Add(1) == 1 {
+				_ = json.NewEncoder(w).Encode(task)
+			} else {
+				_ = json.NewEncoder(w).Encode(nil)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	mux.HandleFunc("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/claim") {
+			claimCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(task)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, &nextCalls, &claimCalls
+}
+
+// TestAgent_PollLoop_PicksUpTask verifies that when tasks/next returns a task,
+// the agent proceeds to call the claim endpoint exactly once.
+func TestAgent_PollLoop_PicksUpTask(t *testing.T) {
+	task := &db.Task{
+		ID:     "task-poll-001",
+		Type:   "implement",
+		Role:   "worker",
+		Status: db.TaskStatusBacklog,
+	}
+	srv, _, claimCalls := taskOnceServer(t, task)
+
+	cfg := testConfig()
+	cfg.Agents.TaskPollIntervalSec = 1
+
+	a := agent.NewAgent("poll-test", []string{"worker"}, srv.URL, cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	// Wait for the first claim.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for claim (got %d)", claimCalls.Load())
+		case <-time.After(100 * time.Millisecond):
+			if claimCalls.Load() >= 1 {
+				goto claimed
+			}
+		}
+	}
+claimed:
+	// After the task is claimed, tasks/next returns nil. Wait two poll
+	// intervals to confirm the agent does NOT claim a second time.
+	time.Sleep(2500 * time.Millisecond)
+	if claimCalls.Load() > 1 {
+		t.Errorf("expected exactly 1 claim, got %d", claimCalls.Load())
+	}
+}
+
+// TestAgent_PollLoop_SkipsWrongRoleTask verifies that an agent with role
+// "worker" never claims a task whose role requirement is "reviewer".
+// The mock simulates the server's role filter: tasks/next only returns a task
+// when the ?roles= param includes the task's required role.
+func TestAgent_PollLoop_SkipsWrongRoleTask(t *testing.T) {
+	reviewerTask := &db.Task{
+		ID:     "task-reviewer-only",
+		Type:   "review",
+		Role:   "reviewer",
+		Status: db.TaskStatusBacklog,
+	}
+
+	var claimCalls atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/agents/register", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(api.RegisterAgentResponse{AgentID: "role-test-agent"})
+	})
+	mux.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/heartbeat"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case strings.Contains(r.URL.Path, "/tasks/next"):
+			// Only serve the task when the agent requests the "reviewer" role.
+			roles := r.URL.Query().Get("roles")
+			if strings.Contains(roles, "reviewer") {
+				_ = json.NewEncoder(w).Encode(reviewerTask)
+			} else {
+				_ = json.NewEncoder(w).Encode(nil)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	mux.HandleFunc("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/claim") {
+			claimCalls.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	cfg := testConfig()
+	cfg.Agents.TaskPollIntervalSec = 1
+
+	// Worker agent — should never claim the reviewer task.
+	a := agent.NewAgent("worker-only", []string{"worker"}, srv.URL, cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	// Wait 2.5× the poll interval; claim must remain zero.
+	time.Sleep(2500 * time.Millisecond)
+
+	if claimCalls.Load() > 0 {
+		t.Errorf("worker agent must not claim reviewer task; got %d claim calls", claimCalls.Load())
 	}
 }

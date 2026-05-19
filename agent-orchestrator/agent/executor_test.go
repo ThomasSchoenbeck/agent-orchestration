@@ -3,9 +3,11 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,12 +22,17 @@ import (
 )
 
 // mockLLMProvider is a minimal LLMProvider that returns a fixed response.
+// Set chatErr to simulate LLM failures.
 type mockLLMProvider struct {
 	name     string
 	response llm.ChatResponse
+	chatErr  error
 }
 
 func (m *mockLLMProvider) Chat(_ context.Context, _ llm.ChatRequest) (llm.ChatResponse, error) {
+	if m.chatErr != nil {
+		return llm.ChatResponse{}, m.chatErr
+	}
 	return m.response, nil
 }
 func (m *mockLLMProvider) Embed(_ context.Context, _ llm.EmbedRequest) (llm.EmbedResponse, error) {
@@ -363,5 +370,183 @@ func TestRouter_LoadFromDB_DisabledRoleSkipped(t *testing.T) {
 	_, err = rtr.RouteByRole("disabled-role")
 	if err == nil {
 		t.Error("expected error routing to disabled role, got nil")
+	}
+}
+
+// fullExecMockServer builds a mock HTTP server suitable for end-to-end agent
+// tests that exercise the poll → claim → LLM → submit-result path.
+// The task is served from tasks/next on the first call only.
+// Returns the server and pointers to: nextCalls, claimCalls, resultCalls,
+// and the last-received result status.
+func fullExecMockServer(t *testing.T, task *db.Task) (
+	srv *httptest.Server,
+	nextCalls, claimCalls, resultCalls *atomic.Int32,
+	resultStatus *atomic.Value,
+) {
+	t.Helper()
+	const agentID = "full-exec-agent"
+	nextCalls = new(atomic.Int32)
+	claimCalls = new(atomic.Int32)
+	resultCalls = new(atomic.Int32)
+	resultStatus = new(atomic.Value)
+	resultStatus.Store("")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/agents/register", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(api.RegisterAgentResponse{AgentID: agentID})
+	})
+	mux.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/heartbeat"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		case strings.Contains(r.URL.Path, "/tasks/next"):
+			if nextCalls.Add(1) == 1 {
+				_ = json.NewEncoder(w).Encode(task)
+			} else {
+				_ = json.NewEncoder(w).Encode(nil)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/claim", func(w http.ResponseWriter, r *http.Request) {
+		claimCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(task)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, r *http.Request) {
+		var req api.SubmitTaskResultRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		resultStatus.Store(req.Status)
+		resultCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv = httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return
+}
+
+// TestAgent_FullTaskExecution exercises the complete poll → claim → LLM →
+// submit-result path and asserts the result endpoint is called with
+// status = "completed".
+func TestAgent_FullTaskExecution(t *testing.T) {
+	task := &db.Task{
+		ID:      "full-exec-task",
+		Type:    "implement",
+		Role:    "worker",
+		Status:  db.TaskStatusBacklog,
+		Payload: map[string]interface{}{"description": "Write hello world"},
+	}
+	srv, _, _, resultCalls, resultStatus := fullExecMockServer(t, task)
+
+	cfg := buildExecutorConfig()
+	cfg.Agents.TaskPollIntervalSec = 1
+
+	reg := llm.NewRegistry()
+	_ = reg.Register("mock", &mockLLMProvider{
+		name: "mock",
+		response: llm.ChatResponse{
+			Content:    "Task completed.",
+			StopReason: "end_turn",
+			TokensUsed: 50,
+		},
+	})
+
+	rtr := router.New(cfg, reg)
+	toolReg := tools.NewRegistry()
+
+	a := agent.NewAgent("full-exec", []string{"worker"}, srv.URL, cfg)
+	a.WithExecutor(rtr, toolReg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for result submission (got %d)", resultCalls.Load())
+		case <-time.After(100 * time.Millisecond):
+			if resultCalls.Load() >= 1 {
+				if got := resultStatus.Load().(string); got != "completed" {
+					t.Errorf("result status = %q, want %q", got, "completed")
+				}
+				return
+			}
+		}
+	}
+}
+
+// TestAgent_LLMFailure_MarksTaskFailed verifies that an LLM error causes the
+// result endpoint to be called with status = "failed", and that the agent
+// continues polling afterwards.
+func TestAgent_LLMFailure_MarksTaskFailed(t *testing.T) {
+	task := &db.Task{
+		ID:      "fail-exec-task",
+		Type:    "implement",
+		Role:    "worker",
+		Status:  db.TaskStatusBacklog,
+		Payload: map[string]interface{}{"description": "Fail me"},
+	}
+	srv, nextCalls, _, resultCalls, resultStatus := fullExecMockServer(t, task)
+
+	cfg := buildExecutorConfig()
+	cfg.Agents.TaskPollIntervalSec = 1
+
+	reg := llm.NewRegistry()
+	_ = reg.Register("mock", &mockLLMProvider{
+		name:    "mock",
+		chatErr: errors.New("simulated LLM error"),
+	})
+
+	rtr := router.New(cfg, reg)
+	toolReg := tools.NewRegistry()
+
+	a := agent.NewAgent("fail-exec", []string{"worker"}, srv.URL, cfg)
+	a.WithExecutor(rtr, toolReg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	// Wait for the failed result to be submitted.
+	deadline := time.After(8 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for result submission (got %d)", resultCalls.Load())
+		case <-time.After(100 * time.Millisecond):
+			if resultCalls.Load() >= 1 {
+				if got := resultStatus.Load().(string); got != "failed" {
+					t.Errorf("result status = %q, want %q", got, "failed")
+				}
+				goto resultReceived
+			}
+		}
+	}
+resultReceived:
+	// After the failure, the agent should continue polling. The mock now
+	// returns nil from tasks/next. Verify nextCalls keeps increasing.
+	callsBefore := nextCalls.Load()
+	time.Sleep(2500 * time.Millisecond)
+	if nextCalls.Load() <= callsBefore {
+		t.Errorf("agent stopped polling after LLM failure (calls before=%d after=%d)",
+			callsBefore, nextCalls.Load())
 	}
 }

@@ -96,7 +96,7 @@ describe('Tasks — rendering', () => {
     })
   })
 
-  it('shows Queue button for BACKLOG and FAILED tasks', async () => {
+  it('shows Queue button for FAILED and COMPLETED tasks', async () => {
     stubFetch()
     render(Tasks)
     await waitFor(() => {
@@ -200,10 +200,10 @@ describe('Tasks — create form', () => {
 
 // ── Queue action ──────────────────────────────────────────────────────────────
 describe('Tasks — queue action', () => {
-  it('PUTs status=BACKLOG when Queue is clicked', async () => {
+  it('POSTs to /queue endpoint when Queue is clicked', async () => {
     vi.stubGlobal('fetch', vi.fn((url, opts = {}) => {
-      if (opts.method === 'PUT') {
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ...TASKS[0], status: 'BACKLOG' }) })
+      if (opts.method === 'POST' && url.includes('/queue')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ...TASKS[2], status: 'BACKLOG' }) })
       }
       let data
       if (url.includes('/api/task-logs'))    data = TASK_LOGS
@@ -220,11 +220,10 @@ describe('Tasks — queue action', () => {
     await user.click(screen.getAllByText('Queue')[0])
 
     await waitFor(() => {
-      const putCall = fetch.mock.calls.find(([url, opts]) =>
-        url.includes('/api/tasks/') && opts?.method === 'PUT'
+      const postCall = fetch.mock.calls.find(([url, opts]) =>
+        url.includes('/api/tasks/') && url.includes('/queue') && opts?.method === 'POST'
       )
-      expect(putCall).toBeTruthy()
-      expect(JSON.parse(putCall[1].body).status).toBe('BACKLOG')
+      expect(postCall).toBeTruthy()
     })
   })
 })

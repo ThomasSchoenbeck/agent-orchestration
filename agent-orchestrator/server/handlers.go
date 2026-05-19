@@ -397,6 +397,33 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		api.WriteJSON(w, http.StatusOK, t)
 
+	case "queue":
+		// POST /api/tasks/{id}/queue
+		// Re-queues a FAILED or COMPLETED task by resetting it to BACKLOG and
+		// clearing the agent assignment so it can be picked up again.
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		t, err := s.db.GetTask(r.Context(), id)
+		if err != nil {
+			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+			return
+		}
+		if t.Status != db.TaskStatusFailed && t.Status != db.TaskStatusCompleted {
+			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput,
+				"can only queue tasks that are FAILED or COMPLETED")
+			return
+		}
+		s.releaseTaskResources(t)
+		t.Status = db.TaskStatusBacklog
+		t.AssignedAgentID = ""
+		if err := s.db.UpdateTask(r.Context(), t); err != nil {
+			s.internalError(w, err)
+			return
+		}
+		api.WriteJSON(w, http.StatusOK, t)
+
 	case "unqueue":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w)

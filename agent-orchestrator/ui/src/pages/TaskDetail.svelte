@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { router, toasts } from '../lib/stores.js'
   import {
-    getTask, updateTask, deleteTask, unqueueTask,
+    getTask, updateTask, deleteTask, queueTask, unqueueTask,
     getProject, listTaskLogs,
     listTaskLinks, addTaskLink, removeTaskLink,
     listRequirements, listFeatures,
@@ -13,6 +13,7 @@
     listComments, createComment, deleteComment,
   } from '../lib/api.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
+  import { formatTimestamp } from '../lib/time.js'
   import Skeleton from '../components/Skeleton.svelte'
 
   let { taskId } = $props()
@@ -56,23 +57,32 @@
     FAILED:            'bg-red-900 text-red-300',
   }
 
-  function formatDate(iso) {
-    if (!iso) return '—'
-    const d = new Date(iso)
-    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
-  }
+  const formatDate = formatTimestamp
 
   // ── Data loading ──────────────────────────────────────────────────────────
   async function loadLogs(id) {
-    logsLoading = true
+    if (taskLogs.length === 0) logsLoading = true
     try {
       const data = await listTaskLogs(id)
-      taskLogs = Array.isArray(data) ? data : []
+      const incoming = Array.isArray(data) ? data : []
+      if (JSON.stringify(incoming) !== JSON.stringify(taskLogs)) {
+        taskLogs = incoming
+      }
     } catch (e) {
-      taskLogs = []
+      // keep existing logs on transient errors
     } finally {
       logsLoading = false
     }
+  }
+
+  async function pollTask() {
+    try {
+      const t = await getTask(taskId)
+      if (t && t.updated_at !== task?.updated_at) {
+        task = t
+      }
+    } catch (_) {}
+    loadLogs(taskId)
   }
 
   async function loadAll() {
@@ -319,7 +329,7 @@
 
   async function handleQueue() {
     try {
-      const updated = await updateTask(taskId, { status: 'BACKLOG' })
+      const updated = await queueTask(taskId)
       task = updated
       toasts.success('Task queued')
       loadLogs(taskId)
@@ -331,7 +341,7 @@
   let logsTimer
   onMount(() => {
     loadAll()
-    logsTimer = setInterval(() => loadLogs(taskId), 5_000)
+    logsTimer = setInterval(pollTask, 5_000)
   })
   onDestroy(() => clearInterval(logsTimer))
 </script>
@@ -839,7 +849,7 @@
             {#each taskLogs as log (log.id)}
               <div class="flex items-start gap-3 text-xs">
                 <span class="shrink-0 text-gray-500 font-mono w-36">
-                  {new Date(log.timestamp).toLocaleTimeString()}
+                  {formatTimestamp(log.timestamp)}
                 </span>
                 <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium
                   {log.event_type.includes('failed') || log.event_type.includes('error')

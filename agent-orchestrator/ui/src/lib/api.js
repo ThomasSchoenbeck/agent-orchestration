@@ -50,6 +50,7 @@ export const getTask    = (id)    => get(`/api/tasks/${id}`)
 export const createTask = (data)  => post('/api/tasks', data)
 export const updateTask = (id, d) => put(`/api/tasks/${id}`, d)
 export const deleteTask = (id)    => del(`/api/tasks/${id}`)
+export const queueTask   = (id)  => post(`/api/tasks/${id}/queue`)
 export const unqueueTask = (id)  => post(`/api/tasks/${id}/unqueue`)
 export const listTaskLogs = (taskId) => get(`/api/tasks/${taskId}/logs`)
 

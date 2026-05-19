@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { listTasks, listProjects, createTask, updateTask, deleteTask, getTaskTypes, getTaskRoles, listAllTaskLogs, listSettings, listRequirements, listFeatures, addTaskLink } from '../lib/api.js'
+  import { listTasks, listProjects, createTask, updateTask, deleteTask, queueTask, getTaskTypes, getTaskRoles, listAllTaskLogs, listSettings, listRequirements, listFeatures, addTaskLink } from '../lib/api.js'
   import { toasts, router } from '../lib/stores.js'
   import AssistantSidebar from '../components/AssistantSidebar.svelte'
   import Skeleton from '../components/Skeleton.svelte'
@@ -306,6 +306,15 @@
     }
   }
 
+  async function queueTaskAction(id) {
+    try {
+      await queueTask(id)
+      await loadTasks()
+    } catch (e) {
+      toasts.error('Queue failed: ' + e.message)
+    }
+  }
+
   async function remove(id) {
     if (!confirm('Delete this task?')) return
     try {
@@ -513,10 +522,10 @@
                 {/if}
               </div>
               <div class="flex items-center gap-1.5 shrink-0">
-                {#if t.status === 'BACKLOG' || t.status === 'FAILED'}
+                {#if t.status === 'FAILED' || t.status === 'COMPLETED'}
                   <button
                     class="text-[10px] text-yellow-400 hover:text-yellow-300"
-                    onclick={(e) => { e.stopPropagation(); setStatus(t.id, 'BACKLOG') }}
+                    onclick={(e) => { e.stopPropagation(); queueTaskAction(t.id) }}
                   >Queue</button>
                 {/if}
                 <button
