@@ -226,7 +226,7 @@ func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int3
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/claim") {
 			claimCalls.Add(1)
-			_ = json.NewEncoder(w).Encode(task)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"task": task})
 			return
 		}
 		w.WriteHeader(http.StatusOK)

@@ -363,7 +363,8 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		t, _ := s.db.GetTask(r.Context(), id)
-		api.WriteJSON(w, http.StatusOK, t)
+		claimResp := s.prepareClaimResponse(r.Context(), t, body.AgentID)
+		api.WriteJSON(w, http.StatusOK, claimResp)
 
 	case "result":
 		if r.Method != http.MethodPost {

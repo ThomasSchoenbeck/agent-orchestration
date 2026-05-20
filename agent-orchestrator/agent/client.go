@@ -68,13 +68,19 @@ func (c *ServerClient) GetNextTask(ctx context.Context, agentID string, roles []
 }
 
 // ClaimTask claims a task for this agent.
+// The server returns api.ClaimTaskResponse; we extract just the task.
 func (c *ServerClient) ClaimTask(ctx context.Context, taskID, agentID string) (*db.Task, error) {
 	body := map[string]string{"agent_id": agentID}
-	var task db.Task
-	if err := c.post(ctx, fmt.Sprintf("/api/tasks/%s/claim", taskID), body, &task); err != nil {
+	var resp struct {
+		Task *db.Task `json:"task"`
+	}
+	if err := c.post(ctx, fmt.Sprintf("/api/tasks/%s/claim", taskID), body, &resp); err != nil {
 		return nil, err
 	}
-	return &task, nil
+	if resp.Task == nil {
+		return nil, fmt.Errorf("claim: server returned nil task")
+	}
+	return resp.Task, nil
 }
 
 // SubmitTaskResult submits a completed or failed task result.

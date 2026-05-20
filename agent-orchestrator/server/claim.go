@@ -31,14 +31,18 @@ func (s *Server) prepareClaimResponse(ctx context.Context, task *db.Task, agentI
 		// Continue with default (remote) behaviour.
 	}
 
-	// Allocate a port from the pool.
-	port, err := s.portPool.Acquire()
-	if err != nil {
-		log.Printf("claim: port pool exhausted for task %q: %v", task.ID, err)
-	} else {
-		task.AssignedPort = port
-		resp.AssignedPort = port
+	// Allocate a port from the pool only if the task does not already have one
+	// (tasks/next provisions the port when it first dequeues the task; the
+	// explicit /claim endpoint may be called afterwards and must not double-allocate).
+	if task.AssignedPort == 0 {
+		port, err := s.portPool.Acquire()
+		if err != nil {
+			log.Printf("claim: port pool exhausted for task %q: %v", task.ID, err)
+		} else {
+			task.AssignedPort = port
+		}
 	}
+	resp.AssignedPort = task.AssignedPort
 
 	isColocated := agent != nil && agent.Mode == "colocated"
 	branchName := fmt.Sprintf("task/%s", task.ID)

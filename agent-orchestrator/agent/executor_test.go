@@ -415,7 +415,7 @@ func fullExecMockServer(t *testing.T, task *db.Task) (
 	mux.HandleFunc("/api/tasks/"+task.ID+"/claim", func(w http.ResponseWriter, r *http.Request) {
 		claimCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(task)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"task": task})
 	})
 	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, r *http.Request) {
 		var req api.SubmitTaskResultRequest
