@@ -62,6 +62,52 @@ func (d *Database) CreateTaskLog(ctx context.Context, l *TaskLog) error {
 	return err
 }
 
+// DeleteTaskLogs deletes task log rows across all partitions.
+// If before is non-zero, only rows with timestamp < before are deleted.
+// If before is zero, all rows in all partitions are deleted.
+// Returns the total number of rows deleted.
+func (d *Database) DeleteTaskLogs(ctx context.Context, before time.Time) (int64, error) {
+	if d.LogDB == nil {
+		return 0, nil
+	}
+	rows, err := d.LogDB.db.QueryContext(ctx,
+		"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ?",
+		taskLogPrefix+"_%")
+	if err != nil {
+		return 0, fmt.Errorf("delete task logs: list partitions: %w", err)
+	}
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		tables = append(tables, name)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var total int64
+	for _, tbl := range tables {
+		var res interface{ RowsAffected() (int64, error) }
+		var execErr error
+		if before.IsZero() {
+			res, execErr = d.LogDB.db.ExecContext(ctx, "DELETE FROM "+tbl)
+		} else {
+			res, execErr = d.LogDB.db.ExecContext(ctx, "DELETE FROM "+tbl+" WHERE timestamp < ?", before.UTC())
+		}
+		if execErr != nil {
+			return total, fmt.Errorf("delete task logs from %s: %w", tbl, execErr)
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+	return total, nil
+}
+
 // ListTaskLogs queries across partition tables that overlap [since, until].
 // Returns events ordered by timestamp ASC.
 func (d *Database) ListTaskLogs(ctx context.Context, f TaskLogFilters) ([]*TaskLog, error) {

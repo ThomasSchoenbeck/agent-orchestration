@@ -751,7 +751,16 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Claim the task and enrich the response with workspace details.
+		// Atomically claim the task before enriching the response.
+		// Without ClaimTask here, every poll returns the same BACKLOG task and
+		// calls UpdateTask, flooding the log with "Task updated" entries.
+		if err := s.db.ClaimTask(r.Context(), task.ID, agentID); err != nil {
+			// Race: another agent claimed it between GetNextTask and here.
+			// Return nil so the caller retries on its next poll cycle.
+			api.WriteJSON(w, http.StatusOK, nil)
+			return
+		}
+		task, _ = s.db.GetTask(r.Context(), task.ID)
 		claimResp := s.prepareClaimResponse(r.Context(), task, agentID)
 		api.WriteJSON(w, http.StatusOK, claimResp)
 		return
@@ -1117,6 +1126,20 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		api.WriteJSON(w, http.StatusCreated, l)
 
+	case http.MethodDelete:
+		cutoff := time.Now().UTC().Add(24 * time.Hour) // default: delete all
+		if b := r.URL.Query().Get("before"); b != "" {
+			if t, err := time.Parse(time.RFC3339, b); err == nil {
+				cutoff = t
+			}
+		}
+		n, err := s.db.DeleteOldLogs(r.Context(), cutoff)
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		api.WriteJSON(w, http.StatusOK, map[string]int64{"deleted": n})
+
 	default:
 		methodNotAllowed(w)
 	}
@@ -1127,10 +1150,8 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 // =========================================================================
 
 func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w)
-		return
-	}
+	switch r.Method {
+	case http.MethodGet:
 	f := db.TaskLogFilters{
 		TaskID:    r.URL.Query().Get("task_id"),
 		ProjectID: r.URL.Query().Get("project_id"),
@@ -1157,6 +1178,24 @@ func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
 		logs = []*db.TaskLog{}
 	}
 	api.WriteJSON(w, http.StatusOK, logs)
+
+	case http.MethodDelete:
+		var before time.Time
+		if b := r.URL.Query().Get("before"); b != "" {
+			if t, err := time.Parse(time.RFC3339, b); err == nil {
+				before = t
+			}
+		}
+		n, err := s.db.DeleteTaskLogs(r.Context(), before)
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		api.WriteJSON(w, http.StatusOK, map[string]int64{"deleted": n})
+
+	default:
+		methodNotAllowed(w)
+	}
 }
 
 // =========================================================================
@@ -1164,37 +1203,53 @@ func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
 // =========================================================================
 
 func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		f := db.AgentLogFilters{
+			AgentID:     r.URL.Query().Get("agent_id"),
+			EventType:   r.URL.Query().Get("event_type"),
+			TaskID:      r.URL.Query().Get("task_id"),
+			ExecutionID: r.URL.Query().Get("execution_id"),
+			Search:      r.URL.Query().Get("search"),
+			Limit:       500,
+		}
+		if since := r.URL.Query().Get("since"); since != "" {
+			if t, err := time.Parse(time.RFC3339, since); err == nil {
+				f.Since = t
+			}
+		}
+		if until := r.URL.Query().Get("until"); until != "" {
+			if t, err := time.Parse(time.RFC3339, until); err == nil {
+				f.Until = t
+			}
+		}
+		logs, err := s.db.ListAgentLogs(r.Context(), f)
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		if logs == nil {
+			logs = []*db.AgentLog{}
+		}
+		api.WriteJSON(w, http.StatusOK, logs)
+
+	case http.MethodDelete:
+		var before time.Time
+		if b := r.URL.Query().Get("before"); b != "" {
+			if t, err := time.Parse(time.RFC3339, b); err == nil {
+				before = t
+			}
+		}
+		n, err := s.db.DeleteAgentLogs(r.Context(), before)
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		api.WriteJSON(w, http.StatusOK, map[string]int64{"deleted": n})
+
+	default:
 		methodNotAllowed(w)
-		return
 	}
-	f := db.AgentLogFilters{
-		AgentID:     r.URL.Query().Get("agent_id"),
-		EventType:   r.URL.Query().Get("event_type"),
-		TaskID:      r.URL.Query().Get("task_id"),
-		ExecutionID: r.URL.Query().Get("execution_id"),
-		Search:      r.URL.Query().Get("search"),
-		Limit:       500,
-	}
-	if since := r.URL.Query().Get("since"); since != "" {
-		if t, err := time.Parse(time.RFC3339, since); err == nil {
-			f.Since = t
-		}
-	}
-	if until := r.URL.Query().Get("until"); until != "" {
-		if t, err := time.Parse(time.RFC3339, until); err == nil {
-			f.Until = t
-		}
-	}
-	logs, err := s.db.ListAgentLogs(r.Context(), f)
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	if logs == nil {
-		logs = []*db.AgentLog{}
-	}
-	api.WriteJSON(w, http.StatusOK, logs)
 }
 
 // =========================================================================

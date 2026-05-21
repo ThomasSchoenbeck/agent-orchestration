@@ -81,6 +81,10 @@ export const listLogs = (params = {}) => {
   const qs = new URLSearchParams(params).toString()
   return get(`/api/logs${qs ? '?' + qs : ''}`)
 }
+export const deleteLogs = (before) => {
+  const qs = before ? '?before=' + encodeURIComponent(before) : ''
+  return request('DELETE', `/api/logs${qs}`)
+}
 
 // ── Metrics ──────────────────────────────────────────────────────────────────
 export const getMetrics = () => get('/api/metrics')
@@ -120,11 +124,19 @@ export const listAgentLogs = (params = {}) => {
   const qs = new URLSearchParams(params).toString()
   return get(`/api/agent-logs${qs ? '?' + qs : ''}`)
 }
+export const deleteAgentLogs = (before) => {
+  const qs = before ? '?before=' + encodeURIComponent(before) : ''
+  return request('DELETE', `/api/agent-logs${qs}`)
+}
 
 // ── Task logs (collection endpoint, distinct from per-task /api/tasks/:id/logs) ─
 export const listAllTaskLogs = (params = {}) => {
   const qs = new URLSearchParams(params).toString()
   return get(`/api/task-logs${qs ? '?' + qs : ''}`)
+}
+export const deleteAllTaskLogs = (before) => {
+  const qs = before ? '?before=' + encodeURIComponent(before) : ''
+  return request('DELETE', `/api/task-logs${qs}`)
 }
 
 // ── Requirements ─────────────────────────────────────────────────────────────

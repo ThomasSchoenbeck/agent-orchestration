@@ -754,14 +754,10 @@ func TestGetNextTask_RoleFiltering(t *testing.T) {
 		t.Errorf("reviewer got task %q, want %q", got, reviewerTaskID)
 	}
 
-	// After the worker task is claimed, worker agent should get nil.
-	cw := do(t, srv, http.MethodPost, "/api/tasks/"+workerTaskID+"/claim", map[string]string{"agent_id": workerID})
-	if cw.Code != http.StatusOK {
-		t.Fatalf("claim worker task: expected 200, got %d", cw.Code)
-	}
-
+	// tasks/next now atomically claims the task, so the worker task is already
+	// in DEVELOPING after the first getNext call. A second poll should return nil.
 	noNext := getNext(workerID, "worker")
 	if noNext != nil {
-		t.Errorf("worker agent: expected nil after task claimed, got %v", noNext)
+		t.Errorf("worker agent: expected nil after task claimed by tasks/next, got %v", noNext)
 	}
 }

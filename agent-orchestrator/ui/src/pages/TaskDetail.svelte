@@ -880,14 +880,14 @@
     <div class="p-5 bg-surface-800 rounded border border-surface-600">
       <h3 class="text-sm font-semibold text-gray-200 mb-3">Actions</h3>
       <div class="flex gap-2 flex-wrap">
-        {#if task.status === 'FAILED'}
+        {#if task.status === 'FAILED' || task.status === 'COMPLETED'}
           <button
             class="px-3 py-1.5 text-sm border border-yellow-600 text-yellow-400
                    hover:bg-yellow-900 hover:border-yellow-500 rounded transition-colors"
             onclick={handleQueue}
-          >Retry (→ BACKLOG)</button>
+          >{task.status === 'FAILED' ? 'Retry (→ BACKLOG)' : 'Queue (→ BACKLOG)'}</button>
         {/if}
-        {#if task.status === 'BACKLOG' || task.status === 'AWAITING_REVIEW' || task.status === 'AWAITING_REVISION' || task.status === 'AWAITING_MERGE'}
+        {#if task.status === 'AWAITING_REVIEW' || task.status === 'AWAITING_REVISION' || task.status === 'AWAITING_MERGE'}
           <button
             class="px-3 py-1.5 text-sm border border-orange-600 text-orange-400
                    hover:bg-orange-900 hover:border-orange-500 rounded transition-colors"

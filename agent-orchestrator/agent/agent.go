@@ -132,7 +132,17 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := a.client.Heartbeat(ctx, a.id); err != nil {
-				log.Printf("agent %q heartbeat error: %v", a.name, err)
+				log.Printf("agent %q heartbeat error: %v — retrying in 5s", a.name, err)
+				select {
+				case <-time.After(5 * time.Second):
+					if err2 := a.client.Heartbeat(ctx, a.id); err2 != nil {
+						log.Printf("agent %q heartbeat retry failed: %v", a.name, err2)
+					}
+				case <-ctx.Done():
+					return
+				case <-a.done:
+					return
+				}
 			}
 		}
 	}

@@ -222,7 +222,7 @@ func (s *Server) runMaintenance(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n, err := s.db.MarkOfflineAgents(ctx, s.cfg.Agents.HeartbeatIntervalSec*2)
+			n, err := s.db.MarkOfflineAgents(ctx, s.cfg.Agents.HeartbeatIntervalSec*3)
 			if err != nil {
 				log.Printf("maintenance: MarkOfflineAgents: %v", err)
 			} else if n > 0 {

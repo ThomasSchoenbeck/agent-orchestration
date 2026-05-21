@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { listLogs, listChatLog, listSettings } from '../lib/api.js'
+  import { listLogs, listChatLog, listSettings, deleteLogs, deleteAgentLogs, deleteAllTaskLogs } from '../lib/api.js'
   import { formatTimestamp } from '../lib/time.js'
   import { toasts, router } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
@@ -142,6 +142,38 @@
     timer = setInterval(load, intervalMs)
   })
   onDestroy(() => clearInterval(timer))
+
+  // ── Clear handlers ─────────────────────────────────────────────────────────
+  async function handleClearSystemLogs() {
+    if (!confirm('Delete all system logs? This cannot be undone.')) return
+    try {
+      const { deleted } = await deleteLogs()
+      toasts.success(`Deleted ${deleted} system log entries`)
+      load()
+    } catch (e) {
+      toasts.error('Failed to clear system logs: ' + e.message)
+    }
+  }
+
+  async function handleClearAgentLogs() {
+    if (!confirm('Delete all agent logs? This cannot be undone.')) return
+    try {
+      const { deleted } = await deleteAgentLogs()
+      toasts.success(`Deleted ${deleted} agent log entries`)
+    } catch (e) {
+      toasts.error('Failed to clear agent logs: ' + e.message)
+    }
+  }
+
+  async function handleClearTaskLogs() {
+    if (!confirm('Delete all task logs? This cannot be undone.')) return
+    try {
+      const { deleted } = await deleteAllTaskLogs()
+      toasts.success(`Deleted ${deleted} task log entries`)
+    } catch (e) {
+      toasts.error('Failed to clear task logs: ' + e.message)
+    }
+  }
 </script>
 
 <div class="flex flex-col h-full overflow-hidden">
@@ -184,6 +216,21 @@
     {/if}
     <span class="ml-auto text-gray-600">{visibleLogs.length} entries · auto-refresh 10 s</span>
     <button class="text-gray-500 hover:text-gray-300" onclick={load}>↻</button>
+    <button
+      class="px-2 py-1 text-xs rounded bg-red-900/40 text-red-400 hover:bg-red-900/70 transition-colors"
+      onclick={handleClearSystemLogs}
+      title="Delete all system logs"
+    >Clear system logs</button>
+    <button
+      class="px-2 py-1 text-xs rounded bg-red-900/40 text-red-400 hover:bg-red-900/70 transition-colors"
+      onclick={handleClearAgentLogs}
+      title="Delete all agent logs"
+    >Clear agent logs</button>
+    <button
+      class="px-2 py-1 text-xs rounded bg-red-900/40 text-red-400 hover:bg-red-900/70 transition-colors"
+      onclick={handleClearTaskLogs}
+      title="Delete all task logs"
+    >Clear task logs</button>
   </div>
 
   <!-- ── Charts row ─────────────────────────────────────────────────────────── -->
