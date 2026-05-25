@@ -550,3 +550,131 @@ resultReceived:
 			callsBefore, nextCalls.Load())
 	}
 }
+
+// TestExecutor_PostsCompletionComment verifies that after a successful task
+// the executor calls POST /api/tasks/{id}/comments with the agent as author.
+func TestExecutor_PostsCompletionComment(t *testing.T) {
+	const agentID = "comment-agent"
+	var commentCalls atomic.Int32
+	var commentBody atomic.Value
+	commentBody.Store("")
+
+	task := &db.Task{
+		ID:      "comment-task",
+		Type:    "implement",
+		Role:    "worker",
+		Status:  db.TaskStatusDeveloping,
+		Payload: map[string]interface{}{"description": "Do something"},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/comments", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			commentCalls.Add(1)
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if b, ok := body["body"].(string); ok {
+				commentBody.Store(b)
+			}
+		}
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := buildExecutorConfig()
+	reg := llm.NewRegistry()
+	_ = reg.Register("mock", &mockLLMProvider{
+		name: "mock",
+		response: llm.ChatResponse{
+			Content:    "Task done successfully.",
+			StopReason: "end_turn",
+			TokensUsed: 42,
+		},
+	})
+	rtr := router.New(cfg, reg)
+	client := agent.NewServerClient(srv.URL)
+	exec := agent.NewExecutor(rtr, tools.NewRegistry(), client, agentID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	exec.Run(ctx, task)
+
+	if commentCalls.Load() < 1 {
+		t.Error("expected at least one POST to /comments, got none")
+	}
+	body := commentBody.Load().(string)
+	if body == "" {
+		t.Error("expected non-empty comment body")
+	}
+	if !strings.Contains(body, "completed") {
+		t.Errorf("comment body should mention 'completed', got: %q", body)
+	}
+}
+
+// TestExecutor_LogsErrorToServer verifies that when the LLM fails, the executor
+// ships an error-level entry to POST /api/logs.
+func TestExecutor_LogsErrorToServer(t *testing.T) {
+	const agentID = "log-agent"
+	var logCalls atomic.Int32
+	var logLevel atomic.Value
+	logLevel.Store("")
+
+	task := &db.Task{
+		ID:      "log-fail-task",
+		Type:    "implement",
+		Role:    "worker",
+		Status:  db.TaskStatusDeveloping,
+		Payload: map[string]interface{}{"description": "Fail me"},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/comments", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			logCalls.Add(1)
+			var entry map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&entry)
+			if lvl, ok := entry["level"].(string); ok {
+				logLevel.Store(lvl)
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := buildExecutorConfig()
+	reg := llm.NewRegistry()
+	_ = reg.Register("mock", &mockLLMProvider{
+		name:    "mock",
+		chatErr: errors.New("simulated LLM error"),
+	})
+	rtr := router.New(cfg, reg)
+	client := agent.NewServerClient(srv.URL)
+	exec := agent.NewExecutor(rtr, tools.NewRegistry(), client, agentID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	exec.Run(ctx, task)
+
+	if logCalls.Load() < 1 {
+		t.Error("expected at least one POST to /api/logs, got none")
+	}
+	if got := logLevel.Load().(string); got != "error" {
+		t.Errorf("expected log level %q, got %q", "error", got)
+	}
+}

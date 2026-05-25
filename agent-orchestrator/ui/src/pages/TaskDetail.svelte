@@ -1,60 +1,75 @@
 <script>
-  import { onMount, onDestroy } from 'svelte'
-  import { router, toasts } from '../lib/stores.js'
+  import { onMount, onDestroy } from "svelte"
+  import { router, toasts } from "../lib/stores.js"
   import {
-    getTask, updateTask, deleteTask, queueTask, unqueueTask,
-    getProject, listTaskLogs,
-    listTaskLinks, addTaskLink, removeTaskLink,
-    listRequirements, listFeatures,
-    listTaskDependencies, addTaskDependency, removeTaskDependency,
+    getTask,
+    updateTask,
+    deleteTask,
+    queueTask,
+    unqueueTask,
+    getProject,
+    listTaskLogs,
+    listTaskLinks,
+    addTaskLink,
+    removeTaskLink,
+    listRequirements,
+    listFeatures,
+    listTaskDependencies,
+    addTaskDependency,
+    removeTaskDependency,
     listProjectTasks,
-    listChecklistItems, createChecklistItem, updateChecklistItem,
-    deleteChecklistItem, cloneChecklistIteration,
-    listComments, createComment, deleteComment,
-  } from '../lib/api.js'
-  import MarkdownEditor from '../components/MarkdownEditor.svelte'
-  import { formatTimestamp } from '../lib/time.js'
-  import Skeleton from '../components/Skeleton.svelte'
+    listChecklistItems,
+    createChecklistItem,
+    updateChecklistItem,
+    deleteChecklistItem,
+    cloneChecklistIteration,
+    listComments,
+    createComment,
+    deleteComment,
+  } from "../lib/api.js"
+  import MarkdownEditor from "../components/MarkdownEditor.svelte"
+  import { formatTimestamp } from "../lib/time.js"
+  import Skeleton from "../components/Skeleton.svelte"
 
   let { taskId } = $props()
 
   // ── State ─────────────────────────────────────────────────────────────────
-  let task        = $state(null)
-  let project     = $state(null)
-  let loading     = $state(true)
-  let editing     = $state(false)
-  let taskLogs     = $state([])
-  let logsLoading  = $state(false)
-  let taskLinks    = $state([])
-  let projectReqs  = $state([])
+  let task = $state(null)
+  let project = $state(null)
+  let loading = $state(true)
+  let editing = $state(false)
+  let taskLogs = $state([])
+  let logsLoading = $state(false)
+  let taskLinks = $state([])
+  let projectReqs = $state([])
   let projectFeats = $state([])
-  let deps         = $state([])
+  let deps = $state([])
   let projectTasks = $state([])
-  let depSearch    = $state('')
-  let addingDep    = $state(false)
-  let checklist    = $state([])
-  let newItemLabel = $state('')
-  let newItemGroup = $state('')
-  let comments     = $state([])
-  let newComment   = $state('')
+  let depSearch = $state("")
+  let addingDep = $state(false)
+  let checklist = $state([])
+  let newItemLabel = $state("")
+  let newItemGroup = $state("")
+  let comments = $state([])
+  let newComment = $state("")
   let postingComment = $state(false)
-  let transitions  = $state([])
-  let reviews      = $state([])
+  let transitions = $state([])
+  let reviews = $state([])
 
   // Edit buffer
   let editBuf = $state({})
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const statusColors = {
-    BACKLOG:           'bg-blue-900 text-blue-300',
-    DEVELOPING:        'bg-orange-900 text-orange-300',
-    AWAITING_REVIEW:   'bg-yellow-900 text-yellow-300',
-    REVIEWING:         'bg-purple-900 text-purple-300',
-    AWAITING_REVISION: 'bg-rose-900 text-rose-300',
-    AWAITING_MERGE:    'bg-cyan-900 text-cyan-300',
-    MERGING:           'bg-indigo-900 text-indigo-300',
-    COMPLETED:         'bg-green-900 text-green-300',
-    FAILED:            'bg-red-900 text-red-300',
+    BACKLOG: "bg-blue-900 text-blue-300",
+    DEVELOPING: "bg-orange-900 text-orange-300",
+    AWAITING_REVIEW: "bg-yellow-900 text-yellow-300",
+    REVIEWING: "bg-purple-900 text-purple-300",
+    AWAITING_REVISION: "bg-rose-900 text-rose-300",
+    AWAITING_MERGE: "bg-cyan-900 text-cyan-300",
+    MERGING: "bg-indigo-900 text-indigo-300",
+    COMPLETED: "bg-green-900 text-green-300",
+    FAILED: "bg-red-900 text-red-300",
   }
 
   const formatDate = formatTimestamp
@@ -91,22 +106,27 @@
       // Fetch core task first; secondary endpoints (new in this build) are
       // fetched with individual fallbacks so a missing/unimplemented endpoint
       // doesn't prevent the page from rendering.
-      const [t, links, depList, checklistData, commentData, transitionData, reviewData] = await Promise.all([
-        getTask(taskId),
-        listTaskLinks(taskId).catch(() => []),
-        listTaskDependencies(taskId).catch(() => []),
-        listChecklistItems(taskId).catch(() => []),
-        listComments(taskId).catch(() => []),
-        fetch(`/api/tasks/${taskId}/transitions`).then(r => r.ok ? r.json() : []).catch(() => []),
-        fetch(`/api/tasks/${taskId}/reviews`).then(r => r.ok ? r.json() : []).catch(() => []),
-      ])
+      const [t, links, depList, checklistData, commentData, transitionData, reviewData] =
+        await Promise.all([
+          getTask(taskId),
+          listTaskLinks(taskId).catch(() => []),
+          listTaskDependencies(taskId).catch(() => []),
+          listChecklistItems(taskId).catch(() => []),
+          listComments(taskId).catch(() => []),
+          fetch(`/api/tasks/${taskId}/transitions`)
+            .then((r) => (r.ok ? r.json() : []))
+            .catch(() => []),
+          fetch(`/api/tasks/${taskId}/reviews`)
+            .then((r) => (r.ok ? r.json() : []))
+            .catch(() => []),
+        ])
       task = t
       transitions = Array.isArray(transitionData) ? transitionData : []
-      reviews     = Array.isArray(reviewData) ? reviewData : []
-      taskLinks  = links ?? []
-      deps       = depList ?? []
-      checklist  = checklistData ?? []
-      comments   = commentData ?? []
+      reviews = Array.isArray(reviewData) ? reviewData : []
+      taskLinks = links ?? []
+      deps = depList ?? []
+      checklist = checklistData ?? []
+      comments = commentData ?? []
       if (t.project_id) {
         const [proj, reqs, feats, allTasks] = await Promise.all([
           getProject(t.project_id),
@@ -115,14 +135,15 @@
           listProjectTasks(t.project_id),
         ])
         project = proj
-        projectReqs   = reqs ?? []
-        projectFeats  = feats ?? []
-        projectTasks  = (Array.isArray(allTasks) ? allTasks : (allTasks?.tasks ?? []))
-          .filter(t2 => t2.id !== taskId)
+        projectReqs = reqs ?? []
+        projectFeats = feats ?? []
+        projectTasks = (Array.isArray(allTasks) ? allTasks : (allTasks?.tasks ?? [])).filter(
+          (t2) => t2.id !== taskId,
+        )
       }
       loadLogs(taskId)
     } catch (e) {
-      toasts.error('Failed to load task: ' + e.message)
+      toasts.error("Failed to load task: " + e.message)
     } finally {
       loading = false
     }
@@ -131,31 +152,33 @@
   // ── Task editing ──────────────────────────────────────────────────────────
   // ── Dependencies ──────────────────────────────────────────────────────────
   let depSearchResults = $derived(
-    depSearch.trim().length < 1 ? [] :
-    projectTasks
-      .filter(t2 => !deps.some(d => d.depends_on_id === t2.id))
-      .filter(t2 => (t2.payload?.title ?? t2.type ?? t2.id)
-        .toLowerCase().includes(depSearch.toLowerCase()))
-      .slice(0, 8)
+    depSearch.trim().length < 1
+      ? []
+      : projectTasks
+          .filter((t2) => !deps.some((d) => d.depends_on_id === t2.id))
+          .filter((t2) =>
+            (t2.payload?.title ?? t2.type ?? t2.id).toLowerCase().includes(depSearch.toLowerCase()),
+          )
+          .slice(0, 8),
   )
 
   async function addDep(dependsOnId) {
     try {
       const dep = await addTaskDependency(taskId, dependsOnId)
       deps = [...deps, dep]
-      depSearch = ''
+      depSearch = ""
       addingDep = false
     } catch (e) {
-      toasts.error('Could not add dependency: ' + e.message)
+      toasts.error("Could not add dependency: " + e.message)
     }
   }
 
   async function removeDep(dependsOnId) {
     try {
       await removeTaskDependency(taskId, dependsOnId)
-      deps = deps.filter(d => d.depends_on_id !== dependsOnId)
+      deps = deps.filter((d) => d.depends_on_id !== dependsOnId)
     } catch (e) {
-      toasts.error('Could not remove dependency: ' + e.message)
+      toasts.error("Could not remove dependency: " + e.message)
     }
   }
 
@@ -163,29 +186,29 @@
   let checklistGroups = $derived.by(() => {
     const groups = {}
     for (const item of checklist) {
-      const g = item.group_label || ''
+      const g = item.group_label || ""
       if (!groups[g]) groups[g] = []
       groups[g].push(item)
     }
     return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b))
   })
 
-  const ITEM_STATUSES = ['pending', 'in_progress', 'passed', 'failed', 'skipped']
+  const ITEM_STATUSES = ["pending", "in_progress", "passed", "failed", "skipped"]
   const ITEM_STATUS_COLORS = {
-    pending:     'text-gray-400',
-    in_progress: 'text-orange-400',
-    passed:      'text-green-400',
-    failed:      'text-red-400',
-    skipped:     'text-gray-600',
+    pending: "text-gray-400",
+    in_progress: "text-orange-400",
+    passed: "text-green-400",
+    failed: "text-red-400",
+    skipped: "text-gray-600",
   }
 
   async function cycleItemStatus(item) {
     const next = ITEM_STATUSES[(ITEM_STATUSES.indexOf(item.status) + 1) % ITEM_STATUSES.length]
     try {
       const updated = await updateChecklistItem(taskId, item.id, { status: next })
-      checklist = checklist.map(i => i.id === item.id ? updated : i)
+      checklist = checklist.map((i) => (i.id === item.id ? updated : i))
     } catch (e) {
-      toasts.error('Could not update item: ' + e.message)
+      toasts.error("Could not update item: " + e.message)
     }
   }
 
@@ -193,24 +216,24 @@
     if (!newItemLabel.trim()) return
     try {
       const item = await createChecklistItem(taskId, {
-        label:       newItemLabel.trim(),
+        label: newItemLabel.trim(),
         group_label: newItemGroup.trim(),
-        position:    checklist.filter(i => i.group_label === newItemGroup.trim()).length,
-        status:      'pending',
+        position: checklist.filter((i) => i.group_label === newItemGroup.trim()).length,
+        status: "pending",
       })
       checklist = [...checklist, item]
-      newItemLabel = ''
+      newItemLabel = ""
     } catch (e) {
-      toasts.error('Could not add item: ' + e.message)
+      toasts.error("Could not add item: " + e.message)
     }
   }
 
   async function removeChecklistItem(id) {
     try {
       await deleteChecklistItem(taskId, id)
-      checklist = checklist.filter(i => i.id !== id)
+      checklist = checklist.filter((i) => i.id !== id)
     } catch (e) {
-      toasts.error('Could not delete item: ' + e.message)
+      toasts.error("Could not delete item: " + e.message)
     }
   }
 
@@ -221,7 +244,7 @@
       checklist = fresh ?? []
       if (group_label) toasts.success(`New iteration: "${group_label}"`)
     } catch (e) {
-      toasts.error('Could not create iteration: ' + e.message)
+      toasts.error("Could not create iteration: " + e.message)
     }
   }
 
@@ -232,9 +255,9 @@
     try {
       const c = await createComment(taskId, { body: newComment.trim() })
       comments = [...comments, c]
-      newComment = ''
+      newComment = ""
     } catch (e) {
-      toasts.error('Could not post comment: ' + e.message)
+      toasts.error("Could not post comment: " + e.message)
     } finally {
       postingComment = false
     }
@@ -243,20 +266,22 @@
   async function removeComment(id) {
     try {
       await deleteComment(taskId, id)
-      comments = comments.filter(c => c.id !== id)
+      comments = comments.filter((c) => c.id !== id)
     } catch (e) {
-      toasts.error('Could not delete comment: ' + e.message)
+      toasts.error("Could not delete comment: " + e.message)
     }
   }
 
   function startEdit() {
     editBuf = {
-      title:         task.payload?.title ?? '',
-      description:   task.payload?.description ?? '',
-      priority:      task.priority,
-      status:        task.status,
-      linkedReqIds:  new Set(taskLinks.filter(l => l.kind === 'requirement').map(l => l.target_id)),
-      linkedFeatIds: new Set(taskLinks.filter(l => l.kind === 'feature').map(l => l.target_id)),
+      title: task.payload?.title ?? "",
+      description: task.payload?.description ?? "",
+      priority: task.priority,
+      status: task.status,
+      linkedReqIds: new Set(
+        taskLinks.filter((l) => l.kind === "requirement").map((l) => l.target_id),
+      ),
+      linkedFeatIds: new Set(taskLinks.filter((l) => l.kind === "feature").map((l) => l.target_id)),
     }
     editing = true
   }
@@ -277,53 +302,49 @@
     try {
       const updated = await updateTask(taskId, {
         priority: Number(editBuf.priority),
-        status:   editBuf.status,
-        payload:  {
-          title:       editBuf.title.trim(),
+        status: editBuf.status,
+        payload: {
+          title: editBuf.title.trim(),
           description: editBuf.description.trim(),
         },
       })
       task = updated
 
       // sync requirement/feature links
-      const origReqIds  = new Set(taskLinks.filter(l => l.kind === 'requirement').map(l => l.target_id))
-      const origFeatIds = new Set(taskLinks.filter(l => l.kind === 'feature').map(l => l.target_id))
+      const origReqIds = new Set(
+        taskLinks.filter((l) => l.kind === "requirement").map((l) => l.target_id),
+      )
+      const origFeatIds = new Set(
+        taskLinks.filter((l) => l.kind === "feature").map((l) => l.target_id),
+      )
       const ops = []
-      for (const id of editBuf.linkedReqIds)  if (!origReqIds.has(id))   ops.push(addTaskLink(taskId, 'requirement', id))
-      for (const id of origReqIds)            if (!editBuf.linkedReqIds.has(id))  ops.push(removeTaskLink(taskId, 'requirement', id))
-      for (const id of editBuf.linkedFeatIds) if (!origFeatIds.has(id))  ops.push(addTaskLink(taskId, 'feature', id))
-      for (const id of origFeatIds)           if (!editBuf.linkedFeatIds.has(id)) ops.push(removeTaskLink(taskId, 'feature', id))
+      for (const id of editBuf.linkedReqIds)
+        if (!origReqIds.has(id)) ops.push(addTaskLink(taskId, "requirement", id))
+      for (const id of origReqIds)
+        if (!editBuf.linkedReqIds.has(id)) ops.push(removeTaskLink(taskId, "requirement", id))
+      for (const id of editBuf.linkedFeatIds)
+        if (!origFeatIds.has(id)) ops.push(addTaskLink(taskId, "feature", id))
+      for (const id of origFeatIds)
+        if (!editBuf.linkedFeatIds.has(id)) ops.push(removeTaskLink(taskId, "feature", id))
       if (ops.length) await Promise.all(ops)
       taskLinks = await listTaskLinks(taskId)
 
       editing = false
-      toasts.success('Task saved')
+      toasts.success("Task saved")
       loadLogs(taskId)
     } catch (e) {
-      toasts.error('Save failed: ' + e.message)
-    }
-  }
-
-  async function handleUnqueue() {
-    if (!confirm('Unqueue this task?')) return
-    try {
-      const updated = await unqueueTask(taskId)
-      task = updated
-      toasts.success('Task unqueued')
-      loadLogs(taskId)
-    } catch (e) {
-      toasts.error('Unqueue failed: ' + e.message)
+      toasts.error("Save failed: " + e.message)
     }
   }
 
   async function handleDelete() {
-    if (!confirm('Delete this task?')) return
+    if (!confirm("Delete this task?")) return
     try {
       await deleteTask(taskId)
-      toasts.success('Task deleted')
-      router.go('tasks')
+      toasts.success("Task deleted")
+      router.go("tasks")
     } catch (e) {
-      toasts.error('Delete failed: ' + e.message)
+      toasts.error("Delete failed: " + e.message)
     }
   }
 
@@ -331,10 +352,21 @@
     try {
       const updated = await queueTask(taskId)
       task = updated
-      toasts.success('Task queued')
+      toasts.success("Task queued")
       loadLogs(taskId)
     } catch (e) {
-      toasts.error('Queue failed: ' + e.message)
+      toasts.error("Queue failed: " + e.message)
+    }
+  }
+
+  async function handleUnqueue() {
+    try {
+      const updated = await unqueueTask(taskId)
+      task = updated
+      toasts.success("Task unqueued")
+      loadLogs(taskId)
+    } catch (e) {
+      toasts.error("Unqueue failed: " + e.message)
     }
   }
 
@@ -347,32 +379,28 @@
 </script>
 
 <div class="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full">
-
   <!-- Breadcrumb -->
   <nav class="mb-5 text-sm text-gray-500 flex items-center gap-2 flex-wrap">
-    <button
-      class="hover:text-gray-300 transition-colors"
-      onclick={() => router.go('projects')}
-    >Projects</button>
+    <button class="hover:text-gray-300 transition-colors" onclick={() => router.go("projects")}
+      >Projects</button
+    >
     <span>›</span>
     {#if project}
       <button
         class="hover:text-gray-300 transition-colors"
-        onclick={() => router.push('projects', project.id)}
-      >{project.name}</button>
+        onclick={() => router.push("projects", project.id)}>{project.name}</button
+      >
       <span>›</span>
     {/if}
     <span class="text-gray-300">Tasks</span>
     <span>›</span>
-    <span class="text-gray-300">{task?.payload?.title ?? '…'}</span>
+    <span class="text-gray-300">{task?.payload?.title ?? "…"}</span>
   </nav>
 
   {#if loading}
     <Skeleton rows={4} />
-
   {:else if !task}
     <p class="text-gray-400 text-sm">Task not found.</p>
-
   {:else}
     <!-- ── Task header ────────────────────────────────────────────────────── -->
     <div class="mb-6 p-5 bg-surface-800 rounded border border-surface-600">
@@ -401,7 +429,7 @@
                        text-sm text-gray-300 focus:outline-none focus:border-accent"
                 bind:value={editBuf.status}
               >
-                {#each ['BACKLOG','DEVELOPING','AWAITING_REVIEW','REVIEWING','AWAITING_REVISION','AWAITING_MERGE','MERGING','COMPLETED','FAILED'] as s}
+                {#each ["BACKLOG", "DEVELOPING", "AWAITING_REVIEW", "REVIEWING", "AWAITING_REVISION", "AWAITING_MERGE", "MERGING", "COMPLETED", "FAILED"] as s}
                   <option value={s}>{s}</option>
                 {/each}
               </select>
@@ -411,7 +439,8 @@
               <input
                 id="task-priority"
                 type="number"
-                min="1" max="10"
+                min="1"
+                max="10"
                 class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2
                        text-sm text-gray-200 focus:outline-none focus:border-accent"
                 bind:value={editBuf.priority}
@@ -424,9 +453,13 @@
               {#if projectReqs.length > 0}
                 <div>
                   <label class="text-xs text-gray-500 mb-1 block">Linked Requirements</label>
-                  <div class="bg-surface-700 border border-surface-500 rounded p-2 max-h-32 overflow-y-auto flex flex-col gap-1">
+                  <div
+                    class="bg-surface-700 border border-surface-500 rounded p-2 max-h-32 overflow-y-auto flex flex-col gap-1"
+                  >
                     {#each projectReqs as req (req.id)}
-                      <label class="flex items-center gap-2 text-xs cursor-pointer hover:text-gray-200 text-gray-300">
+                      <label
+                        class="flex items-center gap-2 text-xs cursor-pointer hover:text-gray-200 text-gray-300"
+                      >
                         <input
                           type="checkbox"
                           checked={editBuf.linkedReqIds?.has(req.id)}
@@ -442,9 +475,13 @@
               {#if projectFeats.length > 0}
                 <div>
                   <label class="text-xs text-gray-500 mb-1 block">Linked Features</label>
-                  <div class="bg-surface-700 border border-surface-500 rounded p-2 max-h-32 overflow-y-auto flex flex-col gap-1">
+                  <div
+                    class="bg-surface-700 border border-surface-500 rounded p-2 max-h-32 overflow-y-auto flex flex-col gap-1"
+                  >
                     {#each projectFeats as feat (feat.id)}
-                      <label class="flex items-center gap-2 text-xs cursor-pointer hover:text-gray-200 text-gray-300">
+                      <label
+                        class="flex items-center gap-2 text-xs cursor-pointer hover:text-gray-200 text-gray-300"
+                      >
                         <input
                           type="checkbox"
                           checked={editBuf.linkedFeatIds?.has(feat.id)}
@@ -463,23 +500,26 @@
           <div class="flex justify-end gap-2">
             <button
               class="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200 transition-colors"
-              onclick={() => editing = false}
-            >Cancel</button>
+              onclick={() => (editing = false)}>Cancel</button
+            >
             <button
               class="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white text-sm rounded transition-colors"
-              onclick={saveTask}
-            >Save</button>
+              onclick={saveTask}>Save</button
+            >
           </div>
         </div>
-
       {:else}
         <!-- Read view -->
         <div class="flex items-start justify-between gap-4">
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-3 mb-2 flex-wrap">
-              <h1 class="text-2xl font-semibold text-gray-100">{task.payload?.title ?? 'Untitled'}</h1>
-              <span class="text-xs px-2 py-0.5 rounded-full
-                {statusColors[task.status] || 'bg-gray-700 text-gray-300'}">
+              <h1 class="text-2xl font-semibold text-gray-100">
+                {task.payload?.title ?? "Untitled"}
+              </h1>
+              <span
+                class="text-xs px-2 py-0.5 rounded-full
+                {statusColors[task.status] || 'bg-gray-700 text-gray-300'}"
+              >
                 {task.status}
               </span>
             </div>
@@ -497,7 +537,7 @@
             <div class="flex flex-wrap gap-4 text-xs text-gray-500">
               <span title="Type">📋 {task.type}</span>
               <span title="Role">👤 {task.role}</span>
-              <span title="Priority">⭐ {task.priority ?? '—'}</span>
+              <span title="Priority">⭐ {task.priority ?? "—"}</span>
               {#if project}
                 <span title="Project">📁 {project.name}</span>
               {/if}
@@ -511,22 +551,24 @@
 
             {#if taskLinks.length > 0}
               <div class="flex flex-wrap gap-3 mt-3 text-xs">
-                {#if taskLinks.some(l => l.kind === 'requirement')}
+                {#if taskLinks.some((l) => l.kind === "requirement")}
                   <div class="flex items-center gap-1.5 flex-wrap">
                     <span class="text-gray-500">Reqs:</span>
-                    {#each taskLinks.filter(l => l.kind === 'requirement') as lnk (lnk.target_id)}
+                    {#each taskLinks.filter((l) => l.kind === "requirement") as lnk (lnk.target_id)}
                       <span class="px-2 py-0.5 bg-blue-900/40 text-blue-300 rounded-full">
-                        {projectReqs.find(r => r.id === lnk.target_id)?.title ?? lnk.target_id.slice(0, 8)}
+                        {projectReqs.find((r) => r.id === lnk.target_id)?.title ??
+                          lnk.target_id.slice(0, 8)}
                       </span>
                     {/each}
                   </div>
                 {/if}
-                {#if taskLinks.some(l => l.kind === 'feature')}
+                {#if taskLinks.some((l) => l.kind === "feature")}
                   <div class="flex items-center gap-1.5 flex-wrap">
                     <span class="text-gray-500">Features:</span>
-                    {#each taskLinks.filter(l => l.kind === 'feature') as lnk (lnk.target_id)}
+                    {#each taskLinks.filter((l) => l.kind === "feature") as lnk (lnk.target_id)}
                       <span class="px-2 py-0.5 bg-purple-900/40 text-purple-300 rounded-full">
-                        {projectFeats.find(f => f.id === lnk.target_id)?.title ?? lnk.target_id.slice(0, 8)}
+                        {projectFeats.find((f) => f.id === lnk.target_id)?.title ??
+                          lnk.target_id.slice(0, 8)}
                       </span>
                     {/each}
                   </div>
@@ -538,8 +580,8 @@
           <button
             class="px-3 py-1.5 text-sm border border-surface-500 text-gray-400
                    hover:border-accent hover:text-gray-200 rounded transition-colors shrink-0"
-            onclick={startEdit}
-          >Edit</button>
+            onclick={startEdit}>Edit</button
+          >
         </div>
       {/if}
     </div>
@@ -556,8 +598,11 @@
         {#if projectTasks.length > 0}
           <button
             class="text-xs text-accent hover:text-accent-hover transition-colors"
-            onclick={() => { addingDep = !addingDep; depSearch = '' }}
-          >{addingDep ? 'Cancel' : '+ Add'}</button>
+            onclick={() => {
+              addingDep = !addingDep
+              depSearch = ""
+            }}>{addingDep ? "Cancel" : "+ Add"}</button
+          >
         {/if}
       </div>
 
@@ -571,7 +616,9 @@
             autofocus
           />
           {#if depSearchResults.length > 0}
-            <div class="absolute z-20 top-full left-0 right-0 mt-1 bg-surface-700 border border-surface-500 rounded shadow-lg max-h-40 overflow-y-auto">
+            <div
+              class="absolute z-20 top-full left-0 right-0 mt-1 bg-surface-700 border border-surface-500 rounded shadow-lg max-h-40 overflow-y-auto"
+            >
               {#each depSearchResults as t2 (t2.id)}
                 <button
                   class="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-surface-600 flex items-center gap-2"
@@ -583,7 +630,9 @@
               {/each}
             </div>
           {:else if depSearch.length > 0}
-            <div class="absolute z-20 top-full left-0 right-0 mt-1 bg-surface-700 border border-surface-500 rounded shadow-lg px-3 py-2 text-xs text-gray-500">
+            <div
+              class="absolute z-20 top-full left-0 right-0 mt-1 bg-surface-700 border border-surface-500 rounded shadow-lg px-3 py-2 text-xs text-gray-500"
+            >
               No matching tasks
             </div>
           {/if}
@@ -591,26 +640,37 @@
       {/if}
 
       {#if deps.length === 0}
-        <p class="text-xs text-gray-400">No dependencies. Add one to get soft warnings when this task is claimed while deps are incomplete.</p>
+        <p class="text-xs text-gray-400">
+          No dependencies. Add one to get soft warnings when this task is claimed while deps are
+          incomplete.
+        </p>
       {:else}
         <div class="flex flex-col gap-2">
           {#each deps as dep (dep.depends_on_id)}
-            {@const done = dep.depends_on_status === 'completed'}
-            <div class="flex items-center gap-2 p-2 rounded bg-surface-700/60 border
-              {done ? 'border-green-900/40' : 'border-yellow-900/40'}">
-              <span class="text-[10px] w-2 h-2 rounded-full shrink-0 {done ? 'bg-green-500' : 'bg-yellow-500'}"></span>
+            {@const done = dep.depends_on_status === "completed"}
+            <div
+              class="flex items-center gap-2 p-2 rounded bg-surface-700/60 border
+              {done ? 'border-green-900/40' : 'border-yellow-900/40'}"
+            >
+              <span
+                class="text-[10px] w-2 h-2 rounded-full shrink-0 {done
+                  ? 'bg-green-500'
+                  : 'bg-yellow-500'}"
+              ></span>
               <span class="flex-1 text-xs text-gray-300 truncate">{dep.depends_on_title}</span>
               <span class="text-[10px] text-gray-500 shrink-0">{dep.depends_on_status}</span>
               <button
                 class="text-[10px] text-red-400 hover:text-red-300 shrink-0"
                 onclick={() => removeDep(dep.depends_on_id)}
-                aria-label="Remove dependency"
-              >×</button>
+                aria-label="Remove dependency">×</button
+              >
             </div>
           {/each}
         </div>
-        {#if deps.some(d => d.depends_on_status !== 'completed')}
-          <p class="mt-2 text-xs text-yellow-600">⚠ Some dependencies are not completed — claiming this task will emit a warning.</p>
+        {#if deps.some((d) => d.depends_on_status !== "completed")}
+          <p class="mt-2 text-xs text-yellow-600">
+            ⚠ Some dependencies are not completed — claiming this task will emit a warning.
+          </p>
         {/if}
       {/if}
     </div>
@@ -621,16 +681,19 @@
         <h3 class="text-sm font-semibold text-gray-200">
           Progress Checklist
           {#if checklist.length > 0}
-            {@const done = checklist.filter(i => i.status === 'passed' || i.status === 'skipped').length}
-            <span class="ml-1.5 text-xs font-normal text-gray-500">({done}/{checklist.length})</span>
+            {@const done = checklist.filter(
+              (i) => i.status === "passed" || i.status === "skipped",
+            ).length}
+            <span class="ml-1.5 text-xs font-normal text-gray-500">({done}/{checklist.length})</span
+            >
           {/if}
         </h3>
         {#if checklist.length > 0}
           <button
             class="text-xs text-gray-500 hover:text-accent transition-colors"
             onclick={newIteration}
-            title="Clone latest group with reset status"
-          >+ New iteration</button>
+            title="Clone latest group with reset status">+ New iteration</button
+          >
         {/if}
       </div>
 
@@ -640,7 +703,9 @@
         {#each checklistGroups as [groupLabel, items] (groupLabel)}
           <div class="mb-3">
             {#if groupLabel}
-              <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">{groupLabel}</p>
+              <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1">
+                {groupLabel}
+              </p>
             {/if}
             <div class="flex flex-col gap-1">
               {#each items as item (item.id)}
@@ -649,14 +714,18 @@
                     class="shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium transition-colors
                            {ITEM_STATUS_COLORS[item.status] || 'text-gray-400'} hover:opacity-80"
                     onclick={() => cycleItemStatus(item)}
-                    title="Click to cycle status"
-                  >{item.status}</button>
-                  <span class="flex-1 text-xs text-gray-300 {item.status === 'skipped' ? 'line-through opacity-50' : ''}">{item.label}</span>
+                    title="Click to cycle status">{item.status}</button
+                  >
+                  <span
+                    class="flex-1 text-xs text-gray-300 {item.status === 'skipped'
+                      ? 'line-through opacity-50'
+                      : ''}">{item.label}</span
+                  >
                   <button
                     class="text-[10px] text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity"
                     onclick={() => removeChecklistItem(item.id)}
-                    aria-label="Remove checklist item"
-                  >×</button>
+                    aria-label="Remove checklist item">×</button
+                  >
                 </div>
               {/each}
             </div>
@@ -671,19 +740,19 @@
                  text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent"
           placeholder="New item label…"
           bind:value={newItemLabel}
-          onkeydown={(e) => e.key === 'Enter' && addChecklistItem()}
+          onkeydown={(e) => e.key === "Enter" && addChecklistItem()}
         />
         <input
           class="w-28 bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs
                  text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent"
           placeholder="Group (opt)"
           bind:value={newItemGroup}
-          onkeydown={(e) => e.key === 'Enter' && addChecklistItem()}
+          onkeydown={(e) => e.key === "Enter" && addChecklistItem()}
         />
         <button
           class="px-2 py-1 bg-surface-600 hover:bg-surface-500 text-xs text-gray-300 rounded transition-colors"
-          onclick={addChecklistItem}
-        >Add</button>
+          onclick={addChecklistItem}>Add</button
+        >
       </div>
     </div>
 
@@ -703,23 +772,36 @@
           {#each comments as c (c.id)}
             <div class="group flex gap-3">
               <!-- Avatar dot -->
-              <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold mt-0.5
-                {c.author_type === 'agent' ? 'bg-purple-900 text-purple-300' : 'bg-surface-600 text-gray-400'}">
-                {c.author_type === 'agent' ? (c.author_role?.[0]?.toUpperCase() ?? 'A') : 'U'}
+              <div
+                class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold mt-0.5
+                {c.author_type === 'agent'
+                  ? 'bg-purple-900 text-purple-300'
+                  : 'bg-surface-600 text-gray-400'}"
+              >
+                {c.author_type === "agent" ? (c.author_role?.[0]?.toUpperCase() ?? "A") : "U"}
               </div>
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2 mb-1">
-                  <span class="text-xs font-medium {c.author_type === 'agent' ? 'text-purple-300' : 'text-gray-300'}">
-                    {c.author_type === 'agent' ? (c.author_role || 'agent') : 'user'}
+                  <span
+                    class="text-xs font-medium {c.author_type === 'agent'
+                      ? 'text-purple-300'
+                      : 'text-gray-300'}"
+                  >
+                    {c.author_type === "agent" ? c.author_role || "agent" : "user"}
                   </span>
                   <span class="text-[10px] text-gray-600 font-mono">
-                    {new Date(c.created_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
+                    {new Date(c.created_at).toLocaleString([], {
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
                   </span>
                   <button
                     class="ml-auto text-[10px] text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity"
                     onclick={() => removeComment(c.id)}
-                    aria-label="Delete comment"
-                  >×</button>
+                    aria-label="Delete comment">×</button
+                  >
                 </div>
                 <div class="text-xs text-gray-300 whitespace-pre-wrap break-words">{c.body}</div>
               </div>
@@ -736,22 +818,23 @@
           placeholder="Add a comment… (supports Markdown)"
           rows="3"
           bind:value={newComment}
-          onkeydown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) postComment() }}
+          onkeydown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) postComment()
+          }}
         ></textarea>
         <div class="flex justify-end">
           <button
             class="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-xs rounded
                    transition-colors disabled:opacity-40"
             disabled={!newComment.trim() || postingComment}
-            onclick={postComment}
-          >{postingComment ? 'Posting…' : 'Comment'}</button>
+            onclick={postComment}>{postingComment ? "Posting…" : "Comment"}</button
+          >
         </div>
       </div>
     </div>
 
     <!-- ── Agent / timestamps / result / events ─────────────────────────────── -->
     <div class="mb-6 p-5 bg-surface-800 rounded border border-surface-600 flex flex-col gap-3">
-
       {#if task.assigned_agent_id}
         <div class="flex items-center gap-2 text-sm">
           <span class="text-gray-400">Agent:</span>
@@ -771,7 +854,12 @@
       {#if task.result && Object.keys(task.result).length > 0}
         <div class="mt-4">
           <h3 class="text-sm font-semibold text-gray-300 mb-2">Result</h3>
-          <pre class="bg-surface-800 rounded p-3 text-xs text-gray-300 overflow-x-auto whitespace-pre-wrap">{JSON.stringify(task.result, null, 2)}</pre>
+          <pre
+            class="bg-surface-800 rounded p-3 text-xs text-gray-300 overflow-x-auto whitespace-pre-wrap">{JSON.stringify(
+              task.result,
+              null,
+              2,
+            )}</pre>
         </div>
       {/if}
 
@@ -782,25 +870,36 @@
           <ol class="relative border-l border-surface-600 ml-3 flex flex-col gap-4">
             {#each transitions as tr (tr.id)}
               <li class="ml-4 text-xs">
-                <span class="absolute -left-1.5 mt-1 w-3 h-3 rounded-full border border-surface-600
-                             {tr.to_state === 'COMPLETED' ? 'bg-green-600' :
-                              tr.to_state === 'FAILED' ? 'bg-red-600' :
-                              tr.to_state.startsWith('AWAITING') ? 'bg-yellow-600' :
-                              'bg-accent'}">
+                <span
+                  class="absolute -left-1.5 mt-1 w-3 h-3 rounded-full border border-surface-600
+                             {tr.to_state === 'COMPLETED'
+                    ? 'bg-green-600'
+                    : tr.to_state === 'FAILED'
+                      ? 'bg-red-600'
+                      : tr.to_state.startsWith('AWAITING')
+                        ? 'bg-yellow-600'
+                        : 'bg-accent'}"
+                >
                 </span>
                 <div class="flex items-center gap-2 flex-wrap">
                   <span class="text-gray-500 font-mono">
-                    {new Date(tr.created_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
+                    {new Date(tr.created_at).toLocaleString([], {
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
                   </span>
                   <span class="text-gray-400">
-                    {#if tr.from_state}<span class="text-gray-500">{tr.from_state}</span> → {/if}
+                    {#if tr.from_state}<span class="text-gray-500">{tr.from_state}</span> →
+                    {/if}
                     <span class="font-semibold text-gray-200">{tr.to_state}</span>
                   </span>
                   {#if tr.reason}
                     <span class="text-gray-600 italic">{tr.reason}</span>
                   {/if}
                   {#if tr.actor_agent_id}
-                    <span class="text-gray-600 font-mono">{tr.actor_agent_id.slice(0,8)}</span>
+                    <span class="text-gray-600 font-mono">{tr.actor_agent_id.slice(0, 8)}</span>
                   {/if}
                 </div>
               </li>
@@ -815,20 +914,33 @@
           <h3 class="text-sm font-semibold text-gray-300 mb-3">Code Reviews</h3>
           <div class="flex flex-col gap-4">
             {#each reviews as rev (rev.id)}
-              <div class="rounded border
-                {rev.status === 'approved' ? 'border-green-700 bg-green-950' :
-                 rev.status === 'changes_requested' ? 'border-yellow-700 bg-yellow-950' :
-                 'border-rose-700 bg-rose-950'} p-3">
+              <div
+                class="rounded border
+                {rev.status === 'approved'
+                  ? 'border-green-700 bg-green-950'
+                  : rev.status === 'changes_requested'
+                    ? 'border-yellow-700 bg-yellow-950'
+                    : 'border-rose-700 bg-rose-950'} p-3"
+              >
                 <div class="flex items-center gap-2 mb-2">
-                  <span class="text-xs font-medium
-                    {rev.status === 'approved' ? 'text-green-300' :
-                     rev.status === 'changes_requested' ? 'text-yellow-300' :
-                     'text-rose-300'}">
-                    {rev.status.replace('_', ' ').toUpperCase()}
+                  <span
+                    class="text-xs font-medium
+                    {rev.status === 'approved'
+                      ? 'text-green-300'
+                      : rev.status === 'changes_requested'
+                        ? 'text-yellow-300'
+                        : 'text-rose-300'}"
+                  >
+                    {rev.status.replace("_", " ").toUpperCase()}
                   </span>
                   <span class="text-xs text-gray-500">{rev.author_role || rev.author_type}</span>
                   <span class="text-xs text-gray-600 font-mono ml-auto">
-                    {new Date(rev.created_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
+                    {new Date(rev.created_at).toLocaleString([], {
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
                   </span>
                 </div>
                 <div class="text-xs text-gray-300 whitespace-pre-wrap font-mono">{rev.body}</div>
@@ -851,19 +963,21 @@
                 <span class="shrink-0 text-gray-500 font-mono w-36">
                   {formatTimestamp(log.timestamp)}
                 </span>
-                <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium
+                <span
+                  class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium
                   {log.event_type.includes('failed') || log.event_type.includes('error')
                     ? 'bg-red-900 text-red-300'
                     : log.event_type.includes('complet')
                       ? 'bg-green-900 text-green-300'
-                      : 'bg-surface-700 text-gray-400'}">
+                      : 'bg-surface-700 text-gray-400'}"
+                >
                   {log.event_type}
                 </span>
                 {#if log.old_status && log.new_status}
                   <span class="text-gray-500">{log.old_status} → {log.new_status}</span>
                 {/if}
                 {#if log.agent_id}
-                  <span class="text-gray-600 font-mono truncate">{log.agent_id.slice(0,8)}</span>
+                  <span class="text-gray-600 font-mono truncate">{log.agent_id.slice(0, 8)}</span>
                 {/if}
                 {#if log.description}
                   <span class="text-gray-400 truncate">{log.description}</span>
@@ -873,32 +987,30 @@
           </div>
         {/if}
       </div>
-
     </div>
 
     <!-- ── Queue controls ─────────────────────────────────────────────────── -->
     <div class="p-5 bg-surface-800 rounded border border-surface-600">
       <h3 class="text-sm font-semibold text-gray-200 mb-3">Actions</h3>
       <div class="flex gap-2 flex-wrap">
-        {#if task.status === 'FAILED' || task.status === 'COMPLETED'}
-          <button
-            class="px-3 py-1.5 text-sm border border-yellow-600 text-yellow-400
-                   hover:bg-yellow-900 hover:border-yellow-500 rounded transition-colors"
-            onclick={handleQueue}
-          >{task.status === 'FAILED' ? 'Retry (→ BACKLOG)' : 'Queue (→ BACKLOG)'}</button>
-        {/if}
-        {#if task.status === 'AWAITING_REVIEW' || task.status === 'AWAITING_REVISION' || task.status === 'AWAITING_MERGE'}
+        {#if task.status === "BACKLOG"}
           <button
             class="px-3 py-1.5 text-sm border border-orange-600 text-orange-400
                    hover:bg-orange-900 hover:border-orange-500 rounded transition-colors"
-            onclick={handleUnqueue}
-          >Unqueue</button>
+            onclick={handleUnqueue}>Unqueue</button
+          >
+        {:else if task.status !== "COMPLETED"}
+          <button
+            class="px-3 py-1.5 text-sm border border-yellow-600 text-yellow-400
+                   hover:bg-yellow-900 hover:border-yellow-500 rounded transition-colors"
+            onclick={handleQueue}>Queue</button
+          >
         {/if}
         <button
           class="px-3 py-1.5 text-sm border border-red-600 text-red-400
                  hover:bg-red-900 hover:border-red-500 rounded transition-colors"
-          onclick={handleDelete}
-        >Delete</button>
+          onclick={handleDelete}>Delete</button
+        >
       </div>
     </div>
   {/if}

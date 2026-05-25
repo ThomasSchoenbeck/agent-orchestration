@@ -114,6 +114,16 @@ func (c *ServerClient) PostLog(ctx context.Context, entry db.LogEntry) error {
 	return c.post(ctx, "/api/logs", entry, nil)
 }
 
+// PostComment posts a completion comment on a task from this agent.
+func (c *ServerClient) PostComment(ctx context.Context, taskID, body, authorID string) error {
+	req := map[string]interface{}{
+		"body":        body,
+		"author_type": "agent",
+		"author_id":   authorID,
+	}
+	return c.post(ctx, fmt.Sprintf("/api/tasks/%s/comments", taskID), req, nil)
+}
+
 // --- HTTP helpers ---
 
 func (c *ServerClient) get(ctx context.Context, path string, out interface{}) error {

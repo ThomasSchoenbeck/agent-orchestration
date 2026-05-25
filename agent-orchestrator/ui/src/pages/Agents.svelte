@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { listAgents, listRoles, listAgentLogs } from '../lib/api.js'
+  import { listAgents, listRoles, listAgentLogs, deleteAgentLogs } from '../lib/api.js'
   import { formatTimestamp } from '../lib/time.js'
   import { toasts } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
@@ -163,6 +163,18 @@
     return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="w-full h-full">${slices}<circle cx="${CX}" cy="${CY}" r="${R * 0.55}" fill="#1f2937"/></svg>`
   }
 
+  // ── Clear handler ─────────────────────────────────────────────────────────
+  async function handleClearAgentLogs() {
+    if (!confirm('Delete all agent logs? This cannot be undone.')) return
+    try {
+      const { deleted } = await deleteAgentLogs()
+      toasts.success(`Deleted ${deleted} agent log entries`)
+      agentLogs = []
+    } catch (e) {
+      toasts.error('Failed to clear agent logs: ' + e.message)
+    }
+  }
+
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   let timer = null
   onMount(() => {
@@ -184,6 +196,10 @@
           <button class="text-xs text-gray-500 hover:text-gray-300" onclick={() => { selectedAgentId = ''; fetchLogs() }}>× Clear</button>
         {/if}
         <button class="text-xs text-gray-500 hover:text-gray-300" onclick={refreshAll}>↻ Refresh</button>
+        <button
+          class="text-xs px-2 py-1 rounded bg-red-900/40 text-red-400 hover:bg-red-900/70 transition-colors"
+          onclick={handleClearAgentLogs}
+        >Clear logs</button>
       </div>
     </div>
 

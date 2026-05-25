@@ -149,6 +149,98 @@ describe.skipIf(SKIP)('Tasks API', () => {
   })
 })
 
+// ── queue / unqueue ───────────────────────────────────────────────────────────
+describe.skipIf(SKIP)('Task queue/unqueue API', () => {
+  let projectId, taskId
+
+  beforeAll(async () => {
+    if (SKIP) return
+    const p = await POST('/api/projects', { name: 'Queue Test Project' })
+    projectId = p.id
+    const t = await POST('/api/tasks', {
+      project_id: projectId,
+      type:       'implement',
+      role:       'worker',
+      priority:   5,
+    })
+    taskId = t.id
+  })
+
+  // Positive: queue a DEVELOPING task → resets to BACKLOG
+  it('POST /api/tasks/:id/queue re-queues a DEVELOPING task', async () => {
+    // Claim the task to move it to DEVELOPING
+    const agentRes = await POST('/api/agents/register', {
+      name:  'queue-pos-agent',
+      roles: ['worker'],
+    })
+    await POST(`/api/tasks/${taskId}/claim`, { agent_id: agentRes.agent_id })
+
+    const res = await fetch(BASE + `/api/tasks/${taskId}/queue`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.status).toBe('BACKLOG')
+  })
+
+  // Positive: queue a FAILED task → resets to BACKLOG
+  it('POST /api/tasks/:id/queue re-queues a FAILED task', async () => {
+    await fetch(BASE + `/api/tasks/${taskId}`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ status: 'FAILED' }),
+    })
+
+    const res = await fetch(BASE + `/api/tasks/${taskId}/queue`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.status).toBe('BACKLOG')
+  })
+
+  // Negative: queue a COMPLETED task → 400
+  it('POST /api/tasks/:id/queue returns 400 for a COMPLETED task', async () => {
+    await fetch(BASE + `/api/tasks/${taskId}`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ status: 'COMPLETED' }),
+    })
+
+    const res = await fetch(BASE + `/api/tasks/${taskId}/queue`, { method: 'POST' })
+    expect(res.status).toBe(400)
+
+    // Reset for subsequent tests
+    await fetch(BASE + `/api/tasks/${taskId}`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ status: 'BACKLOG' }),
+    })
+  })
+
+  // Positive: unqueue a BACKLOG task → stays BACKLOG
+  it('POST /api/tasks/:id/unqueue accepts a BACKLOG task', async () => {
+    const res = await fetch(BASE + `/api/tasks/${taskId}/unqueue`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.status).toBe('BACKLOG')
+  })
+
+  // Negative: unqueue a DEVELOPING task → 400
+  it('POST /api/tasks/:id/unqueue returns 400 for a DEVELOPING task', async () => {
+    // Register an agent and claim the task (transitions it to DEVELOPING)
+    const agentRes = await POST('/api/agents/register', {
+      name:  'queue-test-agent',
+      roles: ['worker'],
+    })
+    await POST(`/api/tasks/${taskId}/claim`, { agent_id: agentRes.agent_id })
+
+    const res = await fetch(BASE + `/api/tasks/${taskId}/unqueue`, { method: 'POST' })
+    expect(res.status).toBe(400)
+  })
+
+  // clean up
+  it('cleans up: DELETE queue test project', async () => {
+    await DELETE(`/api/projects/${projectId}`)
+  })
+})
+
 // ── agents ────────────────────────────────────────────────────────────────────
 describe.skipIf(SKIP)('Agents API', () => {
   let agentId

@@ -37,6 +37,21 @@ func NewExecutor(rtr *router.Router, toolReg *tools.Registry, client *ServerClie
 	}
 }
 
+// CanExecute returns true if at least one of the given roles has a configured,
+// registered provider. Used by the poll loop to avoid picking up tasks when the
+// model backend is unavailable.
+func (e *Executor) CanExecute(roles []string) bool {
+	if e.rtr == nil {
+		return false
+	}
+	for _, role := range roles {
+		if _, err := e.rtr.RouteByRole(role); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // Run executes a claimed task and submits the result.
 func (e *Executor) Run(ctx context.Context, task *db.Task) {
 	start := time.Now()
@@ -49,6 +64,13 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		result = map[string]interface{}{
 			"error": execErr.Error(),
 		}
+		// Ship the error to the server log so it's visible in the UI.
+		_ = e.client.PostLog(ctx, db.LogEntry{
+			Level:   "error",
+			AgentID: e.agentID,
+			TaskID:  task.ID,
+			Message: fmt.Sprintf("task %s failed: %v", task.ID, execErr),
+		})
 	}
 
 	durationMs := int(time.Since(start).Milliseconds())
@@ -67,6 +89,7 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		_ = e.client.SubmitTaskResult(ctx, task.ID, result, "completed", metrics)
 		log.Printf("executor: reviewer task %s done (review_status=%s tokens=%d duration=%dms)",
 			task.ID, reviewStatus, tokensUsed, durationMs)
+		e.postCompletionComment(ctx, task, result, "completed", tokensUsed, durationMs, nil)
 		return
 	}
 
@@ -76,6 +99,33 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		log.Printf("executor: task %s done (status=%s tokens=%d duration=%dms)",
 			task.ID, status, tokensUsed, durationMs)
 	}
+	e.postCompletionComment(ctx, task, result, status, tokensUsed, durationMs, execErr)
+}
+
+// postCompletionComment posts a human-readable summary comment on the task.
+// Failures are silently logged; a missing comment must never fail the task.
+func (e *Executor) postCompletionComment(ctx context.Context, task *db.Task, result map[string]interface{}, status string, tokens, durationMs int, execErr error) {
+	body := e.buildCompletionComment(task, result, status, tokens, durationMs, execErr)
+	if err := e.client.PostComment(ctx, task.ID, body, e.agentID); err != nil {
+		log.Printf("executor: failed to post comment for task %s: %v", task.ID, err)
+	}
+}
+
+// buildCompletionComment constructs the comment body for a finished task.
+func (e *Executor) buildCompletionComment(task *db.Task, result map[string]interface{}, status string, tokens, durationMs int, execErr error) string {
+	if execErr != nil {
+		return fmt.Sprintf("**Task failed** (role=%s type=%s duration=%dms)\n\nError: %v",
+			task.Role, task.Type, durationMs, execErr)
+	}
+	header := fmt.Sprintf("**Task %s** (role=%s type=%s duration=%dms tokens=%d)",
+		status, task.Role, task.Type, durationMs, tokens)
+	if out, ok := result["output"].(string); ok && out != "" {
+		if len(out) > 500 {
+			out = out[:500] + "…"
+		}
+		return header + "\n\n" + out
+	}
+	return header
 }
 
 // extractReviewFromResult pulls the review status and body out of the LLM

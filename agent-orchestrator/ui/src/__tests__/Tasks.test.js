@@ -96,7 +96,7 @@ describe('Tasks — rendering', () => {
     })
   })
 
-  it('shows Queue button for FAILED and COMPLETED tasks', async () => {
+  it('shows Queue button for FAILED tasks', async () => {
     stubFetch()
     render(Tasks)
     await waitFor(() => {
@@ -224,6 +224,123 @@ describe('Tasks — queue action', () => {
         url.includes('/api/tasks/') && url.includes('/queue') && opts?.method === 'POST'
       )
       expect(postCall).toBeTruthy()
+    })
+  })
+
+  // Positive: Queue button calls /queue (not /unqueue) for FAILED tasks
+  it('Queue button calls /queue endpoint, never /unqueue', async () => {
+    vi.stubGlobal('fetch', vi.fn((url, opts = {}) => {
+      if (opts.method === 'POST' && url.includes('/queue')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ...TASKS[2], status: 'BACKLOG' }) })
+      }
+      let data
+      if (url.includes('/api/task-logs'))    data = TASK_LOGS
+      else if (url.includes('/api/projects')) data = PROJECTS
+      else if (url.includes('task-types'))   data = TASK_TYPES
+      else if (url.includes('task-roles'))   data = TASK_ROLES
+      else                                   data = TASKS
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) })
+    }))
+
+    const user = userEvent.setup()
+    render(Tasks)
+    await waitFor(() => screen.getAllByText('Queue'))
+    await user.click(screen.getAllByText('Queue')[0])
+
+    await waitFor(() => {
+      // Must have called /queue
+      const queueCall = fetch.mock.calls.find(([url, opts]) =>
+        url.includes('/api/tasks/') && url.endsWith('/queue') && opts?.method === 'POST'
+      )
+      expect(queueCall).toBeTruthy()
+
+      // Must NOT have called /unqueue
+      const unqueueCall = fetch.mock.calls.find(([url, opts]) =>
+        url.includes('/unqueue') && opts?.method === 'POST'
+      )
+      expect(unqueueCall).toBeFalsy()
+    })
+  })
+
+  // Positive: DEVELOPING tasks show a Queue button (any non-COMPLETED, non-BACKLOG task can be queued)
+  it('Queue button is shown for DEVELOPING tasks', async () => {
+    const developingTasks = [
+      {
+        id: 'td1', type: 'implement', role: 'worker', status: 'DEVELOPING', priority: 5,
+        payload: { title: 'In progress task', description: '' }, project_id: 'proj1',
+      },
+    ]
+    vi.stubGlobal('fetch', vi.fn((url) => {
+      let data
+      if (url.includes('/api/task-logs'))    data = []
+      else if (url.includes('/api/projects')) data = PROJECTS
+      else if (url.includes('task-types'))   data = TASK_TYPES
+      else if (url.includes('task-roles'))   data = TASK_ROLES
+      else                                   data = developingTasks
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) })
+    }))
+
+    render(Tasks)
+    await waitFor(() => screen.getByText('In progress task'))
+
+    expect(screen.getByText('Queue')).toBeInTheDocument()
+  })
+
+  // Negative: COMPLETED tasks do not show a Queue button
+  it('Queue button is not shown for COMPLETED tasks', async () => {
+    const completedTasks = [
+      {
+        id: 'tc1', type: 'implement', role: 'worker', status: 'COMPLETED', priority: 5,
+        payload: { title: 'Done task', description: '' }, project_id: 'proj1',
+      },
+    ]
+    vi.stubGlobal('fetch', vi.fn((url) => {
+      let data
+      if (url.includes('/api/task-logs'))    data = []
+      else if (url.includes('/api/projects')) data = PROJECTS
+      else if (url.includes('task-types'))   data = TASK_TYPES
+      else if (url.includes('task-roles'))   data = TASK_ROLES
+      else                                   data = completedTasks
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) })
+    }))
+
+    render(Tasks)
+    await waitFor(() => screen.getByText('Done task'))
+
+    expect(screen.queryByText('Queue')).toBeNull()
+  })
+
+  // Positive: Unqueue button calls /unqueue for BACKLOG tasks
+  it('Unqueue button calls /unqueue endpoint for BACKLOG tasks', async () => {
+    const backlogOnly = [
+      {
+        id: 'tb1', type: 'implement', role: 'worker', status: 'BACKLOG', priority: 5,
+        payload: { title: 'Backlog task', description: '' }, project_id: 'proj1',
+      },
+    ]
+    vi.stubGlobal('fetch', vi.fn((url, opts = {}) => {
+      if (opts.method === 'POST' && url.includes('/unqueue')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ...backlogOnly[0] }) })
+      }
+      let data
+      if (url.includes('/api/task-logs'))    data = []
+      else if (url.includes('/api/projects')) data = PROJECTS
+      else if (url.includes('task-types'))   data = TASK_TYPES
+      else if (url.includes('task-roles'))   data = TASK_ROLES
+      else                                   data = backlogOnly
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) })
+    }))
+
+    const user = userEvent.setup()
+    render(Tasks)
+    await waitFor(() => screen.getByText('Unqueue'))
+    await user.click(screen.getByText('Unqueue'))
+
+    await waitFor(() => {
+      const unqueueCall = fetch.mock.calls.find(([url, opts]) =>
+        url.includes('/api/tasks/') && url.endsWith('/unqueue') && opts?.method === 'POST'
+      )
+      expect(unqueueCall).toBeTruthy()
     })
   })
 })

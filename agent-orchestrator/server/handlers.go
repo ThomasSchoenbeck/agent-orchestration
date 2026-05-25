@@ -400,7 +400,7 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 
 	case "queue":
 		// POST /api/tasks/{id}/queue
-		// Re-queues a FAILED or COMPLETED task by resetting it to BACKLOG and
+		// Re-queues any non-COMPLETED task by resetting it to BACKLOG and
 		// clearing the agent assignment so it can be picked up again.
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w)
@@ -411,9 +411,9 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
 			return
 		}
-		if t.Status != db.TaskStatusFailed && t.Status != db.TaskStatusCompleted {
+		if t.Status == db.TaskStatusCompleted {
 			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput,
-				"can only queue tasks that are FAILED or COMPLETED")
+				"cannot queue a completed task")
 			return
 		}
 		s.releaseTaskResources(t)

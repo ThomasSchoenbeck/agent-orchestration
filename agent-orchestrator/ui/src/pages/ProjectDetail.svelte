@@ -4,7 +4,7 @@
   import { toasts } from '../lib/stores.js'
   import {
     getProject, updateProject,
-    listProjectTasks, createTask, updateTask, deleteTask,
+    listProjectTasks, createTask, updateTask, deleteTask, queueTask, unqueueTask,
     getTaskTypes, getTaskRoles,
     listRequirements, createRequirement, updateRequirement, deleteRequirement,
     listFeatures, createFeature, updateFeature, deleteFeature,
@@ -277,6 +277,24 @@
       await loadTasks()
     } catch (e) {
       toasts.error('Update failed: ' + e.message)
+    }
+  }
+
+  async function queueTaskAction(id) {
+    try {
+      await queueTask(id)
+      await loadTasks()
+    } catch (e) {
+      toasts.error('Queue failed: ' + e.message)
+    }
+  }
+
+  async function unqueueTaskAction(id) {
+    try {
+      await unqueueTask(id)
+      await loadTasks()
+    } catch (e) {
+      toasts.error('Unqueue failed: ' + e.message)
     }
   }
 
@@ -801,10 +819,15 @@
                   {/if}
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
-                  {#if t.status === 'BACKLOG' || t.status === 'FAILED'}
+                  {#if t.status === 'BACKLOG'}
+                    <button
+                      class="text-xs text-orange-400 hover:text-orange-300 transition-colors"
+                      onclick={(e) => { e.stopPropagation(); unqueueTaskAction(t.id) }}
+                    >Unqueue</button>
+                  {:else if t.status !== 'COMPLETED'}
                     <button
                       class="text-xs text-yellow-400 hover:text-yellow-300 transition-colors"
-                      onclick={(e) => { e.stopPropagation(); setTaskStatus(t.id, 'BACKLOG') }}
+                      onclick={(e) => { e.stopPropagation(); (t.status === 'FAILED' || t.status === 'COMPLETED') ? queueTaskAction(t.id) : unqueueTaskAction(t.id) }}
                     >Queue</button>
                   {/if}
                   <button

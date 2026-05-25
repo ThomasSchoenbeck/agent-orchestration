@@ -118,11 +118,30 @@ func (a *Agent) Stop() {
 	}
 }
 
+// reconnect re-registers the agent with the server without launching new
+// goroutines. Used by heartbeatLoop to recover after consecutive failures.
+func (a *Agent) reconnect(ctx context.Context) error {
+	caps := map[string]interface{}{"go_version": "1.22"}
+	id, err := a.client.Register(ctx, a.name, a.roles, a.mode, caps)
+	if err != nil {
+		return err
+	}
+	a.id = id
+	if a.executor != nil {
+		a.executor.agentID = id
+	}
+	return nil
+}
+
 // heartbeatLoop sends periodic heartbeats to keep the agent marked online.
+// After 3 consecutive failures it attempts to re-register so the server
+// considers the agent online again (e.g. after a server restart).
 func (a *Agent) heartbeatLoop(ctx context.Context) {
 	interval := time.Duration(a.cfg.Agents.HeartbeatIntervalSec) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	consecutiveFailures := 0
 
 	for {
 		select {
@@ -132,27 +151,36 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := a.client.Heartbeat(ctx, a.id); err != nil {
-				log.Printf("agent %q heartbeat error: %v — retrying in 5s", a.name, err)
-				select {
-				case <-time.After(5 * time.Second):
-					if err2 := a.client.Heartbeat(ctx, a.id); err2 != nil {
-						log.Printf("agent %q heartbeat retry failed: %v", a.name, err2)
+				consecutiveFailures++
+				log.Printf("agent %q heartbeat error (%d consecutive): %v",
+					a.name, consecutiveFailures, err)
+				if consecutiveFailures >= 3 {
+					log.Printf("agent %q: attempting re-registration after %d consecutive heartbeat failures",
+						a.name, consecutiveFailures)
+					if rerr := a.reconnect(ctx); rerr != nil {
+						log.Printf("agent %q: re-registration failed: %v", a.name, rerr)
+					} else {
+						log.Printf("agent %q: re-registered successfully (id=%s)", a.name, a.id)
+						consecutiveFailures = 0
 					}
-				case <-ctx.Done():
-					return
-				case <-a.done:
-					return
 				}
+			} else {
+				consecutiveFailures = 0
 			}
 		}
 	}
 }
 
 // pollLoop polls for tasks and executes them.
+// It skips polling entirely when no model provider is available for any of the
+// agent's roles, logging once when the provider disappears and once when it
+// comes back, so the log stays quiet during prolonged outages.
 func (a *Agent) pollLoop(ctx context.Context) {
 	interval := time.Duration(a.cfg.Agents.TaskPollIntervalSec) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	providerAvailable := true // optimistic — log only on transitions
 
 	for {
 		select {
@@ -161,6 +189,22 @@ func (a *Agent) pollLoop(ctx context.Context) {
 		case <-a.done:
 			return
 		case <-ticker.C:
+			// Guard: skip task pickup if the executor has no live provider.
+			canRun := a.executor != nil && a.executor.CanExecute(a.roles)
+			if !canRun {
+				if providerAvailable {
+					log.Printf("agent %q: no provider available for roles %v — pausing task pickup",
+						a.name, a.roles)
+					providerAvailable = false
+				}
+				continue
+			}
+			if !providerAvailable {
+				log.Printf("agent %q: provider available for roles %v — resuming task pickup",
+					a.name, a.roles)
+				providerAvailable = true
+			}
+
 			task, err := a.client.GetNextTask(ctx, a.id, a.roles)
 			if err != nil {
 				log.Printf("agent %q poll error: %v", a.name, err)
@@ -184,8 +228,20 @@ func (a *Agent) pollLoop(ctx context.Context) {
 }
 
 // executeTask runs the claimed task via the executor, or logs a warning if no
-// executor is configured.
+// executor is configured. A deferred recover prevents a panicking task from
+// taking down the whole agent process.
 func (a *Agent) executeTask(ctx context.Context, task *db.Task) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("agent %q: panic executing task %s: %v", a.name, task.ID, r)
+			_ = a.client.PostLog(ctx, db.LogEntry{
+				Level:   "error",
+				AgentID: a.id,
+				TaskID:  task.ID,
+				Message: fmt.Sprintf("agent panic while executing task: %v", r),
+			})
+		}
+	}()
 	if a.executor == nil || a.executor.rtr == nil {
 		log.Printf("agent %q: no executor configured — skipping task %s", a.name, task.ID)
 		return

@@ -689,6 +689,135 @@ func TestClaimTask_OnlyOneAgentSucceeds_Concurrent(t *testing.T) {
 	}
 }
 
+// --- Queue / Unqueue ---
+
+func TestQueueTask(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	// Create a task and set it to FAILED via PUT.
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	do(t, srv, http.MethodPut, "/api/tasks/"+task.ID, map[string]interface{}{
+		"status": db.TaskStatusFailed,
+	})
+
+	// Queue the FAILED task — expect 200 and status BACKLOG.
+	qw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/queue", nil)
+	if qw.Code != http.StatusOK {
+		t.Fatalf("queue: expected 200, got %d: %s", qw.Code, qw.Body.String())
+	}
+	var queued db.Task
+	_ = json.Unmarshal(qw.Body.Bytes(), &queued)
+	if queued.Status != db.TaskStatusBacklog {
+		t.Errorf("queue: expected status %s, got %s", db.TaskStatusBacklog, queued.Status)
+	}
+}
+
+func TestQueueTask_FromDeveloping(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	// Create a task and move it to DEVELOPING by claiming it.
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	aw := do(t, srv, http.MethodPost, "/api/agents/register", map[string]interface{}{
+		"name": "queue-dev-agent", "roles": []string{"worker"},
+	})
+	var regResp map[string]string
+	_ = json.Unmarshal(aw.Body.Bytes(), &regResp)
+	do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/claim", map[string]string{"agent_id": regResp["agent_id"]})
+
+	// Queue a DEVELOPING task — must return 200 and reset to BACKLOG.
+	qw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/queue", nil)
+	if qw.Code != http.StatusOK {
+		t.Fatalf("queue from DEVELOPING: expected 200, got %d: %s", qw.Code, qw.Body.String())
+	}
+	var queued db.Task
+	_ = json.Unmarshal(qw.Body.Bytes(), &queued)
+	if queued.Status != db.TaskStatusBacklog {
+		t.Errorf("queue from DEVELOPING: expected status %s, got %s", db.TaskStatusBacklog, queued.Status)
+	}
+}
+
+func TestQueueTask_InvalidStatus(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	// Create a task and mark it COMPLETED — the only status that cannot be queued.
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	do(t, srv, http.MethodPut, "/api/tasks/"+task.ID, map[string]interface{}{
+		"status": db.TaskStatusCompleted,
+	})
+
+	// Attempting to queue a COMPLETED task must return 400.
+	qw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/queue", nil)
+	if qw.Code != http.StatusBadRequest {
+		t.Errorf("queue COMPLETED: expected 400, got %d", qw.Code)
+	}
+}
+
+func TestUnqueueTask(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	// Create a task — starts as BACKLOG, which is a valid queue state.
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	// Unqueue from BACKLOG — expect 200 and status BACKLOG.
+	uw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/unqueue", nil)
+	if uw.Code != http.StatusOK {
+		t.Fatalf("unqueue: expected 200, got %d: %s", uw.Code, uw.Body.String())
+	}
+	var unqueued db.Task
+	_ = json.Unmarshal(uw.Body.Bytes(), &unqueued)
+	if unqueued.Status != db.TaskStatusBacklog {
+		t.Errorf("unqueue: expected status %s, got %s", db.TaskStatusBacklog, unqueued.Status)
+	}
+}
+
+func TestUnqueueTask_InvalidStatus(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	// Create a task, then claim it so it moves to DEVELOPING.
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	aw := do(t, srv, http.MethodPost, "/api/agents/register", map[string]interface{}{
+		"name": "unqueue-test-agent", "roles": []string{"worker"},
+	})
+	var regResp map[string]string
+	_ = json.Unmarshal(aw.Body.Bytes(), &regResp)
+	do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/claim", map[string]string{"agent_id": regResp["agent_id"]})
+
+	// DEVELOPING is not a queue state — unqueue must return 400.
+	uw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/unqueue", nil)
+	if uw.Code != http.StatusBadRequest {
+		t.Errorf("unqueue invalid status: expected 400, got %d", uw.Code)
+	}
+}
+
 // --- Role filtering on tasks/next ---
 
 // TestGetNextTask_RoleFiltering verifies that GetNextTask filters by role:
