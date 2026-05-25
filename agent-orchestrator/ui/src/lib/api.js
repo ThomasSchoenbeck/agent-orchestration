@@ -37,6 +37,27 @@ export const deleteProject  = (id)     => del(`/api/projects/${id}`)
 export const projectChat = (projectId, data) => post(`/api/projects/${projectId}/chat`, data)
 export const taskChat    = (taskId, data)    => post(`/api/tasks/${taskId}/chat`, data)
 
+// ── Project git file/tree/diff ───────────────────────────────────────────────
+export const initRepo      = (projectId)                => post(`/api/projects/${projectId}/init-repo`)
+export const listBranches  = (projectId)                => get(`/api/projects/${projectId}/branches`)
+export const readTree      = (projectId, ref, path='')  => {
+  const qs = new URLSearchParams({ ref, path }).toString()
+  return get(`/api/projects/${projectId}/tree?${qs}`)
+}
+export const readFile      = (projectId, ref, path)     => {
+  const qs = new URLSearchParams({ ref, path }).toString()
+  return get(`/api/projects/${projectId}/file?${qs}`)
+}
+export const commitFile    = (projectId, data)           => put(`/api/projects/${projectId}/file`, data)
+export const getFileDiff   = (projectId, base, head, path) => {
+  const qs = new URLSearchParams({ base, head, path }).toString()
+  return get(`/api/projects/${projectId}/diff?${qs}`)
+}
+export const getBranchDiff = (projectId, base, head)    => {
+  const qs = new URLSearchParams({ base, head }).toString()
+  return get(`/api/projects/${projectId}/diff?${qs}`)
+}
+
 // ── Tasks ────────────────────────────────────────────────────────────────────
 export const listTasks        = (params = {}) => {
   const qs = new URLSearchParams(params).toString()

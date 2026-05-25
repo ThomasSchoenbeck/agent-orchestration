@@ -45,6 +45,59 @@ func TestRegistry_GetMissing(t *testing.T) {
 	}
 }
 
+func TestRegistry_SetRoles_GetForRole(t *testing.T) {
+	reg := llm.NewRegistry()
+	p := llm.NewOpenAIProvider("local", "http://localhost", "key", "llama3")
+	reg.Set("local", p)
+	reg.SetRoles("local", "llama3", []string{"reviewer", "worker"})
+
+	got, model, err := reg.GetForRole("reviewer")
+	if err != nil {
+		t.Fatalf("GetForRole reviewer: %v", err)
+	}
+	if got.Name() != "local" {
+		t.Errorf("expected provider local, got %s", got.Name())
+	}
+	if model != "llama3" {
+		t.Errorf("expected model llama3, got %s", model)
+	}
+
+	_, _, err = reg.GetForRole("orchestrator")
+	if err == nil {
+		t.Fatal("expected error for unmapped role, got nil")
+	}
+}
+
+func TestRegistry_SetRoles_ReplacesPreviousMappings(t *testing.T) {
+	reg := llm.NewRegistry()
+	p := llm.NewOpenAIProvider("prov", "http://localhost", "", "m")
+	reg.Set("prov", p)
+	reg.SetRoles("prov", "m", []string{"worker", "reviewer"})
+
+	// Reassign with only "worker".
+	reg.SetRoles("prov", "m", []string{"worker"})
+
+	if _, _, err := reg.GetForRole("worker"); err != nil {
+		t.Errorf("worker should still be mapped: %v", err)
+	}
+	if _, _, err := reg.GetForRole("reviewer"); err == nil {
+		t.Error("reviewer should no longer be mapped after SetRoles update")
+	}
+}
+
+func TestRegistry_Remove_ClearsRoleIndex(t *testing.T) {
+	reg := llm.NewRegistry()
+	p := llm.NewOpenAIProvider("prov", "http://localhost", "", "m")
+	reg.Set("prov", p)
+	reg.SetRoles("prov", "m", []string{"worker"})
+
+	reg.Remove("prov")
+
+	if _, _, err := reg.GetForRole("worker"); err == nil {
+		t.Error("role index should be cleared after Remove")
+	}
+}
+
 // --- OpenAI provider tests ---
 
 func mockOpenAIServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {

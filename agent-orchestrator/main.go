@@ -146,6 +146,9 @@ func runServer(args []string) error {
 				continue
 			}
 			llmReg.Set(p.Name, prov)
+			if len(p.Roles) > 0 {
+				llmReg.SetRoles(p.Name, p.ModelName, p.Roles)
+			}
 		}
 		log.Printf("loaded %d LLM provider(s) from database", len(dbProviders))
 	} else {
@@ -259,6 +262,7 @@ func runAgent(args []string) error {
 
 	<-ctx.Done()
 	log.Println("agent: shutting down…")
+	a.Deregister(context.Background())
 	a.Stop()
 	return nil
 }
@@ -299,11 +303,40 @@ func buildAgent(name string, roles []string, serverURL, configPath, workdir stri
 			log.Printf("agent %q: could not open database (%v) — running without tool execution", name, err)
 		} else {
 			llmReg := llm.NewRegistry()
-			if err := llmReg.InitFromConfig(cfg); err != nil {
-				log.Printf("agent %q: could not init LLM providers (%v) — running without LLM execution", name, err)
-				_ = database.Close()
+			providersOK := true
+
+			// Prefer DB providers so that role preferences and live updates are respected.
+			// Fall back to config-file providers if the DB has none yet.
+			startCtx := context.Background()
+			dbProviders, dbErr := database.ListProviders(startCtx)
+			if dbErr == nil && len(dbProviders) > 0 {
+				for _, p := range dbProviders {
+					if !p.Enabled {
+						continue
+					}
+					prov, perr := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config)
+					if perr != nil {
+						log.Printf("agent %q: init provider %q: %v", name, p.Name, perr)
+						continue
+					}
+					llmReg.Set(p.Name, prov)
+					if len(p.Roles) > 0 {
+						llmReg.SetRoles(p.Name, p.ModelName, p.Roles)
+					}
+				}
 			} else {
+				if initErr := llmReg.InitFromConfig(cfg); initErr != nil {
+					log.Printf("agent %q: could not init LLM providers (%v) — running without LLM execution", name, initErr)
+					_ = database.Close()
+					providersOK = false
+				}
+			}
+
+			if providersOK {
 				rtr := router.New(cfg, llmReg)
+				if rtrErr := rtr.LoadFromDB(database); rtrErr != nil {
+					log.Printf("agent %q: could not load role definitions from DB (%v) — using config roles only", name, rtrErr)
+				}
 				toolReg := tools.NewRegistry()
 				_ = tools.RegisterCodeTools(toolReg)
 				_ = tools.RegisterTaskTools(toolReg, database)
@@ -391,6 +424,7 @@ func runAgents(args []string) error {
 			defer cleanup()
 			<-ctx.Done()
 			log.Printf("agent %q: shutting down…", name)
+			a.Deregister(context.Background())
 			a.Stop()
 		}(a, cleanup, def.Name)
 	}

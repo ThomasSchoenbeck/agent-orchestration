@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"log"
 	"net/http"
 
 	"agent-orchestrator/api"
@@ -59,6 +60,7 @@ func (s *Server) handleTaskComments(w http.ResponseWriter, r *http.Request, task
 			s.internalError(w, err)
 			return
 		}
+		log.Printf("task %s: comment added (author_type=%s author_id=%s)", taskID, c.AuthorType, c.AuthorID)
 		api.WriteJSON(w, http.StatusCreated, c)
 
 	case http.MethodDelete:

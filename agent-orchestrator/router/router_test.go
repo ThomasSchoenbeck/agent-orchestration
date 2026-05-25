@@ -84,6 +84,36 @@ func TestRouteByRole_Unknown(t *testing.T) {
 	}
 }
 
+func TestRouteByRole_ProviderRolePreferenceFallback(t *testing.T) {
+	// Config has no mapping for "reviewer", but the registry has a provider
+	// that declares it via role preferences.
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{},
+		Models:    []config.ModelConfig{},
+		Roles:     map[string]string{},
+		Routing:   map[string]string{},
+	}
+	reg := llm.NewRegistry()
+	p := llm.NewOllamaProvider("local", "http://localhost:11434", "llama3")
+	reg.Set("local", p)
+	reg.SetRoles("local", "llama3", []string{"reviewer", "worker"})
+
+	r := router.New(cfg, reg)
+	result, err := r.RouteByRole("reviewer")
+	if err != nil {
+		t.Fatalf("expected fallback to provider role preference, got: %v", err)
+	}
+	if result.Provider == nil {
+		t.Fatal("expected non-nil provider")
+	}
+	if result.Model != "llama3" {
+		t.Errorf("expected model llama3, got %s", result.Model)
+	}
+	if result.Role != "reviewer" {
+		t.Errorf("expected role reviewer, got %s", result.Role)
+	}
+}
+
 func TestRouteByTaskType_Implement(t *testing.T) {
 	cfg := testConfig()
 	reg := testRegistry(t, cfg)

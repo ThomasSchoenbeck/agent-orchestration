@@ -3,12 +3,122 @@ package git
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
+
+// FilePatch describes a single file that changed between two refs.
+type FilePatch struct {
+	Path   string `json:"path"`
+	Status string `json:"status"` // "added", "modified", "deleted"
+	Diff   string `json:"diff"`
+}
+
+// FileDiff returns a unified diff string for filePath between baseRef and headRef.
+func FileDiff(repoPath, baseRef, headRef, filePath string) (string, error) {
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("git.FileDiff open %q: %w", repoPath, err)
+	}
+
+	baseCommit, err := resolveRef(repo, baseRef)
+	if err != nil {
+		return "", fmt.Errorf("git.FileDiff resolve base %q: %w", baseRef, err)
+	}
+	headCommit, err := resolveRef(repo, headRef)
+	if err != nil {
+		return "", fmt.Errorf("git.FileDiff resolve head %q: %w", headRef, err)
+	}
+
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return "", fmt.Errorf("git.FileDiff base tree: %w", err)
+	}
+	headTree, err := headCommit.Tree()
+	if err != nil {
+		return "", fmt.Errorf("git.FileDiff head tree: %w", err)
+	}
+
+	changes, err := object.DiffTree(baseTree, headTree)
+	if err != nil {
+		return "", fmt.Errorf("git.FileDiff diff tree: %w", err)
+	}
+
+	for _, ch := range changes {
+		name := ch.To.Name
+		if name == "" {
+			name = ch.From.Name
+		}
+		if name != filePath {
+			continue
+		}
+		patch, perr := ch.Patch()
+		if perr != nil {
+			return "", fmt.Errorf("git.FileDiff patch for %q: %w", filePath, perr)
+		}
+		return patch.String(), nil
+	}
+	return "", nil // no diff for this file
+}
+
+// BranchDiff returns all changed files and their unified diffs between baseRef and headRef.
+func BranchDiff(repoPath, baseRef, headRef string) ([]FilePatch, error) {
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("git.BranchDiff open %q: %w", repoPath, err)
+	}
+
+	baseCommit, err := resolveRef(repo, baseRef)
+	if err != nil {
+		return nil, fmt.Errorf("git.BranchDiff resolve base %q: %w", baseRef, err)
+	}
+	headCommit, err := resolveRef(repo, headRef)
+	if err != nil {
+		return nil, fmt.Errorf("git.BranchDiff resolve head %q: %w", headRef, err)
+	}
+
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("git.BranchDiff base tree: %w", err)
+	}
+	headTree, err := headCommit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("git.BranchDiff head tree: %w", err)
+	}
+
+	changes, err := object.DiffTree(baseTree, headTree)
+	if err != nil {
+		return nil, fmt.Errorf("git.BranchDiff diff tree: %w", err)
+	}
+
+	var patches []FilePatch
+	for _, ch := range changes {
+		status := "modified"
+		path := ch.To.Name
+		if ch.From.Name == "" {
+			status = "added"
+		} else if ch.To.Name == "" {
+			status = "deleted"
+			path = ch.From.Name
+		}
+
+		var diffStr string
+		if p, perr := ch.Patch(); perr == nil {
+			diffStr = p.String()
+			// Strip the file header lines — keep only the hunk content.
+			if idx := strings.Index(diffStr, "@@"); idx >= 0 {
+				diffStr = diffStr[idx:]
+			}
+		}
+
+		patches = append(patches, FilePatch{Path: path, Status: status, Diff: diffStr})
+	}
+	return patches, nil
+}
 
 // ChangedFiles returns the set of file paths that differ between branchName
 // and baseBranch (typically "main") in the bare repo at repoPath.

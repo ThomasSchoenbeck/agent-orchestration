@@ -8,10 +8,14 @@
     getTaskTypes, getTaskRoles,
     listRequirements, createRequirement, updateRequirement, deleteRequirement,
     listFeatures, createFeature, updateFeature, deleteFeature,
+    initRepo, listBranches,
   } from '../lib/api.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
   import AssistantSidebar from '../components/AssistantSidebar.svelte'
   import Skeleton from '../components/Skeleton.svelte'
+  import FileTree from '../components/FileTree.svelte'
+  import CodeEditor from '../components/CodeEditor.svelte'
+  import DiffViewer from '../components/DiffViewer.svelte'
 
   let { projectId } = $props()
 
@@ -25,6 +29,44 @@
   let showTaskForm = $state(false)
   let filterStatus = $state('')
   let showAssistant = $state(false)
+
+  // ── Repo health ───────────────────────────────────────────────────────────
+  let repoMissing   = $state(false)
+  let initingRepo   = $state(false)
+
+  async function checkRepo() {
+    try {
+      await listBranches(projectId)
+      repoMissing = false
+    } catch (_) {
+      repoMissing = true
+    }
+  }
+
+  async function handleInitRepo() {
+    initingRepo = true
+    try {
+      await initRepo(projectId)
+      repoMissing = false
+      toasts.success('Repository initialised')
+    } catch (e) {
+      toasts.error('Init failed: ' + e.message)
+    } finally {
+      initingRepo = false
+    }
+  }
+
+  // ── Tab state ─────────────────────────────────────────────────────────────
+  let activeTab     = $state('overview')   // 'overview' | 'files' | 'diff'
+  let activeFilePath = $state(null)
+  let activeFileRef  = $state('main')
+  let diffBaseRef    = $state('main')
+  let diffHeadRef    = $state('')
+
+  function onFileSelect(path, ref) {
+    activeFilePath = path
+    activeFileRef  = ref
+  }
 
   // Requirements / features state
   let requirements       = $state([])
@@ -125,7 +167,7 @@
       project   = p
       taskTypes = Array.isArray(tt) ? tt : []
       taskRoles = Array.isArray(tr) ? tr : []
-      await Promise.all([loadTasks(), loadRequirements(), loadFeatures()])
+      await Promise.all([loadTasks(), loadRequirements(), loadFeatures(), checkRepo()])
     } catch (e) {
       toasts.error('Failed to load project: ' + e.message)
     } finally {
@@ -317,7 +359,9 @@
 
 <div class="flex-1 flex overflow-hidden">
   <!-- Main content -->
-  <div class="flex-1 overflow-y-auto p-6 flex flex-col {showAssistant ? 'max-w-4xl' : 'max-w-5xl'} mx-auto w-full">
+  <div class="flex-1 flex flex-col overflow-hidden {showAssistant ? 'max-w-4xl' : 'max-w-5xl'} mx-auto w-full">
+  <!-- Scrollable wrapper for overview; fills height for Files/Diff -->
+  <div class="{activeTab === 'overview' ? 'overflow-y-auto' : 'overflow-hidden flex flex-col flex-1'} p-6 flex flex-col">
     <!-- Breadcrumb -->
     <nav class="mb-5 text-sm text-gray-500 flex items-center gap-2 justify-between">
       <div class="flex items-center gap-2">
@@ -342,6 +386,33 @@
     <p class="text-gray-400 text-sm">Project not found.</p>
 
   {:else}
+    <!-- ── Tab bar ───────────────────────────────────────────────────────── -->
+    <div class="flex gap-1 mb-4 border-b border-surface-600 shrink-0">
+      {#each [['overview','Overview'],['files','Files'],['diff','Diff']] as [id, label]}
+        <button
+          class="px-4 py-2 text-sm transition-colors border-b-2 -mb-px
+                 {activeTab === id
+                   ? 'border-accent text-gray-100'
+                   : 'border-transparent text-gray-500 hover:text-gray-300'}"
+          onclick={() => activeTab = id}
+        >{label}</button>
+      {/each}
+    </div>
+
+    <!-- ── Repo missing banner ───────────────────────────────────────────── -->
+    {#if repoMissing}
+      <div class="mb-4 flex items-center gap-3 px-4 py-3 bg-yellow-950 border border-yellow-700 rounded text-sm">
+        <span class="text-yellow-400">⚠</span>
+        <span class="text-yellow-200 flex-1">The git repository for this project is missing or could not be opened.</span>
+        <button
+          class="px-3 py-1 bg-yellow-700 hover:bg-yellow-600 text-yellow-100 text-xs rounded
+                 transition-colors disabled:opacity-50"
+          disabled={initingRepo}
+          onclick={handleInitRepo}
+        >{initingRepo ? 'Initialising…' : 'Initialise repository'}</button>
+      </div>
+    {/if}
+
     <!-- ── Project header ─────────────────────────────────────────────────── -->
     <div class="mb-6 p-5 bg-surface-800 rounded border border-surface-600">
       {#if editing}
@@ -495,6 +566,9 @@
         </div>
       {/if}
     </div>
+
+    <!-- ── Overview: requirements / features / tasks ────────────────────── -->
+    {#if activeTab === 'overview'}
 
     <!-- ── Requirements ──────────────────────────────────────────────────── -->
     <div class="mb-4">
@@ -841,7 +915,50 @@
         </div>
       {/if}
     </div>
+
+    {/if}
+    <!-- ── Files tab ─────────────────────────────────────────────────────── -->
+    {#if activeTab === 'files'}
+      <div class="flex-1 overflow-hidden flex gap-0 border border-surface-600 rounded">
+        <!-- File tree (25%) -->
+        <div class="w-56 shrink-0 border-r border-surface-600 overflow-hidden flex flex-col bg-surface-800">
+          <FileTree {projectId} onFileSelect={onFileSelect} />
+        </div>
+        <!-- Code editor (75%) -->
+        <div class="flex-1 overflow-hidden flex flex-col bg-surface-900">
+          <CodeEditor {projectId} ref={activeFileRef} path={activeFilePath} />
+        </div>
+      </div>
+    {/if}
+
+    <!-- ── Diff tab ───────────────────────────────────────────────────────── -->
+    {#if activeTab === 'diff'}
+      <div class="flex-1 overflow-hidden flex flex-col gap-3">
+        <div class="flex items-center gap-3 shrink-0">
+          <label class="text-xs text-gray-500">Base</label>
+          <input
+            class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs
+                   text-gray-300 focus:outline-none focus:border-accent w-32"
+            placeholder="main"
+            bind:value={diffBaseRef}
+          />
+          <span class="text-gray-500 text-xs">→</span>
+          <label class="text-xs text-gray-500">Head</label>
+          <input
+            class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs
+                   text-gray-300 focus:outline-none focus:border-accent w-32"
+            placeholder="feature-branch"
+            bind:value={diffHeadRef}
+          />
+        </div>
+        <div class="flex-1 overflow-hidden border border-surface-600 rounded bg-surface-900">
+          <DiffViewer {projectId} baseRef={diffBaseRef} headRef={diffHeadRef} />
+        </div>
+      </div>
+    {/if}
+
   {/if}
+  </div>
   </div>
 
   <!-- Assistant sidebar -->

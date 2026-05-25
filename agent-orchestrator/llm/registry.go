@@ -8,14 +8,22 @@ import (
 )
 
 // Registry manages available LLM providers indexed by name.
+// It also maintains a role index so providers can be looked up by the agent
+// roles they declare support for (e.g. "reviewer", "worker").
 type Registry struct {
-	providers map[string]LLMProvider
-	mu        sync.RWMutex
+	providers  map[string]LLMProvider
+	roleIndex  map[string]string // role → provider name
+	modelIndex map[string]string // provider name → default model name
+	mu         sync.RWMutex
 }
 
 // NewRegistry creates an empty provider registry.
 func NewRegistry() *Registry {
-	return &Registry{providers: make(map[string]LLMProvider)}
+	return &Registry{
+		providers:  make(map[string]LLMProvider),
+		roleIndex:  make(map[string]string),
+		modelIndex: make(map[string]string),
+	}
 }
 
 // Register adds a provider to the registry.
@@ -83,11 +91,53 @@ func (r *Registry) Set(name string, p LLMProvider) {
 	r.providers[name] = p
 }
 
-// Remove removes a named provider from the registry.
+// Remove removes a named provider and clears any role/model index entries for it.
 func (r *Registry) Remove(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.providers, name)
+	delete(r.modelIndex, name)
+	for role, pName := range r.roleIndex {
+		if pName == name {
+			delete(r.roleIndex, role)
+		}
+	}
+}
+
+// SetRoles associates a set of roles with a named provider and records its
+// default model. Replaces any previous role mappings for that provider.
+// Call this whenever a provider is added or updated with role preferences.
+func (r *Registry) SetRoles(name, defaultModel string, roles []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Clear old role mappings for this provider.
+	for role, pName := range r.roleIndex {
+		if pName == name {
+			delete(r.roleIndex, role)
+		}
+	}
+	r.modelIndex[name] = defaultModel
+	for _, role := range roles {
+		if role != "" {
+			r.roleIndex[role] = name
+		}
+	}
+}
+
+// GetForRole returns the provider and its default model for the given role.
+// Returns an error if no provider declares support for that role.
+func (r *Registry) GetForRole(role string) (LLMProvider, string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	name, ok := r.roleIndex[role]
+	if !ok {
+		return nil, "", fmt.Errorf("no provider registered for role %q", role)
+	}
+	p, ok := r.providers[name]
+	if !ok {
+		return nil, "", fmt.Errorf("provider %q declared for role %q but not in registry", name, role)
+	}
+	return p, r.modelIndex[name], nil
 }
 
 // NewFromSpec constructs an LLMProvider from raw config values without

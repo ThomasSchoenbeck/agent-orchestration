@@ -97,6 +97,10 @@ func (d *Database) ListTasks(ctx context.Context, f TaskFilters) ([]*Task, error
 
 // UpdateTask updates a task's mutable fields.
 func (d *Database) UpdateTask(ctx context.Context, t *Task) error {
+	// Read the current status before overwriting so the log shows the real transition.
+	var oldStatus string
+	_ = d.db.QueryRowContext(ctx, `SELECT status FROM tasks WHERE id=?`, t.ID).Scan(&oldStatus)
+
 	t.UpdatedAt = time.Now().UTC()
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE tasks SET status=?, priority=?, assigned_agent_id=?, payload=?,
@@ -110,7 +114,13 @@ func (d *Database) UpdateTask(ctx context.Context, t *Task) error {
 		t.ID,
 	)
 	if err == nil {
-		d.logTaskEvent(ctx, t.ID, t.ProjectID, t.AssignedAgentID, "task_updated", "", t.Status, "Task updated")
+		var msg string
+		if oldStatus != "" && oldStatus != t.Status {
+			msg = fmt.Sprintf("Status: %s → %s", oldStatus, t.Status)
+		} else {
+			msg = "Fields updated"
+		}
+		d.logTaskEvent(ctx, t.ID, t.ProjectID, t.AssignedAgentID, "task_updated", oldStatus, t.Status, msg)
 	}
 	return err
 }

@@ -151,6 +151,7 @@ type Provider struct {
 	ModelName    string                 `json:"model_name"`
 	APIKey       string                 `json:"api_key,omitempty"`
 	Enabled      bool                   `json:"enabled"`
+	Roles        []string               `json:"roles"`        // roles this provider can serve
 	Capabilities []string               `json:"capabilities"`
 	Config       map[string]interface{} `json:"config"`
 	CreatedAt    time.Time              `json:"created_at"`

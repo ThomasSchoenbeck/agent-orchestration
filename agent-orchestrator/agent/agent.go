@@ -109,12 +109,25 @@ func (a *Agent) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop signals the agent to stop.
+// Stop signals the agent to stop its internal loops.
+// Call Deregister before Stop to notify the server of a clean shutdown.
 func (a *Agent) Stop() {
 	select {
 	case <-a.done:
 	default:
 		close(a.done)
+	}
+}
+
+// Deregister notifies the server that this agent is going offline gracefully.
+// This prevents stale "online" records from persisting until the next
+// heartbeat timeout cycle. Safe to call if the agent was never registered.
+func (a *Agent) Deregister(ctx context.Context) {
+	if a.id == "" {
+		return
+	}
+	if err := a.client.SetOffline(ctx, a.id); err != nil {
+		log.Printf("agent %q: deregister: %v", a.name, err)
 	}
 }
 

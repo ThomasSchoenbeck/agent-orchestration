@@ -194,3 +194,49 @@ func TestLifecycle_ApprovedReview_TransitionsToAwaitingMerge(t *testing.T) {
 		t.Errorf("after approval: status = %q, want AWAITING_MERGE", final.Status)
 	}
 }
+
+func TestAgent_OfflineEndpoint(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	// Register an agent.
+	rw := do(t, srv, http.MethodPost, "/api/agents/register", map[string]interface{}{
+		"name": "agent-offline-test", "roles": []string{"worker"},
+	})
+	if rw.Code != http.StatusCreated && rw.Code != http.StatusOK {
+		t.Fatalf("register: expected 2xx, got %d: %s", rw.Code, rw.Body.String())
+	}
+	var reg map[string]string
+	_ = json.Unmarshal(rw.Body.Bytes(), &reg)
+	agentID := reg["agent_id"]
+
+	// Agent should start as online/idle.
+	gw := do(t, srv, http.MethodGet, "/api/agents/"+agentID, nil)
+	var a db.Agent
+	_ = json.Unmarshal(gw.Body.Bytes(), &a)
+	if a.Status == "offline" {
+		t.Fatalf("expected agent to be online after registration, got %q", a.Status)
+	}
+
+	// POST /offline — simulates clean shutdown.
+	ow := do(t, srv, http.MethodPost, "/api/agents/"+agentID+"/offline", nil)
+	if ow.Code != http.StatusOK {
+		t.Fatalf("offline: expected 200, got %d: %s", ow.Code, ow.Body.String())
+	}
+
+	// Agent should now be offline immediately.
+	gw2 := do(t, srv, http.MethodGet, "/api/agents/"+agentID, nil)
+	var a2 db.Agent
+	_ = json.Unmarshal(gw2.Body.Bytes(), &a2)
+	if a2.Status != "offline" {
+		t.Errorf("expected agent status offline after deregistration, got %q", a2.Status)
+	}
+}
+
+func TestAgent_OfflineEndpoint_NotFound(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	ow := do(t, srv, http.MethodPost, "/api/agents/nonexistent-id/offline", nil)
+	if ow.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for unknown agent, got %d", ow.Code)
+	}
+}

@@ -124,10 +124,21 @@ func (r *Router) RouteByRole(role string) (*RouteResult, error) {
 
 	// Config fallback.
 	modelName, ok := r.cfg.Roles[role]
-	if !ok {
-		return nil, fmt.Errorf("no model mapped to role %q in config", role)
+	if ok {
+		return r.resolveModel(role, modelName)
 	}
-	return r.resolveModel(role, modelName)
+
+	// Provider role-preference fallback: find any registered provider that
+	// declares support for this role via its roles list.
+	if prov, model, err := r.registry.GetForRole(role); err == nil {
+		return &RouteResult{
+			Provider: prov,
+			Model:    model,
+			Role:     role,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("no provider available for role %q (no DB definition, config mapping, or provider preference)", role)
 }
 
 // RouteByTaskType resolves a task type → role → provider + model.

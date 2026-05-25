@@ -209,6 +209,31 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if sub == "branches" {
+		s.handleProjectBranches(w, r, id)
+		return
+	}
+
+	if sub == "tree" {
+		s.handleProjectTree(w, r, id)
+		return
+	}
+
+	if sub == "file" {
+		s.handleProjectFile(w, r, id)
+		return
+	}
+
+	if sub == "diff" {
+		s.handleProjectDiff(w, r, id)
+		return
+	}
+
+	if sub == "init-repo" {
+		s.handleProjectInitRepo(w, r, id)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		p, err := s.db.GetProject(r.Context(), id)
@@ -274,6 +299,192 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+// =========================================================================
+// Project git file/tree/diff routes
+// =========================================================================
+
+func (s *Server) projectRepoPath(w http.ResponseWriter, r *http.Request, projectID string) (string, bool) {
+	p, err := s.db.GetProject(r.Context(), projectID)
+	if err != nil {
+		api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, "project not found")
+		return "", false
+	}
+	return s.storage.RepoPath(p.ID), true
+}
+
+func (s *Server) handleProjectInitRepo(w http.ResponseWriter, r *http.Request, projectID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	repoPath, ok := s.projectRepoPath(w, r, projectID)
+	if !ok {
+		return
+	}
+	if err := git.InitBare(repoPath); err != nil {
+		s.internalError(w, err)
+		return
+	}
+	log.Printf("project %s: bare repo initialised at %s", projectID, repoPath)
+	api.WriteJSON(w, http.StatusOK, map[string]string{"repo_path": repoPath, "status": "ok"})
+}
+
+func (s *Server) handleProjectBranches(w http.ResponseWriter, r *http.Request, projectID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	repoPath, ok := s.projectRepoPath(w, r, projectID)
+	if !ok {
+		return
+	}
+	branches, err := git.ListBranches(repoPath)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if branches == nil {
+		branches = []string{}
+	}
+	api.WriteJSON(w, http.StatusOK, branches)
+}
+
+func (s *Server) handleProjectTree(w http.ResponseWriter, r *http.Request, projectID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	repoPath, ok := s.projectRepoPath(w, r, projectID)
+	if !ok {
+		return
+	}
+	ref := r.URL.Query().Get("ref")
+	if ref == "" {
+		ref = "main"
+	}
+	subpath := r.URL.Query().Get("path")
+	nodes, err := git.ReadTree(repoPath, ref, subpath)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+			return
+		}
+		s.internalError(w, err)
+		return
+	}
+	if nodes == nil {
+		nodes = []git.TreeNode{}
+	}
+	api.WriteJSON(w, http.StatusOK, nodes)
+}
+
+func (s *Server) handleProjectFile(w http.ResponseWriter, r *http.Request, projectID string) {
+	repoPath, ok := s.projectRepoPath(w, r, projectID)
+	if !ok {
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		ref := r.URL.Query().Get("ref")
+		if ref == "" {
+			ref = "main"
+		}
+		filePath := r.URL.Query().Get("path")
+		if filePath == "" {
+			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, "path is required")
+			return
+		}
+		content, err := git.ReadFile(repoPath, ref, filePath)
+		if err == git.ErrBinaryFile {
+			api.WriteJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"binary": true})
+			return
+		}
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+				return
+			}
+			s.internalError(w, err)
+			return
+		}
+		api.WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"content":  string(content),
+			"encoding": "utf8",
+		})
+
+	case http.MethodPut:
+		var req struct {
+			Path        string `json:"path"`
+			Content     string `json:"content"`
+			Branch      string `json:"branch"`
+			Message     string `json:"message"`
+			AuthorName  string `json:"author_name"`
+			AuthorEmail string `json:"author_email"`
+		}
+		if !s.decodeJSON(w, r, &req) {
+			return
+		}
+		if req.Path == "" || req.Branch == "" || req.Message == "" {
+			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, "path, branch, and message are required")
+			return
+		}
+		sha, err := git.CommitFile(repoPath, req.Branch, req.Path, []byte(req.Content), req.Message, req.AuthorName, req.AuthorEmail)
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		api.WriteJSON(w, http.StatusOK, map[string]string{"sha": sha, "path": req.Path, "branch": req.Branch})
+
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleProjectDiff(w http.ResponseWriter, r *http.Request, projectID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	repoPath, ok := s.projectRepoPath(w, r, projectID)
+	if !ok {
+		return
+	}
+	base := r.URL.Query().Get("base")
+	head := r.URL.Query().Get("head")
+	if base == "" || head == "" {
+		api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, "base and head are required")
+		return
+	}
+	filePath := r.URL.Query().Get("path")
+	if filePath != "" {
+		diff, err := git.FileDiff(repoPath, base, head, filePath)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+				return
+			}
+			s.internalError(w, err)
+			return
+		}
+		api.WriteJSON(w, http.StatusOK, map[string]string{"diff": diff})
+		return
+	}
+	patches, err := git.BranchDiff(repoPath, base, head)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+			return
+		}
+		s.internalError(w, err)
+		return
+	}
+	if patches == nil {
+		patches = []git.FilePatch{}
+	}
+	api.WriteJSON(w, http.StatusOK, patches)
 }
 
 // =========================================================================
@@ -554,6 +765,8 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			if !s.decodeJSON(w, r, &req) {
 				return
 			}
+			oldStatus := t.Status
+			oldDesc, _ := t.Payload["description"].(string)
 			if req.Status != nil {
 				t.Status = *req.Status
 			}
@@ -566,6 +779,16 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			if err := s.db.UpdateTask(r.Context(), t); err != nil {
 				s.internalError(w, err)
 				return
+			}
+			// Log what changed.
+			if req.Status != nil && *req.Status != oldStatus {
+				log.Printf("task %s: status %s → %s", id, oldStatus, *req.Status)
+			}
+			if req.Payload != nil {
+				newDesc, _ := req.Payload["description"].(string)
+				if newDesc != oldDesc {
+					log.Printf("task %s: description updated", id)
+				}
 			}
 			api.WriteJSON(w, http.StatusOK, t)
 
@@ -681,6 +904,33 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agentID := parts[0]
+
+	// /api/agents/{id}/offline — graceful shutdown notification
+	if len(parts) == 2 && parts[1] == "offline" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		a, err := s.db.GetAgent(r.Context(), agentID)
+		if err != nil {
+			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+			return
+		}
+		a.Status = "offline"
+		if err := s.db.UpdateAgent(r.Context(), a); err != nil {
+			s.internalError(w, err)
+			return
+		}
+		_ = s.db.CreateAgentLog(r.Context(), &db.AgentLog{
+			AgentID:     agentID,
+			AgentName:   a.Name,
+			EventType:   "agent_offline",
+			Description: "Agent deregistered (clean shutdown)",
+		})
+		log.Printf("agent %q (%s): deregistered (clean shutdown)", a.Name, agentID)
+		api.WriteJSON(w, http.StatusOK, map[string]string{"status": "offline"})
+		return
+	}
 
 	// /api/agents/{id}/heartbeat
 	if len(parts) == 2 && parts[1] == "heartbeat" {
@@ -855,6 +1105,9 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 		if p.Enabled {
 			if prov, err := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config); err == nil {
 				s.llmReg.Set(p.Name, prov)
+				if len(p.Roles) > 0 {
+					s.llmReg.SetRoles(p.Name, p.ModelName, p.Roles)
+				}
 			}
 		}
 		p.APIKey = "" // don't echo back
@@ -925,6 +1178,7 @@ func (s *Server) handleProviderDetail(w http.ResponseWriter, r *http.Request) {
 		if p.Enabled {
 			if prov, err := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config); err == nil {
 				s.llmReg.Set(p.Name, prov)
+				s.llmReg.SetRoles(p.Name, p.ModelName, p.Roles)
 			}
 		} else {
 			s.llmReg.Remove(p.Name)

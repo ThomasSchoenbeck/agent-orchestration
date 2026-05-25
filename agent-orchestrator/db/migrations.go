@@ -410,6 +410,11 @@ func (d *Database) applyColumnMigrations() error {
 			name: "add_coding_rules_to_projects",
 			sql:  "ALTER TABLE projects ADD COLUMN coding_rules TEXT NOT NULL DEFAULT ''",
 		},
+		// provider role preferences
+		{
+			name: "add_roles_to_providers",
+			sql:  "ALTER TABLE providers ADD COLUMN roles TEXT NOT NULL DEFAULT '[]'",
+		},
 	}
 
 	for _, m := range migrations {
