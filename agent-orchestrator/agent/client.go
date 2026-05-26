@@ -68,17 +68,25 @@ func (c *ServerClient) GetNextTask(ctx context.Context, agentID string, roles []
 }
 
 // ClaimTask claims a task for this agent.
-// The server returns api.ClaimTaskResponse; we extract just the task.
+// The server returns api.ClaimTaskResponse; workspace fields are applied to the task.
 func (c *ServerClient) ClaimTask(ctx context.Context, taskID, agentID string) (*db.Task, error) {
 	body := map[string]string{"agent_id": agentID}
 	var resp struct {
-		Task *db.Task `json:"task"`
+		Task         *db.Task `json:"task"`
+		WorktreePath string   `json:"worktree_path"`
+		RepoURL      string   `json:"repo_url"`
+		Branch       string   `json:"branch"`
 	}
 	if err := c.post(ctx, fmt.Sprintf("/api/tasks/%s/claim", taskID), body, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Task == nil {
 		return nil, fmt.Errorf("claim: server returned nil task")
+	}
+	// Apply workspace fields from outer response to the task struct so the
+	// executor can find them without needing a separate API call.
+	if resp.WorktreePath != "" {
+		resp.Task.WorktreePath = resp.WorktreePath
 	}
 	return resp.Task, nil
 }

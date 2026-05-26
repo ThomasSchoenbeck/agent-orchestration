@@ -6,10 +6,31 @@
   import Skeleton from '../components/Skeleton.svelte'
 
   // ── Svelte 5 runes ────────────────────────────────────────────────────────
-  let projects = $state([])
-  let loading  = $state(false)
-  let showForm = $state(false)
-  let form     = $state({ name: '', description: '', repo_path: '', git_url: '' })
+  let projects     = $state([])
+  let loading      = $state(false)
+  let showForm     = $state(false)
+  let form         = $state({ name: '', description: '', repo_path: '', git_url: '' })
+  let pathAutoFilled = $state(false)  // true while repo_path was auto-generated
+
+  function toSlug(name) {
+    return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  }
+
+  function onNameInput() {
+    const slug = toSlug(form.name)
+    if (slug && (form.repo_path === '' || pathAutoFilled)) {
+      form.repo_path = `~/projects/${slug}`
+      pathAutoFilled = true
+    } else if (!form.name) {
+      if (pathAutoFilled) form.repo_path = ''
+      pathAutoFilled = false
+    }
+  }
+
+  function onRepoPathInput() {
+    // User touched the field manually — stop auto-filling.
+    pathAutoFilled = false
+  }
 
   // ── Data loading ──────────────────────────────────────────────────────────
   async function load() {
@@ -35,8 +56,9 @@
         git_url:     form.git_url.trim(),
       })
       toasts.success('Project created')
-      form     = { name: '', description: '', repo_path: '', git_url: '' }
-      showForm = false
+      form          = { name: '', description: '', repo_path: '', git_url: '' }
+      pathAutoFilled = false
+      showForm       = false
       await load()
     } catch (e) {
       toasts.error('Create failed: ' + e.message)
@@ -80,6 +102,7 @@
                placeholder-gray-500 focus:outline-none focus:border-accent"
         placeholder="Project name"
         bind:value={form.name}
+        oninput={onNameInput}
         required
       />
       <MarkdownEditor
@@ -93,6 +116,7 @@
                  font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
           placeholder="Local path (optional)"
           bind:value={form.repo_path}
+          oninput={onRepoPathInput}
         />
         <input
           class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm text-gray-200

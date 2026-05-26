@@ -50,7 +50,7 @@ func (s *Server) prepareClaimResponse(ctx context.Context, task *db.Task, agentI
 	if isColocated {
 		s.provisionColocatedWorktree(ctx, task, branchName, resp)
 	} else {
-		s.provisionRemoteAccess(task, branchName, resp)
+		s.provisionRemoteAccess(ctx, task, branchName, resp)
 	}
 
 	// Persist workspace fields and port back to DB.
@@ -95,14 +95,20 @@ func (s *Server) provisionColocatedWorktree(ctx context.Context, task *db.Task, 
 	}
 }
 
-func (s *Server) provisionRemoteAccess(task *db.Task, branchName string, resp *api.ClaimTaskResponse) {
+func (s *Server) provisionRemoteAccess(ctx context.Context, task *db.Task, branchName string, resp *api.ClaimTaskResponse) {
 	// Remote agents clone over the embedded git HTTP server.
-	// Build the repo URL from server config.
+	// The git handler resolves repos by project slug, so look it up here.
 	host := s.cfg.Server.Host
 	if host == "" || host == "0.0.0.0" {
 		host = "localhost"
 	}
+	slug := task.ProjectID // fallback: use ID if project lookup fails
+	if project, err := s.db.GetProject(ctx, task.ProjectID); err == nil && project.Slug != "" {
+		slug = project.Slug
+	} else if err != nil {
+		log.Printf("claim: GetProject %q for remote URL: %v — using project ID as slug", task.ProjectID, err)
+	}
 	resp.RepoURL = fmt.Sprintf("http://%s:%d/git/%s.git",
-		host, s.cfg.Server.Port, task.ProjectID)
+		host, s.cfg.Server.Port, slug)
 	resp.Branch = branchName
 }

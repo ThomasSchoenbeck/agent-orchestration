@@ -811,10 +811,27 @@ func TestUnqueueTask_InvalidStatus(t *testing.T) {
 	_ = json.Unmarshal(aw.Body.Bytes(), &regResp)
 	do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/claim", map[string]string{"agent_id": regResp["agent_id"]})
 
-	// DEVELOPING is not a queue state — unqueue must return 400.
+	// DEVELOPING is now allowed — unqueue must succeed and reset to BACKLOG.
 	uw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/unqueue", nil)
-	if uw.Code != http.StatusBadRequest {
-		t.Errorf("unqueue invalid status: expected 400, got %d", uw.Code)
+	if uw.Code != http.StatusOK {
+		t.Fatalf("unqueue DEVELOPING: expected 200, got %d: %s", uw.Code, uw.Body.String())
+	}
+	var unqueued db.Task
+	_ = json.Unmarshal(uw.Body.Bytes(), &unqueued)
+	if unqueued.Status != db.TaskStatusBacklog {
+		t.Errorf("unqueue DEVELOPING: expected BACKLOG, got %s", unqueued.Status)
+	}
+	if unqueued.AssignedAgentID != "" {
+		t.Errorf("unqueue DEVELOPING: expected AssignedAgentID cleared, got %s", unqueued.AssignedAgentID)
+	}
+
+	// COMPLETED is the only state that must reject unqueue with 400.
+	do(t, srv, http.MethodPut, "/api/tasks/"+task.ID, map[string]interface{}{
+		"status": db.TaskStatusCompleted,
+	})
+	cw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/unqueue", nil)
+	if cw.Code != http.StatusBadRequest {
+		t.Errorf("unqueue COMPLETED: expected 400, got %d", cw.Code)
 	}
 }
 

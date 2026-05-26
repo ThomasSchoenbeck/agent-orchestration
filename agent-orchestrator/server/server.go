@@ -229,6 +229,14 @@ func (s *Server) runMaintenance(ctx context.Context) {
 				log.Printf("maintenance: marked %d agents offline", n)
 			}
 
+			// Remove agent records that have been offline for more than 10 minutes
+			// so stale entries from previous runs don't show up in the UI.
+			if n, err := s.db.DeleteStaleOfflineAgents(ctx, 600); err != nil {
+				log.Printf("maintenance: DeleteStaleOfflineAgents: %v", err)
+			} else if n > 0 {
+				log.Printf("maintenance: deleted %d stale offline agent(s)", n)
+			}
+
 			n, err = s.db.RequeueTimedOutTasks(ctx, s.cfg.Agents.TaskTimeoutSec)
 			if err != nil {
 				log.Printf("maintenance: RequeueTimedOutTasks: %v", err)

@@ -102,6 +102,21 @@ func (d *Database) DeleteAgent(ctx context.Context, id string) error {
 	return err
 }
 
+// DeleteStaleOfflineAgents removes agents that have been offline for longer
+// than olderThanSec seconds. This prevents stale records from prior runs
+// from cluttering the agent list.
+func (d *Database) DeleteStaleOfflineAgents(ctx context.Context, olderThanSec int) (int64, error) {
+	res, err := d.db.ExecContext(ctx,
+		`DELETE FROM agents WHERE status='offline'
+		 AND CAST((julianday('now') - julianday(last_heartbeat)) * 86400 AS INTEGER) > ?`,
+		olderThanSec,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // --- SQL and scan helpers ---
 
 const agentSelectSQL = `SELECT id, name, roles, status,

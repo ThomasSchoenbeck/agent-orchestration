@@ -480,8 +480,8 @@ func TestAgent_FullTaskExecution(t *testing.T) {
 			t.Fatalf("timed out waiting for result submission (got %d)", resultCalls.Load())
 		case <-time.After(100 * time.Millisecond):
 			if resultCalls.Load() >= 1 {
-				if got := resultStatus.Load().(string); got != "completed" {
-					t.Errorf("result status = %q, want %q", got, "completed")
+				if got := resultStatus.Load().(string); got != db.TaskStatusCompleted {
+					t.Errorf("result status = %q, want %q", got, db.TaskStatusCompleted)
 				}
 				return
 			}
@@ -533,8 +533,8 @@ func TestAgent_LLMFailure_MarksTaskFailed(t *testing.T) {
 			t.Fatalf("timed out waiting for result submission (got %d)", resultCalls.Load())
 		case <-time.After(100 * time.Millisecond):
 			if resultCalls.Load() >= 1 {
-				if got := resultStatus.Load().(string); got != "failed" {
-					t.Errorf("result status = %q, want %q", got, "failed")
+				if got := resultStatus.Load().(string); got != db.TaskStatusFailed {
+					t.Errorf("result status = %q, want %q", got, db.TaskStatusFailed)
 				}
 				goto resultReceived
 			}
@@ -614,8 +614,145 @@ func TestExecutor_PostsCompletionComment(t *testing.T) {
 	if body == "" {
 		t.Error("expected non-empty comment body")
 	}
-	if !strings.Contains(body, "completed") {
+	if !strings.Contains(strings.ToLower(body), "completed") {
 		t.Errorf("comment body should mention 'completed', got: %q", body)
+	}
+}
+
+// TestClaimTask_WorktreePathPropagated verifies that the WorktreePath from the
+// outer ClaimTaskResponse is applied to the returned task, so the executor can
+// tell the LLM where its workspace is.
+func TestClaimTask_WorktreePathPropagated(t *testing.T) {
+	const worktreePath = "/storage/worktrees/task-wt-001"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks/wt-task/claim", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"task": map[string]interface{}{
+				"id":     "wt-task",
+				"type":   "implement",
+				"role":   "worker",
+				"status": db.TaskStatusDeveloping,
+			},
+			"worktree_path": worktreePath,
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := agent.NewServerClient(srv.URL)
+	ctx := context.Background()
+	task, err := client.ClaimTask(ctx, "wt-task", "agent-1")
+	if err != nil {
+		t.Fatalf("ClaimTask: %v", err)
+	}
+	if task.WorktreePath != worktreePath {
+		t.Errorf("WorktreePath = %q, want %q", task.WorktreePath, worktreePath)
+	}
+}
+
+// TestExecutor_UppercaseStatusOnSuccess verifies that a successful task
+// execution results in status=COMPLETED (not lowercase "completed").
+func TestExecutor_UppercaseStatusOnSuccess(t *testing.T) {
+	var submittedStatus atomic.Value
+	submittedStatus.Store("")
+
+	task := &db.Task{
+		ID:      "status-task",
+		Type:    "implement",
+		Role:    "worker",
+		Status:  db.TaskStatusDeveloping,
+		Payload: map[string]interface{}{"description": "Verify status casing"},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, r *http.Request) {
+		var req api.SubmitTaskResultRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		submittedStatus.Store(req.Status)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/comments", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := buildExecutorConfig()
+	reg := llm.NewRegistry()
+	_ = reg.Register("mock", &mockLLMProvider{
+		name: "mock",
+		response: llm.ChatResponse{
+			Content:    "Done.",
+			StopReason: "end_turn",
+			TokensUsed: 10,
+		},
+	})
+	rtr := router.New(cfg, reg)
+	client := agent.NewServerClient(srv.URL)
+	exec := agent.NewExecutor(rtr, tools.NewRegistry(), client, "status-agent")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	exec.Run(ctx, task)
+
+	got := submittedStatus.Load().(string)
+	if got != db.TaskStatusCompleted {
+		t.Errorf("submitted status = %q, want %q (COMPLETED)", got, db.TaskStatusCompleted)
+	}
+}
+
+// TestExecutor_UppercaseStatusOnFailure verifies that an LLM error results in
+// status=FAILED (not lowercase "failed").
+func TestExecutor_UppercaseStatusOnFailure(t *testing.T) {
+	var submittedStatus atomic.Value
+	submittedStatus.Store("")
+
+	task := &db.Task{
+		ID:      "fail-status-task",
+		Type:    "implement",
+		Role:    "worker",
+		Status:  db.TaskStatusDeveloping,
+		Payload: map[string]interface{}{"description": "Fail me"},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, r *http.Request) {
+		var req api.SubmitTaskResultRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		submittedStatus.Store(req.Status)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/comments", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := buildExecutorConfig()
+	reg := llm.NewRegistry()
+	_ = reg.Register("mock", &mockLLMProvider{
+		name:    "mock",
+		chatErr: errors.New("simulated LLM error"),
+	})
+	rtr := router.New(cfg, reg)
+	client := agent.NewServerClient(srv.URL)
+	exec := agent.NewExecutor(rtr, tools.NewRegistry(), client, "fail-status-agent")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	exec.Run(ctx, task)
+
+	got := submittedStatus.Load().(string)
+	if got != db.TaskStatusFailed {
+		t.Errorf("submitted status = %q, want %q (FAILED)", got, db.TaskStatusFailed)
 	}
 }
 

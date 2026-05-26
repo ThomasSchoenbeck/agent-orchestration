@@ -235,6 +235,7 @@ func runAgent(args []string) error {
 	rolesStr := fs.String("roles", "", "comma-separated roles, e.g. worker,reviewer (required)")
 	serverURL := fs.String("server", "http://localhost:8080", "orchestrator server URL")
 	workdir := fs.String("workdir", "", "local workspace root for agent code checkouts (default: .agent-work)")
+	mode := fs.String("mode", "colocated", `agent mode: "colocated" (server provisions worktrees) or "remote" (agent clones via git)`)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -246,7 +247,7 @@ func runAgent(args []string) error {
 		return fmt.Errorf("--roles is required")
 	}
 
-	a, cleanup, cfg, err := buildAgent(*name, parseRoles(*rolesStr), *serverURL, *configPath, *workdir)
+	a, cleanup, cfg, err := buildAgent(*name, parseRoles(*rolesStr), *serverURL, *configPath, *workdir, *mode)
 	if err != nil {
 		return err
 	}
@@ -270,8 +271,9 @@ func runAgent(args []string) error {
 // buildAgent constructs and optionally wires a fully configured Agent.
 // configPath is optional — when empty, a minimal default config is used and
 // the LLM executor is not wired up (polling-only mode).
+// mode should be "colocated" or "remote"; defaults to "colocated" when empty.
 // The returned cleanup func must be called when the agent is done.
-func buildAgent(name string, roles []string, serverURL, configPath, workdir string) (*agent.Agent, func(), *config.Config, error) {
+func buildAgent(name string, roles []string, serverURL, configPath, workdir, mode string) (*agent.Agent, func(), *config.Config, error) {
 	var cfg *config.Config
 	if configPath != "" {
 		var err error
@@ -290,6 +292,10 @@ func buildAgent(name string, roles []string, serverURL, configPath, workdir stri
 	}
 
 	a := agent.NewAgent(name, roles, serverURL, cfg)
+	if mode == "" {
+		mode = "colocated"
+	}
+	a.WithMode(mode)
 	if wd != "" {
 		a.WithWorkdir(wd)
 	}
@@ -407,7 +413,11 @@ func runAgents(args []string) error {
 			agentConfig = *configPath
 		}
 
-		a, cleanup, _, err := buildAgent(def.Name, def.Roles, serverURL, agentConfig, workdir)
+		defMode := def.Mode
+		if defMode == "" {
+			defMode = "colocated"
+		}
+		a, cleanup, _, err := buildAgent(def.Name, def.Roles, serverURL, agentConfig, workdir, defMode)
 		if err != nil {
 			return fmt.Errorf("build agent %q: %w", def.Name, err)
 		}
@@ -492,6 +502,7 @@ Agent flags:
   --roles   string   Comma-separated roles: worker,reviewer,orchestrator (required)
   --server  string   Server URL (default "http://localhost:8080")
   --workdir string   Local workspace root for code checkouts (default: .agent-work)
+  --mode    string   Agent mode: colocated (default) or remote
   --config  string   Optional config YAML path
 
 Agents flags (start multiple agents defined in config.yaml):

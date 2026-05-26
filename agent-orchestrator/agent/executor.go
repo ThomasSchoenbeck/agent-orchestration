@@ -60,7 +60,7 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 	result, status, tokensUsed, execErr := e.execute(ctx, task)
 	if execErr != nil {
 		log.Printf("executor: task %s failed: %v", task.ID, execErr)
-		status = "failed"
+		status = db.TaskStatusFailed
 		result = map[string]interface{}{
 			"error": execErr.Error(),
 		}
@@ -71,6 +71,11 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 			TaskID:  task.ID,
 			Message: fmt.Sprintf("task %s failed: %v", task.ID, execErr),
 		})
+	}
+
+	// Commit any file changes the agent made to its worktree.
+	if execErr == nil && task.WorktreePath != "" {
+		e.commitTaskWork(ctx, task)
 	}
 
 	durationMs := int(time.Since(start).Milliseconds())
@@ -86,10 +91,10 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 			log.Printf("executor: PostReview task %s: %v", task.ID, err)
 		}
 		// Also submit result so metrics are recorded.
-		_ = e.client.SubmitTaskResult(ctx, task.ID, result, "completed", metrics)
+		_ = e.client.SubmitTaskResult(ctx, task.ID, result, db.TaskStatusCompleted, metrics)
 		log.Printf("executor: reviewer task %s done (review_status=%s tokens=%d duration=%dms)",
 			task.ID, reviewStatus, tokensUsed, durationMs)
-		e.postCompletionComment(ctx, task, result, "completed", tokensUsed, durationMs, nil)
+		e.postCompletionComment(ctx, task, result, db.TaskStatusCompleted, tokensUsed, durationMs, nil)
 		return
 	}
 
@@ -160,11 +165,11 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			task.ID, task.Type, err, task.Role)
 		route, err = e.rtr.RouteByRole(task.Role)
 		if err != nil {
-			return nil, "failed", 0, fmt.Errorf("route task (type=%s role=%s): %w", task.Type, task.Role, err)
+			return nil, db.TaskStatusFailed, 0, fmt.Errorf("route task (type=%s role=%s): %w", task.Type, task.Role, err)
 		}
 	}
 	if route.Provider == nil {
-		return nil, "failed", 0, fmt.Errorf("no provider for role %q", route.Role)
+		return nil, db.TaskStatusFailed, 0, fmt.Errorf("no provider for role %q", route.Role)
 	}
 	log.Printf("executor: task %s resolved to role=%q provider=%q model=%q",
 		task.ID, route.Role, route.Provider.Name(), route.Model)
@@ -189,7 +194,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			MaxTokens: 8192,
 		})
 		if callErr != nil {
-			return nil, "failed", totalTokens, fmt.Errorf("llm chat (round %d): %w", round, callErr)
+			return nil, db.TaskStatusFailed, totalTokens, fmt.Errorf("llm chat (round %d): %w", round, callErr)
 		}
 		totalTokens += resp.TokensUsed
 
@@ -203,7 +208,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 		if resp.StopReason == "end_turn" || len(resp.ToolCalls) == 0 {
 			return map[string]interface{}{
 				"output": resp.Content,
-			}, "completed", totalTokens, nil
+			}, db.TaskStatusCompleted, totalTokens, nil
 		}
 
 		// Execute each tool call and build tool-result messages.
@@ -227,12 +232,37 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			return map[string]interface{}{
 				"output":  messages[i].Content,
 				"warning": "max tool rounds exceeded",
-			}, "completed", totalTokens, nil
+			}, db.TaskStatusCompleted, totalTokens, nil
 		}
 	}
 	return map[string]interface{}{
 		"warning": "max tool rounds exceeded with no assistant output",
-	}, "failed", totalTokens, nil
+	}, db.TaskStatusFailed, totalTokens, nil
+}
+
+// commitTaskWork stages and commits any changes the agent made to its worktree,
+// then posts the commit SHA as a comment on the task. Safe to call even if the
+// worktree is clean (nothing will be committed or commented in that case).
+func (e *Executor) commitTaskWork(ctx context.Context, task *db.Task) {
+	commitMsg := fmt.Sprintf("Agent: task %s", task.ID)
+	if task.Payload != nil {
+		if title, ok := task.Payload["title"].(string); ok && title != "" {
+			commitMsg = "Agent: " + title
+		}
+	}
+	sha, err := CommitAndPush(task.WorktreePath, commitMsg, "Agent", "agent@system", "", "")
+	if err != nil {
+		log.Printf("executor: CommitAndPush task %s: %v", task.ID, err)
+		return
+	}
+	// Only post a comment when CommitAndPush made a new commit (i.e. worktree was dirty).
+	// We detect this by checking whether the SHA we got matches what was already recorded.
+	if sha != "" && sha != task.BranchHeadSHA {
+		body := fmt.Sprintf("Changes committed: `%s`", sha[:12])
+		if err := e.client.PostComment(ctx, task.ID, body, e.agentID); err != nil {
+			log.Printf("executor: post commit comment task %s: %v", task.ID, err)
+		}
+	}
 }
 
 // buildSystemMessage assembles the system prompt for the task.
@@ -255,28 +285,35 @@ Respond with a JSON object containing:
 Be constructive. Reference specific files and line numbers where possible.`
 	}
 
-	// Generic fallback if no system prompt is defined (should rarely happen with DB-backed roles).
+	// Generic fallback — tell the agent to use available tools to do real work.
 	return fmt.Sprintf(
-		"You are an agent executing a task.\nTask ID: %s\nType: %s\nRole: %s\n\nExecution payload:\n%v",
-		task.ID, task.Type, task.Role, task.Payload,
+		"You are a software development agent. Use the available tools (read_file, write_file, list_files, run_tests, etc.) to complete the task.\n\nTask ID: %s\nType: %s\nRole: %s",
+		task.ID, task.Type, task.Role,
 	)
 }
 
 // buildUserMessage constructs the initial user message from the task payload.
 func (e *Executor) buildUserMessage(task *db.Task) string {
-	// If there's a description in the payload, use it.
+	msg := ""
 	if task.Payload != nil {
-		if desc, ok := task.Payload["description"]; ok {
-			if s, ok := desc.(string); ok && s != "" {
-				title := ""
-				if t, ok := task.Payload["title"]; ok {
-					if ts, ok := t.(string); ok {
-						title = ts + "\n\n"
-					}
-				}
-				return title + s
+		if title, ok := task.Payload["title"].(string); ok && title != "" {
+			msg = title
+		}
+		if desc, ok := task.Payload["description"].(string); ok && desc != "" {
+			if msg != "" {
+				msg += "\n\n"
 			}
+			msg += desc
 		}
 	}
-	return fmt.Sprintf("Execute task %s (type=%s, role=%s).", task.ID, task.Type, task.Role)
+	if msg == "" {
+		msg = fmt.Sprintf("Execute task %s (type=%s, role=%s).", task.ID, task.Type, task.Role)
+	}
+	// Tell the agent where to find its workspace so it can use file tools.
+	if task.WorktreePath != "" {
+		msg += fmt.Sprintf("\n\nWorkspace directory: %s\nUse this path as repo_path when calling read_file, write_file, list_files, and other file tools.", task.WorktreePath)
+	} else {
+		log.Printf("executor: task %s has no WorktreePath — agent will not be able to read or write files", task.ID)
+	}
+	return msg
 }

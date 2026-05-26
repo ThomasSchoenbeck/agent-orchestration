@@ -646,12 +646,14 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
 			return
 		}
-		if !db.IsQueueState(t.Status) {
+		if t.Status == db.TaskStatusCompleted {
 			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput,
-				"can only unqueue tasks that are in a queue state (BACKLOG, AWAITING_REVIEW, AWAITING_REVISION, AWAITING_MERGE)")
+				"cannot unqueue a completed task")
 			return
 		}
+		s.releaseTaskResources(t)
 		t.Status = db.TaskStatusBacklog
+		t.AssignedAgentID = ""
 		if err := s.db.UpdateTask(r.Context(), t); err != nil {
 			s.internalError(w, err)
 			return

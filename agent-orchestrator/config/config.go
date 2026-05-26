@@ -76,6 +76,7 @@ type LogsDBConfig struct {
 type AgentDefinition struct {
 	Name    string   `yaml:"name"`
 	Roles   []string `yaml:"roles"`
+	Mode    string   `yaml:"mode"`    // "colocated" or "remote"; default "colocated"
 	Workdir string   `yaml:"workdir"` // overrides agents.workdir when set
 	Config  string   `yaml:"config"`  // overrides the main config path for this agent's LLM setup
 }
