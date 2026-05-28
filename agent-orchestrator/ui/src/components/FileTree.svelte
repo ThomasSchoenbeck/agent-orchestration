@@ -76,28 +76,76 @@
 
   function onBranchChange() { loadRoot() }
 
+  // ── New file ──────────────────────────────────────────────────────────────
+  let addingFile   = $state(false)
+  let newFilePath  = $state('')
+
+  function startAddFile() {
+    newFilePath = ''
+    addingFile  = true
+  }
+
+  function confirmAddFile() {
+    const p = newFilePath.trim()
+    if (!p) { addingFile = false; return }
+    addingFile  = false
+    newFilePath = ''
+    activePath  = p
+    onFileSelect?.(p, selectedRef)
+  }
+
   $effect(() => {
     if (projectId) loadBranches().then(() => loadRoot())
   })
 </script>
 
 <div class="flex flex-col h-full text-sm select-none">
-  <!-- Branch selector -->
-  <div class="px-3 py-2 border-b border-surface-600 flex items-center gap-2 shrink-0">
-    <span class="text-xs text-gray-500">Branch</span>
-    <select
-      class="flex-1 bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs
-             text-gray-300 focus:outline-none focus:border-accent"
-      bind:value={selectedRef}
-      onchange={onBranchChange}
-    >
-      {#each branches as b}
-        <option value={b}>{b}</option>
-      {/each}
-      {#if branches.length === 0}
-        <option value="main">main</option>
-      {/if}
-    </select>
+  <!-- Branch selector + new file button -->
+  <div class="px-3 py-2 border-b border-surface-600 shrink-0">
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-gray-500">Branch</span>
+      <select
+        class="flex-1 bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs
+               text-gray-300 focus:outline-none focus:border-accent"
+        bind:value={selectedRef}
+        onchange={onBranchChange}
+      >
+        {#each branches as b}
+          <option value={b}>{b}</option>
+        {/each}
+        {#if branches.length === 0}
+          <option value="main">main</option>
+        {/if}
+      </select>
+      <button
+        class="text-xs text-gray-400 hover:text-gray-200 transition-colors px-1"
+        title="New file"
+        onclick={startAddFile}
+      >+ File</button>
+    </div>
+    {#if addingFile}
+      <div class="flex items-center gap-1 mt-2">
+        <input
+          class="flex-1 bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs
+                 font-mono text-gray-200 focus:outline-none focus:border-accent"
+          placeholder="path/to/new-file.go"
+          bind:value={newFilePath}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') confirmAddFile()
+            if (e.key === 'Escape') { addingFile = false }
+          }}
+          autofocus
+        />
+        <button
+          class="text-xs px-2 py-1 bg-accent hover:bg-accent-hover text-white rounded transition-colors"
+          onclick={confirmAddFile}
+        >Add</button>
+        <button
+          class="text-xs px-2 py-1 text-gray-400 hover:text-gray-200 transition-colors"
+          onclick={() => { addingFile = false }}
+        >✕</button>
+      </div>
+    {/if}
   </div>
 
   <!-- Tree body -->

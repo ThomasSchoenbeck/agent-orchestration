@@ -49,6 +49,7 @@ export const readFile      = (projectId, ref, path)     => {
   return get(`/api/projects/${projectId}/file?${qs}`)
 }
 export const commitFile    = (projectId, data)           => put(`/api/projects/${projectId}/file`, data)
+export const commitFiles   = (projectId, data)           => post(`/api/projects/${projectId}/files`, data)
 export const getFileDiff   = (projectId, base, head, path) => {
   const qs = new URLSearchParams({ base, head, path }).toString()
   return get(`/api/projects/${projectId}/diff?${qs}`)
@@ -77,7 +78,9 @@ export const listTaskLogs = (taskId) => get(`/api/tasks/${taskId}/logs`)
 
 // ── Agents ───────────────────────────────────────────────────────────────────
 export const listAgents  = () => get('/api/agents')
-export const getAgent    = (id) => get(`/api/agents/${id}`)
+export const getAgent      = (id) => get(`/api/agents/${id}`)
+export const getAgentStats = (id) => get(`/api/agents/${id}/stats`)
+export const getAgentLogs  = (id) => get(`/api/agents/${id}/logs`)
 
 // ── Providers ────────────────────────────────────────────────────────────────
 export const listProviders   = ()        => get('/api/providers')

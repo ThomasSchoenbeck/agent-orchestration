@@ -15,6 +15,7 @@
   let hiddenLevels    = $state(new Set())
   let chartLevelFilter = $state('')
   let bucketMinutes   = $state(60)
+  let expandedRows    = $state(new Set())   // entry IDs with expanded metadata
 
   const LEVEL_COLORS = {
     debug: '#94a3b8',
@@ -57,6 +58,17 @@
 
   function clickChart(l) {
     chartLevelFilter = chartLevelFilter === l ? '' : l
+  }
+
+  function toggleRow(id) {
+    const s = new Set(expandedRows)
+    s.has(id) ? s.delete(id) : s.add(id)
+    expandedRows = s
+  }
+
+  function hasContext(entry) {
+    return entry.agent_id || entry.task_id || entry.project_id ||
+      (entry.metadata && Object.keys(entry.metadata).length > 0)
   }
 
   if (typeof window !== 'undefined') {
@@ -298,16 +310,55 @@
           <tr>
             <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-28">Time</th>
             <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-16">Level</th>
+            <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-28">Agent</th>
+            <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-28">Task</th>
             <th class="text-left px-4 py-1.5 text-gray-500 font-medium">Message</th>
           </tr>
         </thead>
         <tbody>
           {#each visibleLogs as entry (entry.id ?? entry.timestamp)}
-            <tr class="border-t border-surface-700 hover:bg-surface-700/20">
+            {@const rowId   = entry.id ?? entry.timestamp}
+            {@const expanded = expandedRows.has(rowId)}
+            {@const meta     = entry.metadata && Object.keys(entry.metadata).length > 0}
+            <tr
+              class="border-t border-surface-700 hover:bg-surface-700/20 {hasContext(entry) ? 'cursor-pointer' : ''}"
+              onclick={() => hasContext(entry) && toggleRow(rowId)}
+            >
               <td class="px-4 py-1 text-gray-600 whitespace-nowrap">{formatTime(entry.timestamp ?? entry.created_at)}</td>
               <td class="px-4 py-1 {levelText[entry.level] ?? 'text-gray-400'}">{entry.level ?? 'info'}</td>
-              <td class="px-4 py-1 text-gray-300 break-all">{entry.message}</td>
+              <td class="px-4 py-1 text-gray-500 truncate max-w-[7rem]" title={entry.agent_id}>
+                {entry.agent_id ? entry.agent_id.slice(0, 8) + '…' : '—'}
+              </td>
+              <td class="px-4 py-1 text-gray-500 truncate max-w-[7rem]" title={entry.task_id}>
+                {entry.task_id ? entry.task_id.slice(0, 8) + '…' : '—'}
+              </td>
+              <td class="px-4 py-1 text-gray-300 break-all">
+                {entry.message}
+                {#if meta && !expanded}
+                  <span class="ml-1 text-[10px] text-gray-600 italic">+meta</span>
+                {/if}
+              </td>
             </tr>
+            {#if expanded}
+              <tr class="border-t border-surface-700 bg-surface-900/60">
+                <td colspan="5" class="px-4 py-2 text-[10px] text-gray-400">
+                  <div class="flex flex-wrap gap-4">
+                    {#if entry.agent_id}
+                      <div><span class="text-gray-600">agent_id</span> {entry.agent_id}</div>
+                    {/if}
+                    {#if entry.task_id}
+                      <div><span class="text-gray-600">task_id</span> {entry.task_id}</div>
+                    {/if}
+                    {#if entry.project_id}
+                      <div><span class="text-gray-600">project_id</span> {entry.project_id}</div>
+                    {/if}
+                    {#if meta}
+                      <pre class="text-gray-300 bg-surface-800 rounded px-2 py-1 overflow-auto max-w-full whitespace-pre-wrap">{JSON.stringify(entry.metadata, null, 2)}</pre>
+                    {/if}
+                  </div>
+                </td>
+              </tr>
+            {/if}
           {/each}
         </tbody>
       </table>

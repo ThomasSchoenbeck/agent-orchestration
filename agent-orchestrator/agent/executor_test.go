@@ -762,6 +762,7 @@ func TestExecutor_LogsErrorToServer(t *testing.T) {
 	const agentID = "log-agent"
 	var logCalls atomic.Int32
 	var logLevel atomic.Value
+	var sawErrorLevel atomic.Bool
 	logLevel.Store("")
 
 	task := &db.Task{
@@ -786,6 +787,9 @@ func TestExecutor_LogsErrorToServer(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&entry)
 			if lvl, ok := entry["level"].(string); ok {
 				logLevel.Store(lvl)
+				if lvl == "error" {
+					sawErrorLevel.Store(true)
+				}
 			}
 		}
 		w.WriteHeader(http.StatusOK)
@@ -811,7 +815,7 @@ func TestExecutor_LogsErrorToServer(t *testing.T) {
 	if logCalls.Load() < 1 {
 		t.Error("expected at least one POST to /api/logs, got none")
 	}
-	if got := logLevel.Load().(string); got != "error" {
-		t.Errorf("expected log level %q, got %q", "error", got)
+	if !sawErrorLevel.Load() {
+		t.Errorf("expected at least one log entry with level %q, last level was %q", "error", logLevel.Load().(string))
 	}
 }

@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
 	"path/filepath"
 	"time"
 
@@ -25,19 +24,22 @@ type Agent struct {
 	executor  *Executor
 	done      chan struct{}
 	workdir   string // local root for agent code checkouts (remote mode)
+	alog      *AgentLogger
 }
 
 // NewAgent creates a new agent (not yet registered). rtr and toolReg are
 // optional; pass nil to run without task execution (useful in tests).
 func NewAgent(name string, roles []string, serverURL string, cfg *config.Config) *Agent {
+	c := NewServerClient(serverURL)
 	return &Agent{
 		name:      name,
 		roles:     roles,
 		mode:      "remote",
 		serverURL: serverURL,
 		cfg:       cfg,
-		client:    NewServerClient(serverURL),
+		client:    c,
 		done:      make(chan struct{}),
+		alog:      newLogger("", c), // agentID set in Start after registration
 	}
 }
 
@@ -96,12 +98,14 @@ func (a *Agent) Start(ctx context.Context) error {
 		return fmt.Errorf("agent %q: registration failed: %w", a.name, err)
 	}
 	a.id = id
-	log.Printf("agent %q registered (id=%s)", a.name, a.id)
+	a.alog = newLogger(id, a.client) // re-create with real ID
+	a.alog.Info("agent %q registered (id=%s mode=%s)", a.name, a.id, a.mode)
 
 	// Wire the agent ID into the executor now that we have it.
 	if a.executor != nil {
-		a.executor.client = a.client
+		a.executor.client  = a.client
 		a.executor.agentID = a.id
+		a.executor.log     = newLogger(id, a.client)
 	}
 
 	go a.heartbeatLoop(ctx)
@@ -127,7 +131,7 @@ func (a *Agent) Deregister(ctx context.Context) {
 		return
 	}
 	if err := a.client.SetOffline(ctx, a.id); err != nil {
-		log.Printf("agent %q: deregister: %v", a.name, err)
+		a.alog.Warn("deregister failed: %v", err)
 	}
 }
 
@@ -165,15 +169,13 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		case <-ticker.C:
 			if err := a.client.Heartbeat(ctx, a.id); err != nil {
 				consecutiveFailures++
-				log.Printf("agent %q heartbeat error (%d consecutive): %v",
-					a.name, consecutiveFailures, err)
+				a.alog.Warn("heartbeat error (%d consecutive): %v", consecutiveFailures, err)
 				if consecutiveFailures >= 3 {
-					log.Printf("agent %q: attempting re-registration after %d consecutive heartbeat failures",
-						a.name, consecutiveFailures)
+					a.alog.Warn("attempting re-registration after %d consecutive heartbeat failures", consecutiveFailures)
 					if rerr := a.reconnect(ctx); rerr != nil {
-						log.Printf("agent %q: re-registration failed: %v", a.name, rerr)
+						a.alog.Error("re-registration failed: %v", rerr)
 					} else {
-						log.Printf("agent %q: re-registered successfully (id=%s)", a.name, a.id)
+						a.alog.Info("re-registered successfully (id=%s)", a.id)
 						consecutiveFailures = 0
 					}
 				}
@@ -206,21 +208,19 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			canRun := a.executor != nil && a.executor.CanExecute(a.roles)
 			if !canRun {
 				if providerAvailable {
-					log.Printf("agent %q: no provider available for roles %v — pausing task pickup",
-						a.name, a.roles)
+					a.alog.Warn("no provider available for roles %v — pausing task pickup", a.roles)
 					providerAvailable = false
 				}
 				continue
 			}
 			if !providerAvailable {
-				log.Printf("agent %q: provider available for roles %v — resuming task pickup",
-					a.name, a.roles)
+				a.alog.Info("provider available for roles %v — resuming task pickup", a.roles)
 				providerAvailable = true
 			}
 
 			task, err := a.client.GetNextTask(ctx, a.id, a.roles)
 			if err != nil {
-				log.Printf("agent %q poll error: %v", a.name, err)
+				a.alog.Warn("poll error: %v", err)
 				continue
 			}
 			if task == nil {
@@ -231,7 +231,7 @@ func (a *Agent) pollLoop(ctx context.Context) {
 			go func(t *db.Task) {
 				claimed, err := a.client.ClaimTask(ctx, t.ID, a.id)
 				if err != nil {
-					log.Printf("agent %q could not claim task %s: %v", a.name, t.ID, err)
+					a.alog.Warn("could not claim task %s: %v", t.ID, err)
 					return
 				}
 				a.executeTask(ctx, claimed)
@@ -244,19 +244,14 @@ func (a *Agent) pollLoop(ctx context.Context) {
 // executor is configured. A deferred recover prevents a panicking task from
 // taking down the whole agent process.
 func (a *Agent) executeTask(ctx context.Context, task *db.Task) {
+	tlog := a.alog.ForTask(task.ID)
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("agent %q: panic executing task %s: %v", a.name, task.ID, r)
-			_ = a.client.PostLog(ctx, db.LogEntry{
-				Level:   "error",
-				AgentID: a.id,
-				TaskID:  task.ID,
-				Message: fmt.Sprintf("agent panic while executing task: %v", r),
-			})
+			tlog.ErrorCtx(ctx, "panic executing task: %v", r)
 		}
 	}()
 	if a.executor == nil || a.executor.rtr == nil {
-		log.Printf("agent %q: no executor configured — skipping task %s", a.name, task.ID)
+		tlog.Warn("no executor configured — skipping task")
 		return
 	}
 	a.executor.Run(ctx, task)

@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"agent-orchestrator/api"
@@ -24,6 +23,7 @@ type Executor struct {
 	tools    *tools.Registry
 	client   *ServerClient
 	agentID  string
+	log      *AgentLogger
 }
 
 // NewExecutor creates an Executor with the given router, tool registry, and
@@ -34,6 +34,7 @@ func NewExecutor(rtr *router.Router, toolReg *tools.Registry, client *ServerClie
 		tools:   toolReg,
 		client:  client,
 		agentID: agentID,
+		log:     newLogger(agentID, client),
 	}
 }
 
@@ -54,23 +55,17 @@ func (e *Executor) CanExecute(roles []string) bool {
 
 // Run executes a claimed task and submits the result.
 func (e *Executor) Run(ctx context.Context, task *db.Task) {
+	tlog := e.log.ForTask(task.ID)
 	start := time.Now()
-	log.Printf("executor: starting task %s (type=%s role=%s)", task.ID, task.Type, task.Role)
+	tlog.InfoCtx(ctx, "starting task (type=%s role=%s)", task.Type, task.Role)
 
 	result, status, tokensUsed, execErr := e.execute(ctx, task)
 	if execErr != nil {
-		log.Printf("executor: task %s failed: %v", task.ID, execErr)
 		status = db.TaskStatusFailed
 		result = map[string]interface{}{
 			"error": execErr.Error(),
 		}
-		// Ship the error to the server log so it's visible in the UI.
-		_ = e.client.PostLog(ctx, db.LogEntry{
-			Level:   "error",
-			AgentID: e.agentID,
-			TaskID:  task.ID,
-			Message: fmt.Sprintf("task %s failed: %v", task.ID, execErr),
-		})
+		tlog.ErrorCtx(ctx, "task failed: %v", execErr)
 	}
 
 	// Commit any file changes the agent made to its worktree.
@@ -88,21 +83,20 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 	if task.Role == "reviewer" && execErr == nil {
 		reviewStatus, body := extractReviewFromResult(result)
 		if err := e.client.PostReview(ctx, task.ID, reviewStatus, body, task.BranchHeadSHA, e.agentID); err != nil {
-			log.Printf("executor: PostReview task %s: %v", task.ID, err)
+			tlog.WarnCtx(ctx, "PostReview failed: %v", err)
 		}
 		// Also submit result so metrics are recorded.
 		_ = e.client.SubmitTaskResult(ctx, task.ID, result, db.TaskStatusCompleted, metrics)
-		log.Printf("executor: reviewer task %s done (review_status=%s tokens=%d duration=%dms)",
-			task.ID, reviewStatus, tokensUsed, durationMs)
+		tlog.InfoCtx(ctx, "reviewer task done (review_status=%s tokens=%d duration=%dms)",
+			reviewStatus, tokensUsed, durationMs)
 		e.postCompletionComment(ctx, task, result, db.TaskStatusCompleted, tokensUsed, durationMs, nil)
 		return
 	}
 
 	if err := e.client.SubmitTaskResult(ctx, task.ID, result, status, metrics); err != nil {
-		log.Printf("executor: failed to submit result for task %s: %v", task.ID, err)
+		tlog.ErrorCtx(ctx, "failed to submit result: %v", err)
 	} else {
-		log.Printf("executor: task %s done (status=%s tokens=%d duration=%dms)",
-			task.ID, status, tokensUsed, durationMs)
+		tlog.InfoCtx(ctx, "task done (status=%s tokens=%d duration=%dms)", status, tokensUsed, durationMs)
 	}
 	e.postCompletionComment(ctx, task, result, status, tokensUsed, durationMs, execErr)
 }
@@ -112,7 +106,7 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 func (e *Executor) postCompletionComment(ctx context.Context, task *db.Task, result map[string]interface{}, status string, tokens, durationMs int, execErr error) {
 	body := e.buildCompletionComment(task, result, status, tokens, durationMs, execErr)
 	if err := e.client.PostComment(ctx, task.ID, body, e.agentID); err != nil {
-		log.Printf("executor: failed to post comment for task %s: %v", task.ID, err)
+		e.log.ForTask(task.ID).Warn("failed to post completion comment: %v", err)
 	}
 }
 
@@ -158,11 +152,12 @@ func extractReviewFromResult(result map[string]interface{}) (reviewStatus, body 
 func (e *Executor) execute(ctx context.Context, task *db.Task) (
 	result map[string]interface{}, status string, totalTokens int, err error,
 ) {
+	tlog := e.log.ForTask(task.ID)
+
 	// Resolve the provider for this task.
 	route, err := e.rtr.RouteByTaskType(task.Type)
 	if err != nil {
-		log.Printf("executor: task %s RouteByTaskType(%q) failed (%v); trying RouteByRole(%q)",
-			task.ID, task.Type, err, task.Role)
+		tlog.Debug("RouteByTaskType(%q) failed (%v); trying RouteByRole(%q)", task.Type, err, task.Role)
 		route, err = e.rtr.RouteByRole(task.Role)
 		if err != nil {
 			return nil, db.TaskStatusFailed, 0, fmt.Errorf("route task (type=%s role=%s): %w", task.Type, task.Role, err)
@@ -171,8 +166,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 	if route.Provider == nil {
 		return nil, db.TaskStatusFailed, 0, fmt.Errorf("no provider for role %q", route.Role)
 	}
-	log.Printf("executor: task %s resolved to role=%q provider=%q model=%q",
-		task.ID, route.Role, route.Provider.Name(), route.Model)
+	tlog.InfoCtx(ctx, "resolved provider=%q model=%q role=%q", route.Provider.Name(), route.Model, route.Role)
 
 	// Build the initial system + user message.
 	systemMsg := e.buildSystemMessage(task, route)
@@ -187,6 +181,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 
 	// LLM ↔ tool loop.
 	for round := 0; round < maxToolRounds; round++ {
+		tlog.Debug("llm request (round=%d messages=%d)", round, len(messages))
 		resp, callErr := route.Provider.Chat(ctx, llm.ChatRequest{
 			Model:     route.Model,
 			Messages:  messages,
@@ -197,6 +192,8 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			return nil, db.TaskStatusFailed, totalTokens, fmt.Errorf("llm chat (round %d): %w", round, callErr)
 		}
 		totalTokens += resp.TokensUsed
+		tlog.Debug("llm response (round=%d tokens=%d stop=%s tools=%d)",
+			round, resp.TokensUsed, resp.StopReason, len(resp.ToolCalls))
 
 		// Append assistant turn.
 		messages = append(messages, llm.Message{
@@ -206,6 +203,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 
 		// No tool calls — we're done.
 		if resp.StopReason == "end_turn" || len(resp.ToolCalls) == 0 {
+			tlog.InfoCtx(ctx, "task complete after %d round(s), total_tokens=%d", round+1, totalTokens)
 			return map[string]interface{}{
 				"output": resp.Content,
 			}, db.TaskStatusCompleted, totalTokens, nil
@@ -213,11 +211,12 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 
 		// Execute each tool call and build tool-result messages.
 		for _, tc := range resp.ToolCalls {
+			tlog.Debug("tool call: %s", tc.Name)
 			toolResult, jsonErr := e.tools.ExecuteJSON(ctx, tc.Name, tc.Arguments)
 			if jsonErr != nil {
+				tlog.Warn("tool %s error: %v", tc.Name, jsonErr)
 				toolResult = fmt.Sprintf(`{"error":%q}`, jsonErr.Error())
 			}
-			log.Printf("executor: tool %s called (round %d)", tc.Name, round)
 			messages = append(messages, llm.Message{
 				Role:       "tool",
 				Content:    toolResult,
@@ -250,17 +249,17 @@ func (e *Executor) commitTaskWork(ctx context.Context, task *db.Task) {
 			commitMsg = "Agent: " + title
 		}
 	}
+	tlog := e.log.ForTask(task.ID)
 	sha, err := CommitAndPush(task.WorktreePath, commitMsg, "Agent", "agent@system", "", "")
 	if err != nil {
-		log.Printf("executor: CommitAndPush task %s: %v", task.ID, err)
+		tlog.Warn("CommitAndPush failed: %v", err)
 		return
 	}
-	// Only post a comment when CommitAndPush made a new commit (i.e. worktree was dirty).
-	// We detect this by checking whether the SHA we got matches what was already recorded.
 	if sha != "" && sha != task.BranchHeadSHA {
+		tlog.InfoCtx(ctx, "committed worktree changes sha=%s", sha[:12])
 		body := fmt.Sprintf("Changes committed: `%s`", sha[:12])
 		if err := e.client.PostComment(ctx, task.ID, body, e.agentID); err != nil {
-			log.Printf("executor: post commit comment task %s: %v", task.ID, err)
+			tlog.Warn("post commit comment failed: %v", err)
 		}
 	}
 }
@@ -313,7 +312,7 @@ func (e *Executor) buildUserMessage(task *db.Task) string {
 	if task.WorktreePath != "" {
 		msg += fmt.Sprintf("\n\nWorkspace directory: %s\nUse this path as repo_path when calling read_file, write_file, list_files, and other file tools.", task.WorktreePath)
 	} else {
-		log.Printf("executor: task %s has no WorktreePath — agent will not be able to read or write files", task.ID)
+		e.log.ForTask(task.ID).Warn("task has no WorktreePath — agent will not be able to read or write files")
 	}
 	return msg
 }

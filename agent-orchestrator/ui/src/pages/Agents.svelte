@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { listAgents, listRoles, listAgentLogs, deleteAgentLogs } from '../lib/api.js'
   import { formatTimestamp } from '../lib/time.js'
-  import { toasts } from '../lib/stores.js'
+  import { toasts, router } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
 
   // ── Agent list state ───────────────────────────────────────────────────────
@@ -219,6 +219,11 @@
               <span class="w-2 h-2 rounded-full shrink-0 {statusDot[a.status] || 'bg-gray-500'}"></span>
               <span class="font-medium text-sm text-gray-100">{a.name}</span>
               <span class="text-xs text-gray-500 capitalize">{a.status}</span>
+              <button
+                class="ml-auto text-xs text-gray-500 hover:text-accent transition-colors"
+                title="View agent detail"
+                onclick={(e) => { e.stopPropagation(); router.push('agents', a.id) }}
+              >Detail →</button>
             </div>
             <div class="flex flex-wrap gap-1">
               {#each (a.roles ?? []) as role}

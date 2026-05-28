@@ -72,6 +72,78 @@ func TestCommitFile_NestedPath(t *testing.T) {
 	}
 }
 
+// ── CommitFiles ───────────────────────────────────────────────────────────────
+
+func TestCommitFiles_MultipleFilesInOneCommit(t *testing.T) {
+	repoPath := filepath.Join(tempDir(t), "test.git")
+	if err := git.InitBare(repoPath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+
+	files := []git.FileChange{
+		{Path: "a.txt", Content: []byte("hello a")},
+		{Path: "b.txt", Content: []byte("hello b")},
+		{Path: "src/c.go", Content: []byte("package main")},
+	}
+	sha, err := git.CommitFiles(repoPath, "main", files, "add three files", "dev", "dev@example.com")
+	if err != nil {
+		t.Fatalf("CommitFiles: %v", err)
+	}
+	if sha == "" {
+		t.Error("expected non-empty SHA")
+	}
+
+	for _, f := range files {
+		data, rerr := git.ReadFile(repoPath, "main", f.Path)
+		if rerr != nil {
+			t.Fatalf("ReadFile %q: %v", f.Path, rerr)
+		}
+		if string(data) != string(f.Content) {
+			t.Errorf("%s: got %q, want %q", f.Path, data, f.Content)
+		}
+	}
+}
+
+func TestCommitFiles_PreservesExistingFiles(t *testing.T) {
+	repoPath := filepath.Join(tempDir(t), "test.git")
+	if err := git.InitBare(repoPath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+
+	// Seed a file via CommitFile.
+	if _, err := git.CommitFile(repoPath, "main", "existing.txt", []byte("existing"), "seed", "dev", "dev@localhost"); err != nil {
+		t.Fatalf("seed CommitFile: %v", err)
+	}
+
+	// CommitFiles with new files — existing.txt should still be there.
+	_, err := git.CommitFiles(repoPath, "main", []git.FileChange{
+		{Path: "new1.txt", Content: []byte("new1")},
+		{Path: "new2.txt", Content: []byte("new2")},
+	}, "add two more", "dev", "dev@localhost")
+	if err != nil {
+		t.Fatalf("CommitFiles: %v", err)
+	}
+
+	existing, err := git.ReadFile(repoPath, "main", "existing.txt")
+	if err != nil {
+		t.Fatalf("ReadFile existing.txt: %v", err)
+	}
+	if string(existing) != "existing" {
+		t.Errorf("existing.txt: got %q, want \"existing\"", existing)
+	}
+}
+
+func TestCommitFiles_ErrorOnEmpty(t *testing.T) {
+	repoPath := filepath.Join(tempDir(t), "test.git")
+	if err := git.InitBare(repoPath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+	_, err := git.CommitFiles(repoPath, "main", nil, "empty", "dev", "dev@localhost")
+	if err == nil {
+		t.Error("expected error for empty file list")
+	}
+}
+
 func TestCommitFile_ParentChain(t *testing.T) {
 	repoPath := filepath.Join(tempDir(t), "test.git")
 	if err := git.InitBare(repoPath); err != nil {

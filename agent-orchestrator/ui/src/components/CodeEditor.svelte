@@ -13,13 +13,14 @@
   import { markdown }           from '@codemirror/lang-markdown'
   import { readFile, commitFile } from '../lib/api.js'
 
-  let { projectId, ref = 'main', path = null, readonly = false } = $props()
+  let { projectId, ref = 'main', path = null, readonly = false, onStage = null } = $props()
 
   let container    = $state(null)
   let view         = null
   let originalText = ''
   let isDirty      = $state(false)
   let isBinary     = $state(false)
+  let isNew        = $state(false)   // true when file doesn't exist yet (404)
   let loading      = $state(false)
   let error        = $state(null)
   let showCommit   = $state(false)
@@ -53,7 +54,8 @@
       ...langExt(path),
       EditorView.updateListener.of(update => {
         if (update.docChanged) {
-          isDirty = view.state.doc.toString() !== originalText
+          const current = view.state.doc.toString()
+          isDirty = isNew ? current.length > 0 : current !== originalText
         }
       }),
     ]
@@ -65,10 +67,11 @@
 
   async function loadFile() {
     if (!path || !container) return
-    loading = true
-    error   = null
-    isBinary = false
-    isDirty  = false
+    loading    = true
+    error      = null
+    isBinary   = false
+    isDirty    = false
+    isNew      = false
     showCommit = false
     try {
       const resp = await readFile(projectId, ref, path)
@@ -84,7 +87,19 @@
         view = new EditorView({ state, parent: container })
       }
     } catch (e) {
-      error = e.message
+      // Treat 404 as a new empty file rather than an error.
+      if (e.message?.includes('404') || e.status === 404) {
+        isNew        = true
+        originalText = ''
+        const state  = buildState('')
+        if (view) {
+          view.setState(state)
+        } else {
+          view = new EditorView({ state, parent: container })
+        }
+      } else {
+        error = e.message
+      }
     } finally {
       loading = false
     }
@@ -128,7 +143,12 @@
   <!-- Toolbar -->
   {#if path}
     <div class="flex items-center justify-between px-3 py-1.5 border-b border-surface-600 shrink-0 gap-2">
-      <span class="text-xs font-mono text-gray-400 truncate">{path}</span>
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="text-xs font-mono text-gray-400 truncate">{path}</span>
+        {#if isNew}
+          <span class="text-xs px-1.5 py-0.5 rounded bg-green-900/40 text-green-400 shrink-0">new</span>
+        {/if}
+      </div>
       {#if !readonly}
         {#if showCommit}
           <div class="flex items-center gap-2">
@@ -151,14 +171,32 @@
             >Cancel</button>
           </div>
         {:else}
-          <button
-            class="px-2 py-1 text-xs rounded border transition-colors
-                   {isDirty
-                     ? 'border-accent text-accent hover:bg-accent hover:text-white'
-                     : 'border-surface-500 text-gray-500 cursor-default'}"
-            disabled={!isDirty}
-            onclick={() => showCommit = true}
-          >Commit changes</button>
+          <div class="flex items-center gap-1">
+            {#if onStage}
+              <button
+                class="px-2 py-1 text-xs rounded border transition-colors
+                       {isDirty
+                         ? 'border-blue-500 text-blue-400 hover:bg-blue-500 hover:text-white'
+                         : 'border-surface-500 text-gray-500 cursor-default'}"
+                disabled={!isDirty}
+                onclick={() => {
+                  onStage(path, view.state.doc.toString())
+                  // Mark as not dirty — staged content is now tracked by the parent.
+                  originalText = view.state.doc.toString()
+                  isDirty = false
+                  isNew   = false
+                }}
+              >Stage</button>
+            {/if}
+            <button
+              class="px-2 py-1 text-xs rounded border transition-colors
+                     {isDirty
+                       ? 'border-accent text-accent hover:bg-accent hover:text-white'
+                       : 'border-surface-500 text-gray-500 cursor-default'}"
+              disabled={!isDirty}
+              onclick={() => showCommit = true}
+            >Commit changes</button>
+          </div>
         {/if}
       {/if}
     </div>

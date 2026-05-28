@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -229,6 +230,11 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if sub == "files" {
+		s.handleProjectFiles(w, r, id)
+		return
+	}
+
 	if sub == "init-repo" {
 		s.handleProjectInitRepo(w, r, id)
 		return
@@ -441,6 +447,49 @@ func (s *Server) handleProjectFile(w http.ResponseWriter, r *http.Request, proje
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+// handleProjectFiles handles POST /api/projects/:id/files — multi-file commit.
+func (s *Server) handleProjectFiles(w http.ResponseWriter, r *http.Request, projectID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	repoPath, ok := s.projectRepoPath(w, r, projectID)
+	if !ok {
+		return
+	}
+	var req struct {
+		Branch      string `json:"branch"`
+		Message     string `json:"message"`
+		AuthorName  string `json:"author_name"`
+		AuthorEmail string `json:"author_email"`
+		Files       []struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		} `json:"files"`
+	}
+	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Branch == "" || req.Message == "" || len(req.Files) == 0 {
+		api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, "branch, message, and files are required")
+		return
+	}
+	changes := make([]git.FileChange, len(req.Files))
+	for i, f := range req.Files {
+		changes[i] = git.FileChange{Path: f.Path, Content: []byte(f.Content)}
+	}
+	sha, err := git.CommitFiles(repoPath, req.Branch, changes, req.Message, req.AuthorName, req.AuthorEmail)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"sha":    sha,
+		"branch": req.Branch,
+		"count":  len(req.Files),
+	})
 }
 
 func (s *Server) handleProjectDiff(w http.ResponseWriter, r *http.Request, projectID string) {
@@ -1029,6 +1078,67 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/agents/{id}/stats
+	if len(parts) == 2 && parts[1] == "stats" {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		a, err := s.db.GetAgent(r.Context(), agentID)
+		if err != nil {
+			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+			return
+		}
+		// Fetch all tasks this agent has worked on.
+		tasks, err := s.db.ListTasks(r.Context(), db.TaskFilters{AgentID: agentID, Limit: 2000})
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		var (
+			totalTasks     int
+			completedTasks int
+			failedTasks    int
+			totalTokens    int
+			totalDurationMs int64
+		)
+		for _, t := range tasks {
+			totalTasks++
+			switch t.Status {
+			case db.TaskStatusCompleted:
+				completedTasks++
+			case db.TaskStatusFailed:
+				failedTasks++
+			}
+			if t.Result != nil {
+				if tok, ok := t.Result["tokens_used"].(float64); ok {
+					totalTokens += int(tok)
+				}
+			}
+			if t.StartedAt != nil && t.CompletedAt != nil {
+				totalDurationMs += t.CompletedAt.Sub(*t.StartedAt).Milliseconds()
+			}
+		}
+		var uptimeMs int64
+		if !a.RegisteredAt.IsZero() {
+			uptimeMs = time.Since(a.RegisteredAt).Milliseconds()
+		}
+		api.WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"uptime_ms":          uptimeMs,
+			"registered_at":      a.RegisteredAt,
+			"last_heartbeat":     a.LastHeartbeat,
+			"total_tasks":        totalTasks,
+			"completed_tasks":    completedTasks,
+			"failed_tasks":       failedTasks,
+			"total_tokens":       totalTokens,
+			"avg_task_ms":        func() int64 {
+				if completedTasks > 0 { return totalDurationMs / int64(completedTasks) }
+				return 0
+			}(),
+		})
+		return
+	}
+
 	// /api/agents/{id}/logs
 	if len(parts) == 2 && parts[1] == "logs" {
 		if r.Method != http.MethodGet {
@@ -1347,12 +1457,18 @@ func (s *Server) handleContextQuery(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		limit := 200
+		if lStr := r.URL.Query().Get("limit"); lStr != "" {
+			if n, err := strconv.Atoi(lStr); err == nil && n > 0 && n <= 2000 {
+				limit = n
+			}
+		}
 		f := db.LogFilters{
 			AgentID:   r.URL.Query().Get("agent_id"),
 			TaskID:    r.URL.Query().Get("task_id"),
 			ProjectID: r.URL.Query().Get("project_id"),
 			Level:     r.URL.Query().Get("level"),
-			Limit:     100,
+			Limit:     limit,
 		}
 		logs, err := s.db.ListLogs(r.Context(), f)
 		if err != nil {

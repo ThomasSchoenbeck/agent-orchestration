@@ -2,13 +2,14 @@
   import { onMount } from 'svelte'
   import {
     listProviders, createProvider, updateProvider, deleteProvider,
-    testProvider, seedProviders, getMetrics,
+    testProvider, seedProviders, getMetrics, listRoles,
   } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
 
   // ── State ─────────────────────────────────────────────────────────────────
   let providers   = $state([])
+  let roles       = $state([])
   let metrics     = $state(null)
   let loading     = $state(false)
   let showForm    = $state(false)
@@ -27,6 +28,7 @@
   const emptyForm = () => ({
     name: '', type: 'openai_compatible', api_key: '',
     base_url: '', model_name: '', enabled: true, deployment: '',
+    roles: [],
   })
   let form = $state(emptyForm())
 
@@ -53,12 +55,14 @@
   async function load() {
     loading = true
     try {
-      const [pr, mr] = await Promise.all([
+      const [pr, mr, rl] = await Promise.all([
         listProviders().catch(() => []),
         getMetrics().catch(() => null),
+        listRoles().catch(() => []),
       ])
       providers = Array.isArray(pr) ? pr : (pr?.providers ?? [])
       metrics   = mr
+      roles     = Array.isArray(rl) ? rl : (rl?.roles ?? [])
     } catch (e) {
       toasts.error('Failed to load: ' + e.message)
     } finally {
@@ -83,6 +87,7 @@
       model_name: p.model_name,
       enabled:    p.enabled,
       deployment: p.config?.deployment ?? '',
+      roles:      p.roles ?? [],
     }
     editingId = p.id
     showKey   = false
@@ -97,6 +102,7 @@
       base_url:   form.base_url.trim(),
       model_name: form.model_name.trim(),
       enabled:    form.enabled,
+      roles:      form.roles,
       config:     form.deployment ? { deployment: form.deployment.trim() } : {},
     }
     if (form.api_key.trim()) body.api_key = form.api_key.trim()
@@ -287,6 +293,31 @@
         Enabled
       </label>
 
+      {#if roles.length > 0}
+        <div>
+          <div class="text-xs text-gray-500 mb-1.5">Roles</div>
+          <div class="flex flex-wrap gap-2">
+            {#each roles as role}
+              <label class="flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  class="accent-accent"
+                  checked={form.roles.includes(role.name)}
+                  onchange={(e) => {
+                    if (e.target.checked) {
+                      form.roles = [...form.roles, role.name]
+                    } else {
+                      form.roles = form.roles.filter(r => r !== role.name)
+                    }
+                  }}
+                />
+                {role.label ?? role.name}
+              </label>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <div class="flex justify-end gap-2">
         <button
           type="button"
@@ -327,6 +358,13 @@
               </div>
               {#if p.base_url}
                 <div class="text-xs text-gray-600 font-mono truncate">{p.base_url}</div>
+              {/if}
+              {#if p.roles?.length > 0}
+                <div class="flex flex-wrap gap-1 mt-1">
+                  {#each p.roles as role}
+                    <span class="text-xs px-1.5 py-0.5 rounded bg-surface-700 text-blue-400">{role}</span>
+                  {/each}
+                </div>
               {/if}
 
               <!-- Test result -->

@@ -97,6 +97,108 @@ func CommitFile(repoPath, branch, filePath string, content []byte, message, auth
 	return commitHash.String(), nil
 }
 
+// FileChange describes a single file to include in a multi-file commit.
+type FileChange struct {
+	Path    string
+	Content []byte
+}
+
+// CommitFiles writes multiple files in a single commit on branch in the bare
+// repo at repoPath. Returns the new commit SHA.
+func CommitFiles(repoPath, branch string, files []FileChange, message, authorName, authorEmail string) (string, error) {
+	if authorName == "" {
+		authorName = "user"
+	}
+	if authorEmail == "" {
+		authorEmail = "user@localhost"
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("git.CommitFiles: no files provided")
+	}
+
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("git.CommitFiles open %q: %w", repoPath, err)
+	}
+
+	var parentHash plumbing.Hash
+	var parentTree *object.Tree
+	branchRef, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err == nil {
+		parentCommit, cerr := repo.CommitObject(branchRef.Hash())
+		if cerr != nil {
+			return "", fmt.Errorf("git.CommitFiles resolve parent: %w", cerr)
+		}
+		parentHash = branchRef.Hash()
+		parentTree, err = parentCommit.Tree()
+		if err != nil {
+			return "", fmt.Errorf("git.CommitFiles parent tree: %w", err)
+		}
+	}
+
+	// Build each blob and insert into the tree sequentially.
+	currentTree := parentTree
+	for _, f := range files {
+		blobObj := repo.Storer.NewEncodedObject()
+		blobObj.SetType(plumbing.BlobObject)
+		w, werr := blobObj.Writer()
+		if werr != nil {
+			return "", fmt.Errorf("git.CommitFiles blob writer: %w", werr)
+		}
+		if _, werr = w.Write(f.Content); werr != nil {
+			return "", fmt.Errorf("git.CommitFiles write blob %q: %w", f.Path, werr)
+		}
+		_ = w.Close()
+		blobHash, serr := repo.Storer.SetEncodedObject(blobObj)
+		if serr != nil {
+			return "", fmt.Errorf("git.CommitFiles store blob %q: %w", f.Path, serr)
+		}
+
+		newTreeHash, terr := upsertFileInTree(repo, currentTree, f.Path, blobHash)
+		if terr != nil {
+			return "", fmt.Errorf("git.CommitFiles build tree for %q: %w", f.Path, terr)
+		}
+		currentTree, err = repo.TreeObject(newTreeHash)
+		if err != nil {
+			return "", fmt.Errorf("git.CommitFiles load intermediate tree: %w", err)
+		}
+	}
+
+	// Get the final tree hash.
+	var finalTreeHash plumbing.Hash
+	if currentTree != nil {
+		finalTreeHash = currentTree.Hash
+	}
+
+	now := time.Now()
+	sig := object.Signature{Name: authorName, Email: authorEmail, When: now}
+	commit := &object.Commit{
+		Author:    sig,
+		Committer: sig,
+		Message:   message,
+		TreeHash:  finalTreeHash,
+	}
+	if parentHash != plumbing.ZeroHash {
+		commit.ParentHashes = []plumbing.Hash{parentHash}
+	}
+
+	commitObj := repo.Storer.NewEncodedObject()
+	if err := commit.Encode(commitObj); err != nil {
+		return "", fmt.Errorf("git.CommitFiles encode commit: %w", err)
+	}
+	commitHash, err := repo.Storer.SetEncodedObject(commitObj)
+	if err != nil {
+		return "", fmt.Errorf("git.CommitFiles store commit: %w", err)
+	}
+
+	newRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), commitHash)
+	if err := repo.Storer.SetReference(newRef); err != nil {
+		return "", fmt.Errorf("git.CommitFiles set ref: %w", err)
+	}
+
+	return commitHash.String(), nil
+}
+
 // upsertFileInTree inserts or replaces filePath (which may include subdirs) in
 // the tree rooted at base, returning the hash of the new root tree object.
 func upsertFileInTree(repo *gogit.Repository, base *object.Tree, filePath string, blobHash plumbing.Hash) (plumbing.Hash, error) {

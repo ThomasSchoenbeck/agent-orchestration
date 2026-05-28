@@ -8,7 +8,7 @@
     getTaskTypes, getTaskRoles,
     listRequirements, createRequirement, updateRequirement, deleteRequirement,
     listFeatures, createFeature, updateFeature, deleteFeature,
-    initRepo, listBranches,
+    initRepo, listBranches, commitFiles,
   } from '../lib/api.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
   import AssistantSidebar from '../components/AssistantSidebar.svelte'
@@ -66,6 +66,44 @@
   function onFileSelect(path, ref) {
     activeFilePath = path
     activeFileRef  = ref
+  }
+
+  // ── Multi-file staging ────────────────────────────────────────────────────
+  // stagedFiles: path → { content, ref }
+  let stagedFiles    = $state({})
+  let stageCommitMsg = $state('')
+  let stageSaving    = $state(false)
+
+  function onStageFile(path, content) {
+    stagedFiles = { ...stagedFiles, [path]: { content, ref: activeFileRef } }
+  }
+
+  function unstageFile(path) {
+    const next = { ...stagedFiles }
+    delete next[path]
+    stagedFiles = next
+  }
+
+  async function commitAllStaged() {
+    if (!stageCommitMsg.trim() || Object.keys(stagedFiles).length === 0) return
+    stageSaving = true
+    try {
+      // All staged files must share the same branch; use the ref of the first.
+      const entries = Object.entries(stagedFiles)
+      const branch  = entries[0][1].ref
+      await commitFiles(projectId, {
+        branch,
+        message: stageCommitMsg.trim(),
+        files: entries.map(([path, { content }]) => ({ path, content })),
+      })
+      stagedFiles    = {}
+      stageCommitMsg = ''
+      toasts.success('Committed ' + entries.length + ' file(s)')
+    } catch (e) {
+      toasts.error('Commit failed: ' + e.message)
+    } finally {
+      stageSaving = false
+    }
   }
 
   // Requirements / features state
@@ -919,15 +957,55 @@
     {/if}
     <!-- ── Files tab ─────────────────────────────────────────────────────── -->
     {#if activeTab === 'files'}
-      <div class="flex-1 overflow-hidden flex gap-0 border border-surface-600 rounded">
-        <!-- File tree (25%) -->
-        <div class="w-56 shrink-0 border-r border-surface-600 overflow-hidden flex flex-col bg-surface-800">
-          <FileTree {projectId} onFileSelect={onFileSelect} />
+      <div class="flex-1 overflow-hidden flex flex-col gap-0">
+        <div class="flex-1 overflow-hidden flex gap-0 border border-surface-600 rounded-t">
+          <!-- File tree (25%) -->
+          <div class="w-56 shrink-0 border-r border-surface-600 overflow-hidden flex flex-col bg-surface-800">
+            <FileTree {projectId} onFileSelect={onFileSelect} />
+          </div>
+          <!-- Code editor (75%) -->
+          <div class="flex-1 overflow-hidden flex flex-col bg-surface-900">
+            <CodeEditor {projectId} ref={activeFileRef} path={activeFilePath} onStage={onStageFile} />
+          </div>
         </div>
-        <!-- Code editor (75%) -->
-        <div class="flex-1 overflow-hidden flex flex-col bg-surface-900">
-          <CodeEditor {projectId} ref={activeFileRef} path={activeFilePath} />
-        </div>
+
+        <!-- Staging panel -->
+        {#if Object.keys(stagedFiles).length > 0}
+          <div class="border border-t-0 border-surface-600 rounded-b bg-surface-800 p-3 flex flex-col gap-2 shrink-0">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-gray-400 uppercase tracking-wide">
+                Staged ({Object.keys(stagedFiles).length})
+              </span>
+            </div>
+            <div class="flex flex-wrap gap-1">
+              {#each Object.keys(stagedFiles) as p}
+                <span class="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-blue-900/30 text-blue-300 font-mono">
+                  {p}
+                  <button
+                    class="text-gray-500 hover:text-red-400 transition-colors leading-none"
+                    onclick={() => unstageFile(p)}
+                    title="Unstage"
+                  >✕</button>
+                </span>
+              {/each}
+            </div>
+            <div class="flex items-center gap-2">
+              <input
+                class="flex-1 bg-surface-700 border border-surface-500 rounded px-3 py-1.5 text-xs
+                       text-gray-200 focus:outline-none focus:border-accent"
+                placeholder="Commit message…"
+                bind:value={stageCommitMsg}
+                onkeydown={(e) => e.key === 'Enter' && commitAllStaged()}
+              />
+              <button
+                class="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-xs rounded
+                       disabled:opacity-40 transition-colors"
+                disabled={!stageCommitMsg.trim() || stageSaving}
+                onclick={commitAllStaged}
+              >{stageSaving ? 'Committing…' : 'Commit all'}</button>
+            </div>
+          </div>
+        {/if}
       </div>
     {/if}
 

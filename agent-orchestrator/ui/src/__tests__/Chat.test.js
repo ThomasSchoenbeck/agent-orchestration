@@ -3,7 +3,7 @@
  * WebSocket is provided by MockWebSocket from setup.js.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/svelte'
+import { render, screen, waitFor, fireEvent } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import { MockWebSocket, mockFetch } from './setup.js'
 import Chat from '../pages/Chat.svelte'
@@ -72,14 +72,14 @@ describe('Chat — rendering', () => {
 
   it('Send button is disabled when disconnected', async () => {
     render(Chat)
-    await waitFor(() => screen.getByPlaceholderText(/Message/i))
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
     const btn = screen.getByRole('button', { name: /send/i })
     expect(btn).toBeDisabled()
   })
 
   it('Send button is disabled when input is empty', async () => {
     render(Chat)
-    await waitFor(() => screen.getByPlaceholderText(/Message/i))
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     const btn = screen.getByRole('button', { name: /send/i })
@@ -87,28 +87,32 @@ describe('Chat — rendering', () => {
   })
 
   it('Send button is enabled when connected and input has text', async () => {
-    const user = userEvent.setup()
     render(Chat)
-    await waitFor(() => screen.getByPlaceholderText(/Message/i))
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
-    await user.type(screen.getByPlaceholderText(/Message/i), 'Hello')
-    expect(screen.getByRole('button', { name: /send/i })).not.toBeDisabled()
+    const editor = screen.getByRole('textbox', { name: /Message/i })
+    editor.innerHTML = 'Hello'
+    fireEvent.input(editor)
+    await waitFor(() => expect(screen.getByRole('button', { name: /send/i })).not.toBeDisabled())
   })
 })
 
 // ── Sending messages ──────────────────────────────────────────────────────────
 describe('Chat — sending messages', () => {
   it('sends user message to the WebSocket', async () => {
-    const user = userEvent.setup()
     render(Chat)
-    await waitFor(() => screen.getByPlaceholderText(/Message/i))
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
-    await user.type(screen.getByPlaceholderText(/Message/i), 'Hello world')
-    await user.click(screen.getByRole('button', { name: /send/i }))
+    const editor = screen.getByRole('textbox', { name: /Message/i })
+    editor.innerHTML = 'Hello world'
+    fireEvent.input(editor)
+    const btn = screen.getByRole('button', { name: /send/i })
+    await waitFor(() => expect(btn).not.toBeDisabled())
+    fireEvent.click(btn)
 
-    expect(getSocket().sent).toHaveLength(1)
+    await waitFor(() => expect(getSocket().sent).toHaveLength(1))
     // Parse sent data (it's a stringified JSON object)
     const sent = getSocket().sent[0]
     const parsed = typeof sent === 'string' ? JSON.parse(sent) : sent
@@ -118,45 +122,56 @@ describe('Chat — sending messages', () => {
   })
 
   it('appends user message to the chat log', async () => {
-    const user = userEvent.setup()
     render(Chat)
-    await waitFor(() => screen.getByPlaceholderText(/Message/i))
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
-    await user.type(screen.getByPlaceholderText(/Message/i), 'Ping')
-    await user.click(screen.getByRole('button', { name: /send/i }))
+    const editor = screen.getByRole('textbox', { name: /Message/i })
+    editor.innerHTML = 'Ping'
+    fireEvent.input(editor)
+    const btn = screen.getByRole('button', { name: /send/i })
+    await waitFor(() => expect(btn).not.toBeDisabled())
+    fireEvent.click(btn)
     await waitFor(() => expect(screen.getByText('Ping')).toBeInTheDocument())
   })
 
   it('clears the input after sending', async () => {
-    const user = userEvent.setup()
     render(Chat)
-    await waitFor(() => screen.getByPlaceholderText(/Message/i))
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
-    const textarea = screen.getByPlaceholderText(/Message/i)
-    await user.type(textarea, 'Ping')
-    await user.click(screen.getByRole('button', { name: /send/i }))
-    await waitFor(() => expect(textarea).toHaveValue(''))
+    const editor = screen.getByRole('textbox', { name: /Message/i })
+    editor.innerHTML = 'Ping'
+    fireEvent.input(editor)
+    const btn = screen.getByRole('button', { name: /send/i })
+    await waitFor(() => expect(btn).not.toBeDisabled())
+    fireEvent.click(btn)
+    await waitFor(() => expect(editor.innerHTML).toBe(''))
   })
 
   it('sends via Enter key', async () => {
-    const user = userEvent.setup()
     render(Chat)
-    await waitFor(() => screen.getByPlaceholderText(/Message/i))
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
-    await user.type(screen.getByPlaceholderText(/Message/i), 'Hi{Enter}')
-    expect(getSocket().sent).toHaveLength(1)
+    const editor = screen.getByRole('textbox', { name: /Message/i })
+    editor.innerHTML = 'Hi'
+    fireEvent.input(editor)
+    await waitFor(() => expect(screen.getByRole('button', { name: /send/i })).not.toBeDisabled())
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: false })
+    await waitFor(() => expect(getSocket().sent).toHaveLength(1))
   })
 
   it('does NOT send via Shift+Enter (newline)', async () => {
-    const user = userEvent.setup()
     render(Chat)
-    await waitFor(() => screen.getByPlaceholderText(/Message/i))
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
-    await user.type(screen.getByPlaceholderText(/Message/i), 'line1{Shift>}{Enter}{/Shift}line2')
+    const editor = screen.getByRole('textbox', { name: /Message/i })
+    editor.innerHTML = 'line1'
+    fireEvent.input(editor)
+    await waitFor(() => expect(screen.getByRole('button', { name: /send/i })).not.toBeDisabled())
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true })
     expect(getSocket().sent).toHaveLength(0)
   })
 })
@@ -165,7 +180,7 @@ describe('Chat — sending messages', () => {
 describe('Chat — receiving messages', () => {
   it('displays assistant message from JSON payload', async () => {
     render(Chat)
-    await waitFor(() => screen.getByPlaceholderText(/Message/i))
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     getSocket().simulateMessage({ role: 'assistant', content: 'Hello there!' })
@@ -176,7 +191,7 @@ describe('Chat — receiving messages', () => {
 
   it('displays assistant message from plain-string response', async () => {
     render(Chat)
-    await waitFor(() => screen.getByPlaceholderText(/Message/i))
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
     // Plain string — not JSON
@@ -187,12 +202,15 @@ describe('Chat — receiving messages', () => {
   })
 
   it('clears sending indicator when response arrives', async () => {
-    const user = userEvent.setup()
     render(Chat)
-    await waitFor(() => screen.getByPlaceholderText(/Message/i))
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
     getSocket().simulateOpen()
     await waitFor(() => screen.getByText('Connected'))
-    await user.type(screen.getByPlaceholderText(/Message/i), 'Hi{Enter}')
+    const editor = screen.getByRole('textbox', { name: /Message/i })
+    editor.innerHTML = 'Hi'
+    fireEvent.input(editor)
+    await waitFor(() => expect(screen.getByRole('button', { name: /send/i })).not.toBeDisabled())
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: false })
     // "…" typing indicator should appear (might be in a span or other element)
     await waitFor(() => {
       const elements = screen.queryAllByText(/…/)

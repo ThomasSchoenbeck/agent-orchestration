@@ -36,6 +36,22 @@
   let previewResult  = $state('')
   let previewVarsRaw = $state('{}')
 
+  // ── Derived ───────────────────────────────────────────────────────────────
+  // Providers whose roles list includes the current form's role name.
+  // Falls back to all providers when the name is blank or no provider matches.
+  let compatibleProviders = $derived.by(() => {
+    const name = form.name.trim()
+    if (!name) return providers
+    const filtered = providers.filter(p => Array.isArray(p.roles) && p.roles.includes(name))
+    return filtered.length > 0 ? filtered : providers
+  })
+
+  let compatibleFiltered = $derived.by(() => {
+    const name = form.name.trim()
+    if (!name) return false
+    return providers.some(p => Array.isArray(p.roles) && p.roles.includes(name))
+  })
+
   // ── Constants ─────────────────────────────────────────────────────────────
   const SYSTEM_PROMPT_PLACEHOLDER = 'You are a {{.role}} agent…  (Go text/template syntax supported)'
   const PREVIEW_VARS_PLACEHOLDER = 'Variables JSON, e.g. {"role":"worker"}'
@@ -255,14 +271,21 @@
         <p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Model</p>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="text-xs text-gray-500 mb-1 block">Provider</label>
+            <label class="text-xs text-gray-500 mb-1 block">
+              Provider
+              {#if compatibleFiltered}
+                <span class="text-blue-400 ml-1">· filtered for this role</span>
+              {:else if form.name.trim() && providers.length > 0}
+                <span class="text-gray-600 ml-1">· no role-matched providers, showing all</span>
+              {/if}
+            </label>
             <select
               class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
                      text-gray-300 focus:outline-none focus:border-accent"
               bind:value={form.provider_id}
             >
               <option value="">— none —</option>
-              {#each providers as p}
+              {#each compatibleProviders as p}
                 <option value={p.id}>{p.name}</option>
               {/each}
             </select>
