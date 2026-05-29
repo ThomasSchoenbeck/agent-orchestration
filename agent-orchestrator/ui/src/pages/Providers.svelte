@@ -293,9 +293,11 @@
         Enabled
       </label>
 
-      {#if roles.length > 0}
-        <div>
+      <div>
           <div class="text-xs text-gray-500 mb-1.5">Roles</div>
+          {#if roles.length === 0}
+            <p class="text-xs text-gray-600">No roles defined yet — <a href="#/roles" class="text-accent hover:underline">create roles</a> to assign them here.</p>
+          {:else}
           <div class="flex flex-wrap gap-2">
             {#each roles as role}
               <label class="flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer">
@@ -315,8 +317,8 @@
               </label>
             {/each}
           </div>
+          {/if}
         </div>
-      {/if}
 
       <div class="flex justify-end gap-2">
         <button

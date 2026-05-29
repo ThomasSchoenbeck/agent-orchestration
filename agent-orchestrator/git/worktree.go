@@ -43,16 +43,24 @@ func CreateWorktree(repoPath, worktreePath, branchName, baseBranch string) (head
 	}
 	sha := resolvedRef.Hash().String()
 
-	// Clone the bare repo as a regular (non-bare) worktree.
 	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
 		return "", fmt.Errorf("git.CreateWorktree mkdir %q: %w", worktreePath, err)
+	}
+
+	// Empty repo (no commits yet): go-git cannot clone a repo whose only ref
+	// points to ZeroHash — it advertises a malformed zero-id ref that the git
+	// client rejects. Initialise an empty worktree instead.
+	if resolvedRef.Hash() == plumbing.ZeroHash {
+		if _, initErr := gogit.PlainInit(worktreePath, false); initErr != nil && initErr != gogit.ErrRepositoryAlreadyExists {
+			return "", fmt.Errorf("git.CreateWorktree init empty worktree %q: %w", worktreePath, initErr)
+		}
+		return "", nil
 	}
 
 	cloneOpts := &gogit.CloneOptions{
 		URL:           repoPath,
 		ReferenceName: branchRef,
 		SingleBranch:  true,
-		NoCheckout:    resolvedRef.Hash() == plumbing.ZeroHash,
 	}
 	_, err = gogit.PlainClone(worktreePath, false, cloneOpts)
 	if err != nil && err != gogit.ErrRepositoryAlreadyExists {

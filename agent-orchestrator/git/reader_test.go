@@ -122,3 +122,27 @@ func TestReadFile_BinaryDetected(t *testing.T) {
 		t.Errorf("expected ErrBinaryFile, got %v", err)
 	}
 }
+
+func TestReadTree_EmptyRepo(t *testing.T) {
+	repoPath := filepath.Join(tempDir(t), "empty.git")
+	if err := git.InitBare(repoPath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+
+	nodes, err := git.ReadTree(repoPath, "main", "")
+	if err != nil {
+		t.Fatalf("ReadTree on empty repo: %v", err)
+	}
+	if len(nodes) != 0 {
+		t.Errorf("expected empty slice for empty repo, got %d nodes", len(nodes))
+	}
+}
+
+func TestReadTree_NonexistentSubpath(t *testing.T) {
+	repoPath := initRepoWithFile(t, "a.txt", []byte("x"))
+
+	_, err := git.ReadTree(repoPath, "main", "nosuchdir")
+	if err == nil {
+		t.Error("expected error for nonexistent subpath, got nil")
+	}
+}
