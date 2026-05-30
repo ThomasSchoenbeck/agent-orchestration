@@ -57,14 +57,30 @@ func (c *ServerClient) GetNextTask(ctx context.Context, agentID string, roles []
 		rolesParam += r
 	}
 	url := fmt.Sprintf("/api/agents/%s/tasks/next?roles=%s", agentID, rolesParam)
-	var task db.Task
-	if err := c.get(ctx, url, &task); err != nil {
+	// The server returns ClaimTaskResponse ({"task":{...},"worktree_path":"..."})
+	// because it atomically claims the task and provisions the worktree in one shot.
+	var resp struct {
+		Task         *db.Task `json:"task"`
+		WorktreePath string   `json:"worktree_path"`
+		RepoURL      string   `json:"repo_url"`
+		Branch       string   `json:"branch"`
+		AssignedPort int      `json:"assigned_port"`
+	}
+	if err := c.get(ctx, url, &resp); err != nil {
 		return nil, err
 	}
-	if task.ID == "" {
+	if resp.Task == nil || resp.Task.ID == "" {
 		return nil, nil
 	}
-	return &task, nil
+	// Apply workspace fields so the executor can find them without a separate
+	// ClaimTask call (which the pollLoop still makes for idempotency).
+	if resp.WorktreePath != "" {
+		resp.Task.WorktreePath = resp.WorktreePath
+	}
+	if resp.AssignedPort != 0 {
+		resp.Task.AssignedPort = resp.AssignedPort
+	}
+	return resp.Task, nil
 }
 
 // ClaimTask claims a task for this agent.

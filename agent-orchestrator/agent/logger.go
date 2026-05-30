@@ -92,6 +92,28 @@ func (l *AgentLogger) write(level, format string, args ...interface{}) {
 	log.Printf("[%s] %s%s", level, prefix, msg)
 }
 
+// LogWithMeta ships a log entry at the given level with structured metadata
+// attached. Use this for LLM prompt/response events where the full content
+// should be retrievable from the server (not just the summary message).
+func (l *AgentLogger) LogWithMeta(ctx context.Context, level, msg string, meta map[string]interface{}) {
+	l.write(level, "%s", msg)
+	if l.client == nil {
+		return
+	}
+	entry := db.LogEntry{
+		AgentID:   l.agentID,
+		TaskID:    l.taskID,
+		ProjectID: l.projectID,
+		Level:     level,
+		Message:   msg,
+		Metadata:  meta,
+		Timestamp: time.Now(),
+	}
+	if err := l.client.PostLog(ctx, entry); err != nil {
+		log.Printf("[warn] AgentLogger.LogWithMeta failed: %v", err)
+	}
+}
+
 func (l *AgentLogger) post(ctx context.Context, level, msg string) {
 	if l.client == nil {
 		return

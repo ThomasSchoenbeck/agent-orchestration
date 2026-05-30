@@ -20,6 +20,25 @@ type TreeNode struct {
 	Mode string `json:"mode"`
 }
 
+// ListRemotes returns a map of remote name → URL for the repo at repoPath.
+func ListRemotes(repoPath string) (map[string]string, error) {
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("git.ListRemotes open %q: %w", repoPath, err)
+	}
+	remotes, err := repo.Remotes()
+	if err != nil {
+		return nil, fmt.Errorf("git.ListRemotes: %w", err)
+	}
+	result := make(map[string]string, len(remotes))
+	for _, r := range remotes {
+		if len(r.Config().URLs) > 0 {
+			result[r.Config().Name] = r.Config().URLs[0]
+		}
+	}
+	return result, nil
+}
+
 // ListBranches returns the names of all local branches in the bare repo at repoPath.
 func ListBranches(repoPath string) ([]string, error) {
 	repo, err := gogit.PlainOpen(repoPath)
@@ -33,7 +52,11 @@ func ListBranches(repoPath string) ([]string, error) {
 	}
 	var branches []string
 	_ = iter.ForEach(func(ref *plumbing.Reference) error {
-		branches = append(branches, ref.Name().Short())
+		// Skip placeholder refs that have no commits yet (e.g. a task branch
+		// created by CreateWorktree before the agent has pushed any work).
+		if ref.Hash() != plumbing.ZeroHash {
+			branches = append(branches, ref.Name().Short())
+		}
 		return nil
 	})
 	sort.Strings(branches)
@@ -175,4 +198,68 @@ func resolveRef(repo *gogit.Repository, ref string) (*object.Commit, error) {
 		return nil, nil
 	}
 	return nil, plumbing.ErrReferenceNotFound
+}
+
+// CommitEntry describes a single commit for API / UI consumption.
+type CommitEntry struct {
+	SHA        string `json:"sha"`
+	ShortSHA   string `json:"short_sha"`
+	Message    string `json:"message"`
+	AuthorName string `json:"author_name"`
+	Date       string `json:"date"` // RFC3339
+}
+
+// ListCommits returns up to limit commits on ref in reverse-chronological order.
+// Returns an empty slice (not an error) when the ref does not exist or the repo
+// has no commits — matching the behaviour of ReadTree for the same edge cases.
+func ListCommits(repoPath, ref string, limit int) ([]CommitEntry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("git.ListCommits open %q: %w", repoPath, err)
+	}
+
+	start, err := resolveRef(repo, ref)
+	if err == plumbing.ErrReferenceNotFound || start == nil {
+		return []CommitEntry{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("git.ListCommits resolve ref %q: %w", ref, err)
+	}
+
+	iter, err := repo.Log(&gogit.LogOptions{From: start.Hash})
+	if err != nil {
+		return nil, fmt.Errorf("git.ListCommits log: %w", err)
+	}
+	defer iter.Close()
+
+	var entries []CommitEntry
+	for i := 0; i < limit; i++ {
+		c, cerr := iter.Next()
+		if cerr != nil {
+			break // io.EOF or other end
+		}
+		sha := c.Hash.String()
+		short := sha
+		if len(sha) >= 12 {
+			short = sha[:12]
+		}
+		msg := c.Message
+		if nl := bytes.IndexByte([]byte(msg), '\n'); nl >= 0 {
+			msg = msg[:nl]
+		}
+		entries = append(entries, CommitEntry{
+			SHA:        sha,
+			ShortSHA:   short,
+			Message:    msg,
+			AuthorName: c.Author.Name,
+			Date:       c.Author.When.UTC().Format("2006-01-02T15:04:05Z"),
+		})
+	}
+	if entries == nil {
+		entries = []CommitEntry{}
+	}
+	return entries, nil
 }

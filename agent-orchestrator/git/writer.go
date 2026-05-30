@@ -28,10 +28,12 @@ func CommitFile(repoPath, branch, filePath string, content []byte, message, auth
 	}
 
 	// Resolve branch to its current HEAD commit (if any).
+	// A ZeroHash ref means the branch was created as a placeholder (orphan)
+	// with no commits yet — treat it the same as a missing branch (first commit).
 	var parentHash plumbing.Hash
 	var parentTree *object.Tree
 	branchRef, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
-	if err == nil {
+	if err == nil && branchRef.Hash() != plumbing.ZeroHash {
 		parentCommit, cerr := repo.CommitObject(branchRef.Hash())
 		if cerr != nil {
 			return "", fmt.Errorf("git.CommitFile resolve parent: %w", cerr)
@@ -124,7 +126,7 @@ func CommitFiles(repoPath, branch string, files []FileChange, message, authorNam
 	var parentHash plumbing.Hash
 	var parentTree *object.Tree
 	branchRef, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
-	if err == nil {
+	if err == nil && branchRef.Hash() != plumbing.ZeroHash {
 		parentCommit, cerr := repo.CommitObject(branchRef.Hash())
 		if cerr != nil {
 			return "", fmt.Errorf("git.CommitFiles resolve parent: %w", cerr)

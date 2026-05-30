@@ -11,8 +11,8 @@ import (
 	"agent-orchestrator/git"
 )
 
-// TestProjectBranches_EmptyRepo verifies that listing branches on a freshly
-// created project (empty bare repo) returns an empty array.
+// TestProjectBranches_EmptyRepo verifies that a freshly created project has
+// exactly one branch ("main") due to the initial empty commit on creation.
 func TestProjectBranches_EmptyRepo(t *testing.T) {
 	srv, _ := newTestServer(t)
 	projectID := createTestProject(t, srv)
@@ -23,8 +23,27 @@ func TestProjectBranches_EmptyRepo(t *testing.T) {
 	}
 	var branches []string
 	_ = json.Unmarshal(w.Body.Bytes(), &branches)
-	if len(branches) != 0 {
-		t.Errorf("expected 0 branches, got %v", branches)
+	if len(branches) != 1 || branches[0] != "main" {
+		t.Errorf("expected [main], got %v", branches)
+	}
+}
+
+// TestProjectTree_TaskBranchRef_EmptyRepo verifies that requesting a
+// non-existent task branch ref on a fresh project returns 200 with an empty
+// array rather than 404. This covers the case where the UI requests the task
+// branch before the agent has pushed any commits.
+func TestProjectTree_TaskBranchRef_EmptyRepo(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	w := do(t, srv, http.MethodGet, "/api/projects/"+projectID+"/tree?ref=task%2Fsome-task-id&path=", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for nonexistent task branch on empty repo, got %d: %s", w.Code, w.Body.String())
+	}
+	var nodes []git.TreeNode
+	_ = json.Unmarshal(w.Body.Bytes(), &nodes)
+	if len(nodes) != 0 {
+		t.Errorf("expected empty tree, got %v", nodes)
 	}
 }
 
@@ -149,5 +168,74 @@ func TestProjectBranches_AfterCommit(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &branches)
 	if len(branches) != 1 || branches[0] != "main" {
 		t.Errorf("expected [main], got %v", branches)
+	}
+}
+
+// TestProjectCommits_EmptyRepo verifies GET /commits returns 200 [] on a fresh project.
+func TestProjectCommits_EmptyRepo(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	w := do(t, srv, http.MethodGet, "/api/projects/"+projectID+"/commits?ref=main", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var commits []map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &commits)
+	// main has the initial empty commit from project creation
+	if commits == nil {
+		t.Error("expected non-nil (at least empty) commits array")
+	}
+}
+
+// TestProjectCommits_AfterFileCommit verifies a committed file produces a log entry.
+func TestProjectCommits_AfterFileCommit(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	putW := do(t, srv, http.MethodPut, "/api/projects/"+projectID+"/file", map[string]interface{}{
+		"path": "README.md", "content": "# Hello", "branch": "main", "message": "add readme",
+	})
+	if putW.Code != http.StatusOK {
+		t.Fatalf("PUT file: %d %s", putW.Code, putW.Body.String())
+	}
+	var putResp map[string]string
+	_ = json.Unmarshal(putW.Body.Bytes(), &putResp)
+	fileSHA := putResp["sha"]
+
+	w := do(t, srv, http.MethodGet, "/api/projects/"+projectID+"/commits?ref=main", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET commits: %d %s", w.Code, w.Body.String())
+	}
+	var commits []map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &commits)
+
+	// Should have at least the file commit (plus the initial empty commit).
+	if len(commits) == 0 {
+		t.Fatal("expected at least one commit")
+	}
+	// Most recent commit SHA should match the file commit.
+	gotSHA, _ := commits[0]["sha"].(string)
+	if gotSHA != fileSHA {
+		t.Errorf("top commit SHA = %q, want %q", gotSHA, fileSHA)
+	}
+	if msg, _ := commits[0]["message"].(string); msg != "add readme" {
+		t.Errorf("top commit message = %q, want add readme", msg)
+	}
+}
+
+// TestProjectCommits_NonexistentRef returns 200 [] for a branch that was never pushed.
+func TestProjectCommits_NonexistentRef(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	w := do(t, srv, http.MethodGet, "/api/projects/"+projectID+"/commits?ref=task%2Fnever-pushed", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var commits []map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &commits)
+	if len(commits) != 0 {
+		t.Errorf("expected 0 commits for nonexistent ref, got %d", len(commits))
 	}
 }

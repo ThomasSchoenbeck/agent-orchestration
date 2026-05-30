@@ -48,6 +48,10 @@ func (d *Database) ListLogs(ctx context.Context, f LogFilters) ([]*LogEntry, err
 		where = append(where, "level=?")
 		args = append(args, f.Level)
 	}
+	if f.SystemOnly {
+		where = append(where, "agent_id IS NULL")
+		where = append(where, "task_id IS NULL")
+	}
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}

@@ -5,6 +5,7 @@ import (
 	"os"
 
 	gogit "github.com/go-git/go-git/v5"
+	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
@@ -50,10 +51,29 @@ func CreateWorktree(repoPath, worktreePath, branchName, baseBranch string) (head
 	// Empty repo (no commits yet): go-git cannot clone a repo whose only ref
 	// points to ZeroHash — it advertises a malformed zero-id ref that the git
 	// client rejects. Initialise an empty worktree instead.
+	// We point HEAD at the task branch (not the system default "master") and
+	// configure "origin" so CommitAndPush can push back to the bare repo.
 	if resolvedRef.Hash() == plumbing.ZeroHash {
-		if _, initErr := gogit.PlainInit(worktreePath, false); initErr != nil && initErr != gogit.ErrRepositoryAlreadyExists {
+		wt, initErr := gogit.PlainInit(worktreePath, false)
+		if initErr != nil && initErr != gogit.ErrRepositoryAlreadyExists {
 			return "", fmt.Errorf("git.CreateWorktree init empty worktree %q: %w", worktreePath, initErr)
 		}
+		if wt == nil {
+			wt, initErr = gogit.PlainOpen(worktreePath)
+			if initErr != nil {
+				return "", fmt.Errorf("git.CreateWorktree open empty worktree %q: %w", worktreePath, initErr)
+			}
+		}
+		// Point HEAD at the task branch so commits land on the right branch.
+		headRef := plumbing.NewSymbolicReference(
+			plumbing.HEAD,
+			plumbing.NewBranchReferenceName(branchName),
+		)
+		_ = wt.Storer.SetReference(headRef)
+		_, _ = wt.CreateRemote(&gogitconfig.RemoteConfig{
+			Name: "origin",
+			URLs: []string{repoPath},
+		})
 		return "", nil
 	}
 

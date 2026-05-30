@@ -106,9 +106,27 @@ func (s *Server) ensureStorageDirs() {
 	}
 }
 
+// releaseStaleExecutionTasks resets any tasks left in an execution state
+// (DEVELOPING, REVIEWING, MERGING) from a previous server run back to their
+// queueable state. Safe to call on every startup because no agents are
+// registered yet at that point.
+func (s *Server) releaseStaleExecutionTasks(ctx context.Context) {
+	n, err := s.db.RequeueTimedOutTasks(ctx, 0)
+	if err != nil {
+		log.Printf("server: releaseStaleExecutionTasks: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("server: released %d stale execution-state task(s) back to queue on startup", n)
+	}
+}
+
 // Start begins listening on the configured address. It blocks until the
 // server stops or the context is cancelled.
 func (s *Server) Start(ctx context.Context) error {
+	// Release any tasks stuck in an execution state from the previous run.
+	s.releaseStaleExecutionTasks(ctx)
+
 	addr := fmt.Sprintf("%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
 	s.httpSrv = &http.Server{
 		Addr:         addr,

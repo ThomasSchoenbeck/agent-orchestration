@@ -48,6 +48,8 @@ export const readFile      = (projectId, ref, path)     => {
   const qs = new URLSearchParams({ ref, path }).toString()
   return get(`/api/projects/${projectId}/file?${qs}`)
 }
+export const listCommits   = (projectId, ref)           =>
+  get(`/api/projects/${projectId}/commits?ref=${encodeURIComponent(ref)}`)
 export const commitFile    = (projectId, data)           => put(`/api/projects/${projectId}/file`, data)
 export const commitFiles   = (projectId, data)           => post(`/api/projects/${projectId}/files`, data)
 export const getFileDiff   = (projectId, base, head, path) => {

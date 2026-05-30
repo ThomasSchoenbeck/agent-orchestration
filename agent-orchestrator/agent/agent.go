@@ -227,14 +227,10 @@ func (a *Agent) pollLoop(ctx context.Context) {
 				continue // nothing to do
 			}
 
-			// Claim and execute asynchronously so polling continues.
+			// GetNextTask already claimed the task and provisioned the worktree
+			// server-side; execute directly without a redundant second claim.
 			go func(t *db.Task) {
-				claimed, err := a.client.ClaimTask(ctx, t.ID, a.id)
-				if err != nil {
-					a.alog.Warn("could not claim task %s: %v", t.ID, err)
-					return
-				}
-				a.executeTask(ctx, claimed)
+				a.executeTask(ctx, t)
 			}(task)
 		}
 	}

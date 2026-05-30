@@ -4,10 +4,12 @@ package git
 import (
 	"fmt"
 	"os"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // InitBare creates a bare git repository at path if one doesn't already exist.
@@ -92,6 +94,55 @@ func EnsureBranchRef(repoPath, branchName, commitSHA string) error {
 	ref := plumbing.NewHashReference(refName, hash)
 	if err := repo.Storer.SetReference(ref); err != nil {
 		return fmt.Errorf("git.EnsureBranchRef set %q: %w", branchName, err)
+	}
+	return nil
+}
+
+// InitialCommit creates an empty root commit on branch (typically "main") in
+// the bare repo at repoPath. It is a no-op if the branch already has commits.
+func InitialCommit(repoPath, branch string) error {
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("git.InitialCommit open %q: %w", repoPath, err)
+	}
+
+	refName := plumbing.NewBranchReferenceName(branch)
+	if _, err := repo.Reference(refName, true); err == nil {
+		return nil // branch already exists
+	}
+
+	// Build an empty tree object.
+	enc := repo.Storer.NewEncodedObject()
+	enc.SetType(plumbing.TreeObject)
+	enc.SetSize(0)
+	treeHash, err := repo.Storer.SetEncodedObject(enc)
+	if err != nil {
+		return fmt.Errorf("git.InitialCommit store tree: %w", err)
+	}
+
+	sig := object.Signature{
+		Name:  "Agent Orchestrator",
+		Email: "noreply@agent-orchestrator",
+		When:  time.Now().UTC(),
+	}
+	commit := &object.Commit{
+		Author:    sig,
+		Committer: sig,
+		Message:   "Initial commit",
+		TreeHash:  treeHash,
+	}
+	commitEnc := repo.Storer.NewEncodedObject()
+	if err := commit.Encode(commitEnc); err != nil {
+		return fmt.Errorf("git.InitialCommit encode commit: %w", err)
+	}
+	commitHash, err := repo.Storer.SetEncodedObject(commitEnc)
+	if err != nil {
+		return fmt.Errorf("git.InitialCommit store commit: %w", err)
+	}
+
+	ref := plumbing.NewHashReference(refName, commitHash)
+	if err := repo.Storer.SetReference(ref); err != nil {
+		return fmt.Errorf("git.InitialCommit set ref %q: %w", branch, err)
 	}
 	return nil
 }

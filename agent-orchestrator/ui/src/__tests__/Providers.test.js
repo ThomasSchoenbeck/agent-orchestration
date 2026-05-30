@@ -74,39 +74,71 @@ describe('Providers — rendering', () => {
 
 // ── Form: roles multi-select ───────────────────────────────────────────────────
 describe('Providers — roles multi-select', () => {
-  it('shows role checkboxes in the create form', async () => {
+  // Helper: get the roles <select> element (labelled "Roles")
+  function rolesSelect() {
+    return screen.getByLabelText('Roles')
+  }
+
+  it('shows no-roles guidance when listRoles returns empty', async () => {
+    listRoles.mockResolvedValue([])
     render(Providers)
     const user = userEvent.setup()
 
     await user.click(screen.getByText('+ Add Provider'))
     await waitFor(() =>
-      expect(screen.getByLabelText('Planner')).toBeInTheDocument()
+      expect(screen.getByText(/No roles defined yet/)).toBeInTheDocument()
     )
-    expect(screen.getByLabelText('Executor')).toBeInTheDocument()
-    expect(screen.getByLabelText('Reviewer')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Roles')).not.toBeInTheDocument()
   })
 
-  it('roles default to unchecked on new form', async () => {
+  it('shows error message when listRoles rejects', async () => {
+    listRoles.mockRejectedValue(new Error('server error'))
     render(Providers)
     const user = userEvent.setup()
 
     await user.click(screen.getByText('+ Add Provider'))
-    await waitFor(() => screen.getByLabelText('Planner'))
-
-    expect(screen.getByLabelText('Planner')).not.toBeChecked()
-    expect(screen.getByLabelText('Executor')).not.toBeChecked()
+    await waitFor(() =>
+      expect(screen.getByText(/Failed to load roles/)).toBeInTheDocument()
+    )
+    expect(screen.queryByLabelText('Roles')).not.toBeInTheDocument()
   })
 
-  it('pre-checks roles when editing a provider', async () => {
+  it('shows roles select in the create form with all role options', async () => {
+    render(Providers)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByText('+ Add Provider'))
+    await waitFor(() => expect(rolesSelect()).toBeInTheDocument())
+
+    const select = rolesSelect()
+    expect(select.multiple).toBe(true)
+    const options = Array.from(select.options).map(o => o.text)
+    expect(options).toContain('Planner')
+    expect(options).toContain('Executor')
+    expect(options).toContain('Reviewer')
+  })
+
+  it('no roles are selected by default on new form', async () => {
+    render(Providers)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByText('+ Add Provider'))
+    await waitFor(() => expect(rolesSelect()).toBeInTheDocument())
+
+    const selected = Array.from(rolesSelect().selectedOptions).map(o => o.value)
+    expect(selected).toHaveLength(0)
+  })
+
+  it('pre-selects existing roles when editing a provider', async () => {
     render(Providers)
     await waitFor(() => screen.getByText('my-openai'))
 
     const user = userEvent.setup()
     await user.click(screen.getByText('Edit'))
+    await waitFor(() => expect(rolesSelect()).toBeInTheDocument())
 
-    await waitFor(() => screen.getByLabelText('Planner'))
-    expect(screen.getByLabelText('Planner')).toBeChecked()
-    expect(screen.getByLabelText('Executor')).not.toBeChecked()
+    const selected = Array.from(rolesSelect().selectedOptions).map(o => o.value)
+    expect(selected).toEqual(['planner'])
   })
 
   it('includes selected roles in create body', async () => {
@@ -114,12 +146,10 @@ describe('Providers — roles multi-select', () => {
     const user = userEvent.setup()
 
     await user.click(screen.getByText('+ Add Provider'))
-    await waitFor(() => screen.getByLabelText('Planner'))
+    await waitFor(() => expect(rolesSelect()).toBeInTheDocument())
 
-    // fill required name
     await user.type(screen.getByPlaceholderText('e.g. my-openai'), 'test-provider')
-    // select executor role
-    await user.click(screen.getByLabelText('Executor'))
+    await user.selectOptions(rolesSelect(), ['executor'])
     await user.click(screen.getByText('Create'))
 
     await waitFor(() =>
@@ -129,17 +159,17 @@ describe('Providers — roles multi-select', () => {
     )
   })
 
-  it('includes updated roles in update body', async () => {
+  it('reflects added and removed role selections in update body', async () => {
     render(Providers)
     await waitFor(() => screen.getByText('my-openai'))
 
     const user = userEvent.setup()
     await user.click(screen.getByText('Edit'))
-    await waitFor(() => screen.getByLabelText('Planner'))
+    await waitFor(() => expect(rolesSelect()).toBeInTheDocument())
 
-    // uncheck planner, check executor
-    await user.click(screen.getByLabelText('Planner'))
-    await user.click(screen.getByLabelText('Executor'))
+    // planner is pre-selected; deselect it and select executor instead
+    await user.deselectOptions(rolesSelect(), ['planner'])
+    await user.selectOptions(rolesSelect(), ['executor'])
     await user.click(screen.getByText('Update'))
 
     await waitFor(() =>

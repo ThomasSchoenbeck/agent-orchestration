@@ -195,14 +195,14 @@ func TestServerClient_Heartbeat(t *testing.T) {
 }
 
 // taskOnceServer builds a mock server that serves the given task from
-// tasks/next exactly once, then returns nil. It also handles register,
-// heartbeat, and claim endpoints.
+// taskOnceServer serves tasks/next exactly once, then returns nil. It handles
+// register, heartbeat, task result, and comment endpoints.
 // Returns the server, a pointer to the tasks/next call counter, and a pointer
-// to the claim call counter.
+// to the result submission counter.
 func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	const agentID = "agent-poll-test"
-	var nextCalls, claimCalls atomic.Int32
+	var nextCalls, resultCalls atomic.Int32
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/agents/register", func(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +217,7 @@ func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int3
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		case strings.Contains(r.URL.Path, "/tasks/next"):
 			if nextCalls.Add(1) == 1 {
-				_ = json.NewEncoder(w).Encode(task)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"task": task})
 			} else {
 				_ = json.NewEncoder(w).Encode(nil)
 			}
@@ -227,10 +227,8 @@ func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int3
 	})
 	mux.HandleFunc("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/claim") {
-			claimCalls.Add(1)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"task": task})
-			return
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/result") {
+			resultCalls.Add(1)
 		}
 		w.WriteHeader(http.StatusOK)
 	})
@@ -240,11 +238,11 @@ func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int3
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv, &nextCalls, &claimCalls
+	return srv, &nextCalls, &resultCalls
 }
 
 // TestAgent_PollLoop_PicksUpTask verifies that when tasks/next returns a task,
-// the agent proceeds to call the claim endpoint exactly once.
+// the agent executes it and submits a result exactly once.
 func TestAgent_PollLoop_PicksUpTask(t *testing.T) {
 	task := &db.Task{
 		ID:     "task-poll-001",
@@ -252,7 +250,7 @@ func TestAgent_PollLoop_PicksUpTask(t *testing.T) {
 		Role:   "worker",
 		Status: db.TaskStatusBacklog,
 	}
-	srv, _, claimCalls := taskOnceServer(t, task)
+	srv, _, resultCalls := taskOnceServer(t, task)
 
 	cfg := testConfig()
 	cfg.Agents.TaskPollIntervalSec = 1
@@ -275,24 +273,23 @@ func TestAgent_PollLoop_PicksUpTask(t *testing.T) {
 	}
 	defer a.Stop()
 
-	// Wait for the first claim.
+	// Wait for the task to be executed and result submitted.
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("timed out waiting for claim (got %d)", claimCalls.Load())
+			t.Fatalf("timed out waiting for task result (got %d)", resultCalls.Load())
 		case <-time.After(100 * time.Millisecond):
-			if claimCalls.Load() >= 1 {
-				goto claimed
+			if resultCalls.Load() >= 1 {
+				goto done
 			}
 		}
 	}
-claimed:
-	// After the task is claimed, tasks/next returns nil. Wait two poll
-	// intervals to confirm the agent does NOT claim a second time.
+done:
+	// tasks/next returns nil after the first call; confirm no second execution.
 	time.Sleep(2500 * time.Millisecond)
-	if claimCalls.Load() > 1 {
-		t.Errorf("expected exactly 1 claim, got %d", claimCalls.Load())
+	if resultCalls.Load() > 1 {
+		t.Errorf("expected exactly 1 result submission, got %d", resultCalls.Load())
 	}
 }
 
@@ -426,7 +423,7 @@ func TestAgent_PollLoop_SkipsWrongRoleTask(t *testing.T) {
 			// Only serve the task when the agent requests the "reviewer" role.
 			roles := r.URL.Query().Get("roles")
 			if strings.Contains(roles, "reviewer") {
-				_ = json.NewEncoder(w).Encode(reviewerTask)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"task": reviewerTask})
 			} else {
 				_ = json.NewEncoder(w).Encode(nil)
 			}

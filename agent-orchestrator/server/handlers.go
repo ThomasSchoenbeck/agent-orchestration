@@ -150,6 +150,12 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			// Ensure main always has at least an empty root commit so the
+			// branch exists and ReadTree returns [] instead of 404.
+			if err := git.InitialCommit(repoPath, "main"); err != nil {
+				log.Printf("server: InitialCommit project %q: %v", p.ID, err)
+			}
+
 			if err := s.db.UpdateProject(r.Context(), p); err != nil {
 				log.Printf("server: UpdateProject after InitBare %q: %v", p.ID, err)
 			}
@@ -227,6 +233,11 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 
 	if sub == "diff" {
 		s.handleProjectDiff(w, r, id)
+		return
+	}
+
+	if sub == "commits" {
+		s.handleProjectCommits(w, r, id)
 		return
 	}
 
@@ -333,6 +344,10 @@ func (s *Server) handleProjectInitRepo(w http.ResponseWriter, r *http.Request, p
 		s.internalError(w, err)
 		return
 	}
+	if err := git.InitialCommit(repoPath, "main"); err != nil {
+		s.internalError(w, err)
+		return
+	}
 	log.Printf("project %s: bare repo initialised at %s", projectID, repoPath)
 	api.WriteJSON(w, http.StatusOK, map[string]string{"repo_path": repoPath, "status": "ok"})
 }
@@ -373,8 +388,10 @@ func (s *Server) handleProjectTree(w http.ResponseWriter, r *http.Request, proje
 	subpath := r.URL.Query().Get("path")
 	nodes, err := git.ReadTree(repoPath, ref, subpath)
 	if err != nil {
+		// A missing ref means the branch hasn't been pushed yet — treat it as
+		// an empty tree rather than a 404 so the UI degrades gracefully.
 		if strings.Contains(err.Error(), "not found") {
-			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+			api.WriteJSON(w, http.StatusOK, []git.TreeNode{})
 			return
 		}
 		s.internalError(w, err)
@@ -384,6 +401,27 @@ func (s *Server) handleProjectTree(w http.ResponseWriter, r *http.Request, proje
 		nodes = []git.TreeNode{}
 	}
 	api.WriteJSON(w, http.StatusOK, nodes)
+}
+
+func (s *Server) handleProjectCommits(w http.ResponseWriter, r *http.Request, projectID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	repoPath, ok := s.projectRepoPath(w, r, projectID)
+	if !ok {
+		return
+	}
+	ref := r.URL.Query().Get("ref")
+	if ref == "" {
+		ref = "main"
+	}
+	commits, err := git.ListCommits(repoPath, ref, 50)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, commits)
 }
 
 func (s *Server) handleProjectFile(w http.ResponseWriter, r *http.Request, projectID string) {
@@ -1464,11 +1502,12 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		f := db.LogFilters{
-			AgentID:   r.URL.Query().Get("agent_id"),
-			TaskID:    r.URL.Query().Get("task_id"),
-			ProjectID: r.URL.Query().Get("project_id"),
-			Level:     r.URL.Query().Get("level"),
-			Limit:     limit,
+			AgentID:    r.URL.Query().Get("agent_id"),
+			TaskID:     r.URL.Query().Get("task_id"),
+			ProjectID:  r.URL.Query().Get("project_id"),
+			Level:      r.URL.Query().Get("level"),
+			Limit:      limit,
+			SystemOnly: r.URL.Query().Get("system_only") == "true",
 		}
 		logs, err := s.db.ListLogs(r.Context(), f)
 		if err != nil {

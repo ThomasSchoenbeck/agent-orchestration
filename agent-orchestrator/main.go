@@ -351,6 +351,15 @@ func buildAgent(name string, roles []string, serverURL, configPath, workdir, mod
 				_ = tools.RegisterCommentTools(toolReg, database)
 				a.WithExecutor(rtr, toolReg)
 				log.Printf("agent %q: executor wired (LLM providers: %d)", name, len(llmReg.List()))
+				// Validate each role resolves to a provider so misconfiguration is
+				// visible at startup rather than silently failing on the first task.
+				for _, role := range roles {
+					if route, rerr := rtr.RouteByRole(role); rerr != nil {
+						log.Printf("agent %q: WARNING role %q has no route — tasks for this role will fail immediately (%v)", name, role, rerr)
+					} else {
+						log.Printf("agent %q: role %q → provider=%q model=%q", name, role, route.Provider.Name(), route.Model)
+					}
+				}
 				cleanup = func() {
 					llmReg.CloseAll()
 					_ = database.Close()

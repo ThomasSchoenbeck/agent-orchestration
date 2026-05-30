@@ -26,8 +26,13 @@
     listComments,
     createComment,
     deleteComment,
+    listBranches,
+    listCommits,
+    getAgent,
+    listLogs,
   } from "../lib/api.js"
   import MarkdownEditor from "../components/MarkdownEditor.svelte"
+  import FileTree from "../components/FileTree.svelte"
   import { formatTimestamp } from "../lib/time.js"
   import Skeleton from "../components/Skeleton.svelte"
 
@@ -36,10 +41,34 @@
   // ── State ─────────────────────────────────────────────────────────────────
   let task = $state(null)
   let project = $state(null)
+  let assignedAgent = $state(null)
   let loading = $state(true)
   let editing = $state(false)
-  let taskLogs = $state([])
+  let taskLogs    = $state([])
+  let agentExecLogs = $state([])   // from /api/logs?task_id=
   let logsLoading = $state(false)
+  let expandedLogs = $state(new Set())  // log IDs with expanded content
+
+  function toggleLogExpand(id) {
+    const s = new Set(expandedLogs)
+    s.has(id) ? s.delete(id) : s.add(id)
+    expandedLogs = s
+  }
+
+  // Merge task lifecycle events + agent execution logs into one timeline.
+  let allEvents = $derived.by(() => {
+    const events = [
+      ...taskLogs.map(e => ({ ...e, _source: 'task' })),
+      ...agentExecLogs.map(e => ({
+        ...e,
+        _source:     'agent',
+        event_type:  e.level,
+        description: e.message,
+      })),
+    ]
+    events.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+    return events
+  })
   let taskLinks = $state([])
   let projectReqs = $state([])
   let projectFeats = $state([])
@@ -55,6 +84,28 @@
   let postingComment = $state(false)
   let transitions = $state([])
   let reviews = $state([])
+
+  // ── Code panel ────────────────────────────────────────────────────────────
+  let taskBranch      = $state('')   // "task/<taskId>"
+  let taskBranchExists = $state(false)
+  let taskCommits     = $state([])
+  let codeLoading     = $state(false)
+
+  async function loadCodePanel(t) {
+    if (!t.project_id) return
+    taskBranch = `task/${t.id}`
+    codeLoading = true
+    try {
+      const [branches, commits] = await Promise.all([
+        listBranches(t.project_id).catch(() => []),
+        listCommits(t.project_id, taskBranch).catch(() => []),
+      ])
+      taskBranchExists = Array.isArray(branches) && branches.includes(taskBranch)
+      taskCommits = Array.isArray(commits) ? commits : []
+    } finally {
+      codeLoading = false
+    }
+  }
 
   // Edit buffer
   let editBuf = $state({})
@@ -78,11 +129,15 @@
   async function loadLogs(id) {
     if (taskLogs.length === 0) logsLoading = true
     try {
-      const data = await listTaskLogs(id)
+      const [data, execData] = await Promise.all([
+        listTaskLogs(id),
+        listLogs({ task_id: id, limit: 500 }),
+      ])
       const incoming = Array.isArray(data) ? data : []
       if (JSON.stringify(incoming) !== JSON.stringify(taskLogs)) {
         taskLogs = incoming
       }
+      agentExecLogs = Array.isArray(execData) ? execData : (execData?.logs ?? [])
     } catch (e) {
       // keep existing logs on transient errors
     } finally {
@@ -127,6 +182,9 @@
       deps = depList ?? []
       checklist = checklistData ?? []
       comments = commentData ?? []
+      if (t.assigned_agent_id) {
+        assignedAgent = await getAgent(t.assigned_agent_id).catch(() => null)
+      }
       if (t.project_id) {
         const [proj, reqs, feats, allTasks] = await Promise.all([
           getProject(t.project_id),
@@ -142,6 +200,7 @@
         )
       }
       loadLogs(taskId)
+      loadCodePanel(t)
     } catch (e) {
       toasts.error("Failed to load task: " + e.message)
     } finally {
@@ -838,7 +897,12 @@
       {#if task.assigned_agent_id}
         <div class="flex items-center gap-2 text-sm">
           <span class="text-gray-400">Agent:</span>
-          <span class="font-mono text-accent">{task.assigned_agent_id}</span>
+          {#if assignedAgent?.name}
+            <span class="text-gray-100">{assignedAgent.name}</span>
+            <span class="text-xs text-gray-500 font-mono">{task.assigned_agent_id}</span>
+          {:else}
+            <span class="font-mono text-accent">{task.assigned_agent_id}</span>
+          {/if}
         </div>
       {/if}
 
@@ -954,33 +1018,51 @@
         <h3 class="text-sm font-semibold text-gray-300 mb-3">Task Events</h3>
         {#if logsLoading}
           <p class="text-xs text-gray-400">Loading events…</p>
-        {:else if taskLogs.length === 0}
+        {:else if allEvents.length === 0}
           <p class="text-xs text-gray-400">No events yet.</p>
         {:else}
-          <div class="flex flex-col gap-2">
-            {#each taskLogs as log (log.id)}
-              <div class="flex items-start gap-3 text-xs">
-                <span class="shrink-0 text-gray-500 font-mono w-36">
-                  {formatTimestamp(log.timestamp)}
-                </span>
-                <span
-                  class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium
-                  {log.event_type.includes('failed') || log.event_type.includes('error')
-                    ? 'bg-red-900 text-red-300'
-                    : log.event_type.includes('complet')
-                      ? 'bg-green-900 text-green-300'
-                      : 'bg-surface-700 text-gray-400'}"
-                >
-                  {log.event_type}
-                </span>
-                {#if log.old_status && log.new_status}
-                  <span class="text-gray-500">{log.old_status} → {log.new_status}</span>
-                {/if}
-                {#if log.agent_id}
-                  <span class="text-gray-600 font-mono truncate">{log.agent_id.slice(0, 8)}</span>
-                {/if}
-                {#if log.description}
-                  <span class="text-gray-400 truncate">{log.description}</span>
+          <div class="flex flex-col gap-1">
+            {#each allEvents as log (log.id)}
+              {@const isAgent   = log._source === 'agent'}
+              {@const meta      = isAgent && log.metadata && typeof log.metadata === 'object' && Object.keys(log.metadata).length > 0}
+              {@const expanded  = expandedLogs.has(log.id)}
+              {@const label     = log.event_type ?? log.level ?? 'info'}
+              {@const isError   = label.includes('fail') || label.includes('error')}
+              {@const isLLM     = isAgent && (log.message?.startsWith('LLM') || log.message?.startsWith('tool call'))}
+              <div class="flex flex-col gap-0.5">
+                <div class="flex items-start gap-2 text-xs py-0.5">
+                  <span class="shrink-0 text-gray-600 font-mono w-36 pt-px">
+                    {formatTimestamp(log.timestamp)}
+                  </span>
+                  <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium
+                    {isError
+                      ? 'bg-red-900 text-red-300'
+                      : label.includes('complet') || label.includes('info')
+                        ? isLLM ? 'bg-purple-900/50 text-purple-300' : 'bg-surface-700 text-gray-400'
+                        : 'bg-surface-700 text-gray-400'}"
+                  >{label}</span>
+                  {#if log.old_status && log.new_status}
+                    <span class="text-gray-500 pt-px">{log.old_status} → {log.new_status}</span>
+                  {/if}
+                  <span class="text-gray-300 flex-1 break-words pt-px">{log.description ?? ''}</span>
+                  {#if meta}
+                    <button
+                      class="shrink-0 text-[10px] text-accent hover:text-accent-hover transition-colors"
+                      onclick={() => toggleLogExpand(log.id)}
+                    >{expanded ? 'Less ↑' : 'Read more ↓'}</button>
+                  {/if}
+                </div>
+                {#if meta && expanded}
+                  <div class="ml-36 pl-2 border-l-2 border-surface-600 flex flex-col gap-2 py-1">
+                    {#each Object.entries(log.metadata) as [key, val]}
+                      {#if val !== null && val !== undefined && val !== ''}
+                        <div>
+                          <div class="text-[10px] text-gray-500 uppercase tracking-wide mb-0.5">{key}</div>
+                          <pre class="text-xs text-gray-300 bg-surface-800 rounded p-2 overflow-x-auto whitespace-pre-wrap break-words font-mono">{typeof val === 'string' ? val : JSON.stringify(val, null, 2)}</pre>
+                        </div>
+                      {/if}
+                    {/each}
+                  </div>
                 {/if}
               </div>
             {/each}
@@ -988,6 +1070,53 @@
         {/if}
       </div>
     </div>
+
+    <!-- ── Code panel ────────────────────────────────────────────────────── -->
+    {#if task.project_id}
+      <div class="mb-6 p-5 bg-surface-800 rounded border border-surface-600">
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">Code</h3>
+
+        <!-- Branch label -->
+        <div class="flex items-center gap-2 mb-4">
+          <span class="text-xs text-gray-500">Branch</span>
+          <code class="text-xs font-mono px-2 py-0.5 rounded bg-surface-700 text-blue-300">
+            {taskBranch}
+          </code>
+          {#if !codeLoading && !taskBranchExists}
+            <span class="text-xs text-gray-600 italic">not yet pushed</span>
+          {/if}
+        </div>
+
+        {#if codeLoading}
+          <p class="text-xs text-gray-500">Loading…</p>
+        {:else if taskBranchExists}
+          <div class="flex gap-4">
+            <!-- File tree -->
+            <div class="flex-1 min-w-0 border border-surface-600 rounded overflow-hidden" style="height:280px">
+              <FileTree projectId={task.project_id} ref={taskBranch} onFileSelect={() => {}} />
+            </div>
+
+            <!-- Commit log -->
+            <div class="w-64 shrink-0 flex flex-col gap-1 overflow-y-auto" style="max-height:280px">
+              {#if taskCommits.length === 0}
+                <p class="text-xs text-gray-600 italic">No commits yet</p>
+              {:else}
+                {#each taskCommits as c}
+                  <div class="flex flex-col gap-0.5 p-2 rounded bg-surface-700 text-xs">
+                    <div class="flex items-center gap-2">
+                      <code class="font-mono text-accent">{c.short_sha}</code>
+                      <span class="text-gray-500 truncate">{c.author_name}</span>
+                    </div>
+                    <span class="text-gray-300 truncate">{c.message}</span>
+                    <span class="text-gray-600">{new Date(c.date).toLocaleString()}</span>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <!-- ── Queue controls ─────────────────────────────────────────────────── -->
     <div class="p-5 bg-surface-800 rounded border border-surface-600">

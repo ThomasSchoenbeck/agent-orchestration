@@ -8,7 +8,7 @@
     getTaskTypes, getTaskRoles,
     listRequirements, createRequirement, updateRequirement, deleteRequirement,
     listFeatures, createFeature, updateFeature, deleteFeature,
-    initRepo, listBranches, commitFiles,
+    initRepo, listBranches, commitFiles, listCommits,
   } from '../lib/api.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
   import AssistantSidebar from '../components/AssistantSidebar.svelte'
@@ -62,6 +62,43 @@
   let activeFileRef  = $state('main')
   let diffBaseRef    = $state('main')
   let diffHeadRef    = $state('')
+
+  // ── Files tab: branch list + commit log ───────────────────────────────────
+  let fileBranches      = $state([])
+  let selectedBranch    = $state('main')
+  let branchCommits     = $state([])
+  let branchesLoading   = $state(false)
+  let commitsLoading    = $state(false)
+
+  async function loadFileBranches() {
+    branchesLoading = true
+    try {
+      const b = await listBranches(projectId)
+      fileBranches = Array.isArray(b) ? b : []
+      if (fileBranches.length && !fileBranches.includes(selectedBranch)) {
+        selectedBranch = fileBranches[0]
+      }
+    } catch (_) {}
+    finally { branchesLoading = false }
+    await loadBranchCommits()
+  }
+
+  async function loadBranchCommits() {
+    commitsLoading = true
+    try {
+      const c = await listCommits(projectId, selectedBranch)
+      branchCommits = Array.isArray(c) ? c : []
+    } catch (_) { branchCommits = [] }
+    finally { commitsLoading = false }
+  }
+
+  async function selectBranch(branch) {
+    selectedBranch = branch
+    activeFilePath = null
+    activeFileRef  = branch
+    diffHeadRef    = branch
+    await loadBranchCommits()
+  }
 
   function onFileSelect(path, ref) {
     activeFilePath = path
@@ -432,7 +469,11 @@
                  {activeTab === id
                    ? 'border-accent text-gray-100'
                    : 'border-transparent text-gray-500 hover:text-gray-300'}"
-          onclick={() => activeTab = id}
+          onclick={() => {
+            activeTab = id
+            if (id === 'files') loadFileBranches()
+            if (id === 'diff' && selectedBranch !== 'main') diffHeadRef = selectedBranch
+          }}
         >{label}</button>
       {/each}
     </div>
@@ -959,14 +1000,60 @@
     {#if activeTab === 'files'}
       <div class="flex-1 overflow-hidden flex flex-col gap-0">
         <div class="flex-1 overflow-hidden flex gap-0 border border-surface-600 rounded-t">
-          <!-- File tree (25%) -->
-          <div class="w-56 shrink-0 border-r border-surface-600 overflow-hidden flex flex-col bg-surface-800">
-            <FileTree {projectId} onFileSelect={onFileSelect} />
+
+          <!-- Branch list (left column, fixed width) -->
+          <div class="w-36 shrink-0 border-r border-surface-600 flex flex-col bg-surface-800 overflow-y-auto">
+            <div class="px-2 py-1.5 text-xs text-gray-500 uppercase tracking-wide border-b border-surface-600 shrink-0">Branches</div>
+            {#if branchesLoading}
+              <p class="px-2 py-2 text-xs text-gray-600">Loading…</p>
+            {:else if fileBranches.length === 0}
+              <p class="px-2 py-2 text-xs text-gray-600 italic">No branches</p>
+            {:else}
+              {#each fileBranches as b}
+                <button
+                  class="w-full text-left px-2 py-1.5 text-xs font-mono truncate transition-colors
+                         {selectedBranch === b
+                           ? 'bg-accent text-white'
+                           : 'text-gray-300 hover:bg-surface-700'}"
+                  title={b}
+                  onclick={() => selectBranch(b)}
+                >{b.startsWith('task/') && b.length > 14 ? 'task/' + b.slice(5, 13) + '…' : b}</button>
+              {/each}
+            {/if}
           </div>
-          <!-- Code editor (75%) -->
+
+          <!-- File tree (middle column) -->
+          <div class="w-52 shrink-0 border-r border-surface-600 overflow-hidden flex flex-col bg-surface-800">
+            <FileTree {projectId} ref={selectedBranch} onFileSelect={onFileSelect} />
+          </div>
+
+          <!-- Code editor (right, fills remaining space) -->
           <div class="flex-1 overflow-hidden flex flex-col bg-surface-900">
             <CodeEditor {projectId} ref={activeFileRef} path={activeFilePath} onStage={onStageFile} />
           </div>
+        </div>
+
+        <!-- Commit log strip below the three panels -->
+        <div class="border border-t-0 border-surface-600 bg-surface-800 shrink-0" style="max-height:160px;overflow-y:auto">
+          <div class="px-3 py-1.5 text-xs text-gray-500 uppercase tracking-wide border-b border-surface-600 sticky top-0 bg-surface-800">
+            Commits — <code class="font-mono text-blue-300">{selectedBranch}</code>
+          </div>
+          {#if commitsLoading}
+            <p class="px-3 py-2 text-xs text-gray-600">Loading…</p>
+          {:else if branchCommits.length === 0}
+            <p class="px-3 py-2 text-xs text-gray-600 italic">No commits on this branch yet.</p>
+          {:else}
+            <div class="flex flex-col">
+              {#each branchCommits as c}
+                <div class="flex items-center gap-3 px-3 py-1.5 text-xs border-b border-surface-700 hover:bg-surface-700 transition-colors">
+                  <code class="font-mono text-accent shrink-0">{c.short_sha}</code>
+                  <span class="text-gray-300 truncate flex-1">{c.message}</span>
+                  <span class="text-gray-500 shrink-0">{c.author_name}</span>
+                  <span class="text-gray-600 shrink-0">{new Date(c.date).toLocaleDateString()}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
 
         <!-- Staging panel -->

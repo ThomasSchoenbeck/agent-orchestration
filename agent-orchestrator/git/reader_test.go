@@ -146,3 +146,130 @@ func TestReadTree_NonexistentSubpath(t *testing.T) {
 		t.Error("expected error for nonexistent subpath, got nil")
 	}
 }
+
+func TestReadTree_NonexistentRefEmptyRepo(t *testing.T) {
+	repoPath := filepath.Join(tempDir(t), "empty.git")
+	if err := git.InitBare(repoPath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+
+	nodes, err := git.ReadTree(repoPath, "task/nonexistent-branch", "")
+	if err != nil {
+		t.Fatalf("ReadTree on nonexistent ref in empty repo: expected nil error, got %v", err)
+	}
+	if len(nodes) != 0 {
+		t.Errorf("expected empty slice, got %d nodes", len(nodes))
+	}
+}
+
+// ── ListCommits tests ──────────────────────────────────────────────────────
+
+func TestListCommits_EmptyRepo(t *testing.T) {
+	repoPath := filepath.Join(tempDir(t), "empty.git")
+	if err := git.InitBare(repoPath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+
+	entries, err := git.ListCommits(repoPath, "main", 10)
+	if err != nil {
+		t.Fatalf("ListCommits on empty repo: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 commits for empty repo, got %d", len(entries))
+	}
+}
+
+func TestListCommits_NonexistentRef(t *testing.T) {
+	repoPath := initRepoWithFile(t, "a.txt", []byte("x"))
+
+	entries, err := git.ListCommits(repoPath, "task/does-not-exist", 10)
+	if err != nil {
+		t.Fatalf("ListCommits on nonexistent ref: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 commits for nonexistent ref, got %d", len(entries))
+	}
+}
+
+func TestListCommits_AfterCommit(t *testing.T) {
+	repoPath := filepath.Join(tempDir(t), "repo.git")
+	if err := git.InitBare(repoPath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+
+	sha, err := git.CommitFile(repoPath, "main", "hello.txt", []byte("hi"), "first commit", "dev", "dev@x")
+	if err != nil {
+		t.Fatalf("CommitFile: %v", err)
+	}
+
+	entries, err := git.ListCommits(repoPath, "main", 10)
+	if err != nil {
+		t.Fatalf("ListCommits: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 commit, got %d", len(entries))
+	}
+	if entries[0].SHA != sha {
+		t.Errorf("SHA = %q, want %q", entries[0].SHA, sha)
+	}
+	if entries[0].ShortSHA != sha[:12] {
+		t.Errorf("ShortSHA = %q, want %q", entries[0].ShortSHA, sha[:12])
+	}
+	if entries[0].Message != "first commit" {
+		t.Errorf("Message = %q, want %q", entries[0].Message, "first commit")
+	}
+	if entries[0].AuthorName != "dev" {
+		t.Errorf("AuthorName = %q, want dev", entries[0].AuthorName)
+	}
+	if entries[0].Date == "" {
+		t.Error("Date should not be empty")
+	}
+}
+
+func TestListCommits_MultipleCommitsReverseChronological(t *testing.T) {
+	repoPath := filepath.Join(tempDir(t), "repo.git")
+	if err := git.InitBare(repoPath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+	if _, err := git.CommitFile(repoPath, "main", "a.txt", []byte("1"), "first", "dev", "dev@x"); err != nil {
+		t.Fatalf("CommitFile 1: %v", err)
+	}
+	sha2, err := git.CommitFile(repoPath, "main", "b.txt", []byte("2"), "second", "dev", "dev@x")
+	if err != nil {
+		t.Fatalf("CommitFile 2: %v", err)
+	}
+
+	entries, err := git.ListCommits(repoPath, "main", 10)
+	if err != nil {
+		t.Fatalf("ListCommits: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 commits, got %d", len(entries))
+	}
+	// Most recent first.
+	if entries[0].SHA != sha2 {
+		t.Errorf("first entry should be most recent commit %q, got %q", sha2, entries[0].SHA)
+	}
+}
+
+func TestListCommits_LimitRespected(t *testing.T) {
+	repoPath := filepath.Join(tempDir(t), "repo.git")
+	if err := git.InitBare(repoPath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		name := filepath.Join("f", string(rune('a'+i)))
+		if _, err := git.CommitFile(repoPath, "main", name, []byte("x"), "msg", "dev", "dev@x"); err != nil {
+			t.Fatalf("CommitFile %d: %v", i, err)
+		}
+	}
+
+	entries, err := git.ListCommits(repoPath, "main", 3)
+	if err != nil {
+		t.Fatalf("ListCommits: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Errorf("expected 3 commits (limit), got %d", len(entries))
+	}
+}
+

@@ -404,7 +404,7 @@ func fullExecMockServer(t *testing.T, task *db.Task) (
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		case strings.Contains(r.URL.Path, "/tasks/next"):
 			if nextCalls.Add(1) == 1 {
-				_ = json.NewEncoder(w).Encode(task)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"task": task})
 			} else {
 				_ = json.NewEncoder(w).Encode(nil)
 			}

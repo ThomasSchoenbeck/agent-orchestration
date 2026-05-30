@@ -206,12 +206,13 @@ type LogEntry struct {
 
 // LogFilters defines filters for querying logs.
 type LogFilters struct {
-	AgentID   string
-	TaskID    string
-	ProjectID string
-	Level     string
-	Limit     int
-	Offset    int
+	AgentID    string
+	TaskID     string
+	ProjectID  string
+	Level      string
+	Limit      int
+	Offset     int
+	SystemOnly bool // when true, only return entries with no agent_id and no task_id
 }
 
 // --- Conversation ---

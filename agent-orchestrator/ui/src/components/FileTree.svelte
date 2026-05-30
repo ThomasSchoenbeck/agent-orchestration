@@ -1,19 +1,23 @@
 <script>
   import { listBranches, readTree } from '../lib/api.js'
 
-  let { projectId, onFileSelect } = $props()
+  // ref is optional. When provided the parent drives the branch and the
+  // internal branch selector is hidden. When omitted the component manages
+  // its own branch selection.
+  let { projectId, onFileSelect, ref: refProp = null } = $props()
 
+  // If a ref prop is supplied we always use it; otherwise we use our own state.
   let branches    = $state([])
-  let selectedRef = $state('main')
-  // root nodes + per-path children loaded on expand
-  let rootNodes   = $state([])
-  let childMap    = $state({})   // path → TreeNode[]
-  let expanded    = $state({})   // path → bool
-  let activePath  = $state(null)
-  let loading     = $state(false)
-  let error       = $state(null)
+  let internalRef = $state('main')
+  let selectedRef = $derived(refProp ?? internalRef)
 
-  // Flat list of { node, depth } for all currently visible nodes.
+  let rootNodes  = $state([])
+  let childMap   = $state({})
+  let expanded   = $state({})
+  let activePath = $state(null)
+  let loading    = $state(false)
+  let error      = $state(null)
+
   let visibleNodes = $derived(flatten(rootNodes, 0))
 
   function flatten(nodes, depth) {
@@ -31,17 +35,17 @@
     try {
       const b = await listBranches(projectId)
       branches = Array.isArray(b) ? b : []
-      if (branches.length > 0 && !branches.includes(selectedRef)) {
-        selectedRef = branches[0]
+      if (!refProp && branches.length > 0 && !branches.includes(internalRef)) {
+        internalRef = branches[0]
       }
     } catch (e) { error = e.message }
   }
 
   async function loadRoot() {
-    loading   = true
-    error     = null
-    expanded  = {}
-    childMap  = {}
+    loading    = true
+    error      = null
+    expanded   = {}
+    childMap   = {}
     activePath = null
     try {
       const n = await readTree(projectId, selectedRef, '')
@@ -74,49 +78,56 @@
     else selectFile(node)
   }
 
-  function onBranchChange() { loadRoot() }
-
   // ── New file ──────────────────────────────────────────────────────────────
-  let addingFile   = $state(false)
-  let newFilePath  = $state('')
+  let addingFile  = $state(false)
+  let newFilePath = $state('')
 
-  function startAddFile() {
-    newFilePath = ''
-    addingFile  = true
-  }
+  function startAddFile() { newFilePath = ''; addingFile = true }
 
   function confirmAddFile() {
     const p = newFilePath.trim()
     if (!p) { addingFile = false; return }
-    addingFile  = false
-    newFilePath = ''
-    activePath  = p
+    addingFile = false; newFilePath = ''
+    activePath = p
     onFileSelect?.(p, selectedRef)
   }
 
+  function shortLabel(ref) {
+    if (ref.startsWith('task/') && ref.length > 14) return 'task/' + ref.slice(5, 13) + '…'
+    return ref
+  }
+
+  // Re-load when projectId changes or when the external ref prop changes.
   $effect(() => {
-    if (projectId) loadBranches().then(() => loadRoot())
+    if (!projectId) return
+    if (refProp) {
+      loadRoot()
+    } else {
+      loadBranches().then(() => loadRoot())
+    }
   })
 </script>
 
 <div class="flex flex-col h-full text-sm select-none">
-  <!-- Branch selector + new file button -->
+  <!-- Branch selector (hidden when ref is driven by parent) + new file button -->
   <div class="px-3 py-2 border-b border-surface-600 shrink-0">
     <div class="flex items-center gap-2">
-      <span class="text-xs text-gray-500">Branch</span>
-      <select
-        class="flex-1 bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs
-               text-gray-300 focus:outline-none focus:border-accent"
-        bind:value={selectedRef}
-        onchange={onBranchChange}
-      >
-        {#each branches as b}
-          <option value={b}>{b}</option>
-        {/each}
-        {#if branches.length === 0}
-          <option value="main">main</option>
-        {/if}
-      </select>
+      {#if !refProp}
+        <span class="text-xs text-gray-500">Branch</span>
+        <select
+          class="flex-1 bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs
+                 text-gray-300 focus:outline-none focus:border-accent"
+          bind:value={internalRef}
+          onchange={loadRoot}
+        >
+          {#each branches as b}
+            <option value={b}>{shortLabel(b)}</option>
+          {/each}
+          {#if branches.length === 0}
+            <option value="main">main</option>
+          {/if}
+        </select>
+      {/if}
       <button
         class="text-xs text-gray-400 hover:text-gray-200 transition-colors px-1"
         title="New file"

@@ -52,17 +52,27 @@
   }
 
   // ── Data loading ──────────────────────────────────────────────────────────
+  let rolesError = $state(null)
+
+  async function loadRoles() {
+    rolesError = null
+    try {
+      const rl = await listRoles()
+      roles = Array.isArray(rl) ? rl : []
+    } catch (e) {
+      rolesError = e.message
+    }
+  }
+
   async function load() {
     loading = true
     try {
-      const [pr, mr, rl] = await Promise.all([
+      const [pr, mr] = await Promise.all([
         listProviders().catch(() => []),
         getMetrics().catch(() => null),
-        listRoles().catch(() => []),
       ])
       providers = Array.isArray(pr) ? pr : (pr?.providers ?? [])
       metrics   = mr
-      roles     = Array.isArray(rl) ? rl : (rl?.roles ?? [])
     } catch (e) {
       toasts.error('Failed to load: ' + e.message)
     } finally {
@@ -171,7 +181,7 @@
     }
   }
 
-  onMount(load)
+  onMount(() => { load(); loadRoles() })
 </script>
 
 <div class="flex-1 overflow-y-auto p-6">
@@ -294,31 +304,34 @@
       </label>
 
       <div>
-          <div class="text-xs text-gray-500 mb-1.5">Roles</div>
-          {#if roles.length === 0}
-            <p class="text-xs text-gray-600">No roles defined yet — <a href="#/roles" class="text-accent hover:underline">create roles</a> to assign them here.</p>
-          {:else}
-          <div class="flex flex-wrap gap-2">
+        <label for="provider-roles" class="text-xs text-gray-500 mb-1 block">Roles</label>
+        {#if rolesError}
+          <p class="text-xs text-red-400">Failed to load roles: {rolesError}</p>
+        {:else if roles.length === 0}
+          <p class="text-xs text-gray-500">
+            No roles defined yet —
+            <a href="#/roles" class="text-accent hover:underline">create roles</a>
+            first, then assign them here.
+          </p>
+        {:else}
+          <select
+            id="provider-roles"
+            multiple
+            class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
+                   text-gray-200 focus:outline-none focus:border-accent"
+            size={Math.max(3, roles.length)}
+            onchange={(e) => {
+              form.roles = Array.from(e.target.selectedOptions).map(o => o.value)
+            }}
+          >
             {#each roles as role}
-              <label class="flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  class="accent-accent"
-                  checked={form.roles.includes(role.name)}
-                  onchange={(e) => {
-                    if (e.target.checked) {
-                      form.roles = [...form.roles, role.name]
-                    } else {
-                      form.roles = form.roles.filter(r => r !== role.name)
-                    }
-                  }}
-                />
-                {role.label ?? role.name}
-              </label>
+              <option value={role.name} selected={form.roles.includes(role.name)}>
+                {role.label || role.name}
+              </option>
             {/each}
-          </div>
-          {/if}
-        </div>
+          </select>
+        {/if}
+      </div>
 
       <div class="flex justify-end gap-2">
         <button

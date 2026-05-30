@@ -121,6 +121,66 @@ func TestEnsureBranchRef_CreatesRef(t *testing.T) {
 	}
 }
 
+func TestInitialCommit_CreatesBranch(t *testing.T) {
+	repoPath := filepath.Join(tempDir(t), "repo.git")
+	if err := git.InitBare(repoPath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+
+	if err := git.InitialCommit(repoPath, "main"); err != nil {
+		t.Fatalf("InitialCommit: %v", err)
+	}
+
+	branches, err := git.ListBranches(repoPath)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	if len(branches) != 1 || branches[0] != "main" {
+		t.Errorf("expected [main] after InitialCommit, got %v", branches)
+	}
+
+	// ReadTree on main should return empty slice (no files), not an error.
+	nodes, err := git.ReadTree(repoPath, "main", "")
+	if err != nil {
+		t.Fatalf("ReadTree after InitialCommit: %v", err)
+	}
+	if len(nodes) != 0 {
+		t.Errorf("expected empty tree, got %d nodes", len(nodes))
+	}
+}
+
+func TestInitialCommit_Idempotent(t *testing.T) {
+	repoPath := filepath.Join(tempDir(t), "repo.git")
+	if err := git.InitBare(repoPath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+
+	if err := git.InitialCommit(repoPath, "main"); err != nil {
+		t.Fatalf("first InitialCommit: %v", err)
+	}
+	// Commit a real file so we can verify the second call doesn't overwrite.
+	sha, err := git.CommitFile(repoPath, "main", "f.txt", []byte("hello"), "add f", "u", "u@x")
+	if err != nil {
+		t.Fatalf("CommitFile: %v", err)
+	}
+	if sha == "" {
+		t.Fatal("expected non-empty sha")
+	}
+
+	// Second InitialCommit must be a no-op (branch already exists).
+	if err := git.InitialCommit(repoPath, "main"); err != nil {
+		t.Fatalf("second InitialCommit: %v", err)
+	}
+	// File committed after the first InitialCommit must still be readable.
+	data, err := git.ReadFile(repoPath, "main", "f.txt")
+	if err != nil {
+		t.Fatalf("ReadFile after idempotent InitialCommit: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Errorf("f.txt = %q, want hello", data)
+	}
+}
+
 func TestEnsureBranchRef_NoopIfExists(t *testing.T) {
 	repoPath := filepath.Join(tempDir(t), "repo.git")
 	if err := git.InitBare(repoPath); err != nil {

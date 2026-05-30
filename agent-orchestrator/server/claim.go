@@ -46,6 +46,7 @@ func (s *Server) prepareClaimResponse(ctx context.Context, task *db.Task, agentI
 
 	isColocated := agent != nil && agent.Mode == "colocated"
 	branchName := fmt.Sprintf("task/%s", task.ID)
+	task.AssignedAgentID = agentID
 
 	if isColocated {
 		s.provisionColocatedWorktree(ctx, task, branchName, resp)
@@ -92,6 +93,29 @@ func (s *Server) provisionColocatedWorktree(ctx context.Context, task *db.Task, 
 	// Write .agent_context/ files into the worktree.
 	if err := writeAgentContext(ctx, s.db, task, worktreePath); err != nil {
 		log.Printf("claim: writeAgentContext task %q: %v", task.ID, err)
+	}
+
+	// Record worktree creation in the task log and post a comment so the user
+	// can see the branch name immediately after claim, before the agent starts.
+	// branchName is the parameter passed to this function (e.g. "task/<id>").
+	logEntry := &db.LogEntry{
+		AgentID:   task.AssignedAgentID,
+		TaskID:    task.ID,
+		ProjectID: project.ID,
+		Level:     "info",
+		Message:   fmt.Sprintf("Worktree provisioned on branch %s", branchName),
+	}
+	if lerr := s.db.CreateLog(ctx, logEntry); lerr != nil {
+		log.Printf("claim: CreateLog task %q: %v", task.ID, lerr)
+	}
+	comment := &db.TaskComment{
+		TaskID:     task.ID,
+		AuthorType: "agent",
+		AuthorID:   task.AssignedAgentID,
+		Body:       fmt.Sprintf("Worktree ready on branch `%s`. Agent is starting.", branchName),
+	}
+	if cerr := s.db.CreateComment(ctx, comment); cerr != nil {
+		log.Printf("claim: CreateComment task %q: %v", task.ID, cerr)
 	}
 }
 

@@ -7,17 +7,21 @@ import userEvent from '@testing-library/user-event'
 import Logs from '../pages/Logs.svelte'
 
 vi.mock('../lib/api.js', () => ({
-  listLogs:      vi.fn(),
-  listChatLog:   vi.fn(),
-  listSettings:  vi.fn(),
-  deleteLogs:    vi.fn(),
+  listLogs:         vi.fn(),
+  listChatLog:      vi.fn(),
+  listSettings:     vi.fn(),
+  deleteLogs:       vi.fn(),
+  listAgentLogs:    vi.fn(),
+  deleteAgentLogs:  vi.fn(),
+  listAllTaskLogs:  vi.fn(),
+  deleteAllTaskLogs: vi.fn(),
 }))
 
 vi.mock('../lib/time.js', () => ({
   formatTimestamp: (ts) => new Date(ts).toISOString(),
 }))
 
-import { listLogs, listChatLog, listSettings } from '../lib/api.js'
+import { listLogs, listChatLog, listSettings, listAgentLogs, listAllTaskLogs } from '../lib/api.js'
 
 const LOGS = [
   {
@@ -44,12 +48,14 @@ beforeEach(() => {
   listLogs.mockResolvedValue(LOGS)
   listChatLog.mockResolvedValue([])
   listSettings.mockResolvedValue([])
+  listAgentLogs.mockResolvedValue([])
+  listAllTaskLogs.mockResolvedValue([])
 })
 
 describe('Logs — rendering', () => {
   it('shows page heading', () => {
     render(Logs)
-    expect(screen.getByText('System Logs')).toBeInTheDocument()
+    expect(screen.getByText('Logs')).toBeInTheDocument()
   })
 
   it('renders log messages after load', async () => {
@@ -60,16 +66,21 @@ describe('Logs — rendering', () => {
     expect(screen.getByText('task failed')).toBeInTheDocument()
   })
 
-  it('renders Agent column header', async () => {
+  it('renders Agent column header in system log table', async () => {
     render(Logs)
     await waitFor(() => screen.getByText('agent started'))
-    expect(screen.getByText('Agent')).toBeInTheDocument()
+    // "Agent" appears as both tab label and column header; verify at least one is a <th>
+    const ths = document.querySelectorAll('th')
+    const agentTh = Array.from(ths).some(th => th.textContent.trim() === 'Agent')
+    expect(agentTh).toBe(true)
   })
 
-  it('renders Task column header', async () => {
+  it('renders Task column header in system log table', async () => {
     render(Logs)
     await waitFor(() => screen.getByText('agent started'))
-    expect(screen.getByText('Task')).toBeInTheDocument()
+    const ths = document.querySelectorAll('th')
+    const taskTh = Array.from(ths).some(th => th.textContent.trim() === 'Task')
+    expect(taskTh).toBe(true)
   })
 
   it('shows truncated agent_id in Agent column', async () => {
@@ -128,11 +139,11 @@ describe('Logs — expandable context rows', () => {
 })
 
 describe('Logs — server calls', () => {
-  it('passes limit to listLogs', async () => {
+  it('passes limit and system_only to listLogs', async () => {
     render(Logs)
     await waitFor(() =>
       expect(listLogs).toHaveBeenCalledWith(
-        expect.objectContaining({ limit: 200 })
+        expect.objectContaining({ limit: 200, system_only: true })
       )
     )
   })

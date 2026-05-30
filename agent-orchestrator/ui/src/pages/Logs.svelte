@@ -1,11 +1,16 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { listLogs, listChatLog, listSettings, deleteLogs } from '../lib/api.js'
+  import { listLogs, listChatLog, listSettings, deleteLogs,
+           listAgentLogs, deleteAgentLogs,
+           listAllTaskLogs, deleteAllTaskLogs } from '../lib/api.js'
   import { formatTimestamp } from '../lib/time.js'
   import { toasts, router } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
 
   // ── State ─────────────────────────────────────────────────────────────────
+  let activeTab       = $state('system')   // 'system' | 'agent' | 'task'
+
+  // System logs
   let chatLog         = $state([])
   let chatLogLimit    = $state(50)
   let logs            = $state([])
@@ -15,7 +20,17 @@
   let hiddenLevels    = $state(new Set())
   let chartLevelFilter = $state('')
   let bucketMinutes   = $state(60)
-  let expandedRows    = $state(new Set())   // entry IDs with expanded metadata
+  let expandedRows    = $state(new Set())
+
+  // Agent logs
+  let agentLogs       = $state([])
+  let agentLogsLimit  = $state(200)
+  let agentLogsLoading = $state(false)
+
+  // Task logs
+  let taskLogs        = $state([])
+  let taskLogsLimit   = $state(200)
+  let taskLogsLoading = $state(false)
 
   const LEVEL_COLORS = {
     debug: '#94a3b8',
@@ -35,7 +50,7 @@
   async function load() {
     loading = true
     try {
-      const params = { limit }
+      const params = { limit, system_only: true }
       if (level) params.level = level
       const [res, cl] = await Promise.all([
         listLogs(params),
@@ -48,6 +63,36 @@
     } finally {
       loading = false
     }
+  }
+
+  async function loadAgentLogs() {
+    agentLogsLoading = true
+    try {
+      const res = await listAgentLogs({ limit: agentLogsLimit })
+      agentLogs = Array.isArray(res) ? res : []
+    } catch (e) {
+      toasts.error('Failed to load agent logs: ' + e.message)
+    } finally {
+      agentLogsLoading = false
+    }
+  }
+
+  async function loadTaskLogs() {
+    taskLogsLoading = true
+    try {
+      const res = await listAllTaskLogs({ limit: taskLogsLimit })
+      taskLogs = Array.isArray(res) ? res : []
+    } catch (e) {
+      toasts.error('Failed to load task logs: ' + e.message)
+    } finally {
+      taskLogsLoading = false
+    }
+  }
+
+  function loadActive() {
+    if (activeTab === 'system') load()
+    else if (activeTab === 'agent') loadAgentLogs()
+    else if (activeTab === 'task') loadTaskLogs()
   }
 
   function toggleLevel(l) {
@@ -151,7 +196,7 @@
         if (parsed > 0) intervalMs = parsed
       }
     } catch (_) { /* fall back to default */ }
-    timer = setInterval(load, intervalMs)
+    timer = setInterval(loadActive, intervalMs)
   })
   onDestroy(() => clearInterval(timer))
 
@@ -167,20 +212,47 @@
     }
   }
 
+  async function handleClearAgentLogs() {
+    if (!confirm('Delete all agent logs? This cannot be undone.')) return
+    try {
+      const { deleted } = await deleteAgentLogs()
+      toasts.success(`Deleted ${deleted} agent log entries`)
+      loadAgentLogs()
+    } catch (e) {
+      toasts.error('Failed to clear agent logs: ' + e.message)
+    }
+  }
+
+  async function handleClearTaskLogs() {
+    if (!confirm('Delete all task logs? This cannot be undone.')) return
+    try {
+      const { deleted } = await deleteAllTaskLogs()
+      toasts.success(`Deleted ${deleted} task log entries`)
+      loadTaskLogs()
+    } catch (e) {
+      toasts.error('Failed to clear task logs: ' + e.message)
+    }
+  }
+
 </script>
 
 <div class="flex flex-col h-full overflow-hidden">
 
-  <!-- ── Header ─────────────────────────────────────────────────────────────── -->
-  <div class="shrink-0 px-6 py-3 border-b border-surface-600 flex items-center justify-between flex-wrap gap-2">
-    <h1 class="text-lg font-semibold text-gray-100">System Logs</h1>
-    <div class="flex items-center gap-2 flex-wrap text-xs text-gray-500">
-      <span>Agent logs →</span>
-      <button class="text-accent hover:underline" onclick={() => router.push('agents')}>Agents</button>
-      <span class="ml-2">Task logs →</span>
-      <button class="text-accent hover:underline" onclick={() => router.push('tasks')}>Tasks</button>
+  <!-- ── Header + tabs ─────────────────────────────────────────────────────── -->
+  <div class="shrink-0 px-6 pt-3 border-b border-surface-600">
+    <h1 class="text-lg font-semibold text-gray-100 mb-3">Logs</h1>
+    <div class="flex gap-1">
+      {#each [['system','System'],['agent','Agent'],['task','Task']] as [id, label]}
+        <button
+          class="px-4 py-2 text-sm border-b-2 -mb-px transition-colors
+                 {activeTab === id ? 'border-accent text-gray-100' : 'border-transparent text-gray-500 hover:text-gray-300'}"
+          onclick={() => { activeTab = id; if (id === 'agent') loadAgentLogs(); else if (id === 'task') loadTaskLogs(); else load() }}
+        >{label}</button>
+      {/each}
     </div>
   </div>
+
+  {#if activeTab === 'system'}
 
   <!-- ── Controls ───────────────────────────────────────────────────────────── -->
   <div class="shrink-0 px-6 py-2 border-b border-surface-600 flex items-center gap-2 flex-wrap">
@@ -364,5 +436,111 @@
       </table>
     {/if}
   </div>
+
+  {:else if activeTab === 'agent'}
+
+  <!-- ── Agent logs tab ────────────────────────────────────────────────────── -->
+  <div class="shrink-0 px-6 py-2 border-b border-surface-600 flex items-center gap-2">
+    <select
+      class="bg-surface-700 border border-surface-600 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none"
+      bind:value={agentLogsLimit}
+      onchange={loadAgentLogs}
+    >
+      <option value={50}>50</option>
+      <option value={200}>200</option>
+      <option value={500}>500</option>
+    </select>
+    <span class="ml-auto text-gray-600">{agentLogs.length} entries</span>
+    <button class="text-gray-500 hover:text-gray-300" onclick={loadAgentLogs}>↻</button>
+    <button
+      class="px-2 py-1 text-xs rounded bg-red-900/40 text-red-400 hover:bg-red-900/70 transition-colors"
+      onclick={handleClearAgentLogs}
+    >Clear</button>
+  </div>
+  <div class="flex-1 overflow-y-auto font-mono text-xs">
+    {#if agentLogsLoading}
+      <p class="p-4 text-gray-500">Loading…</p>
+    {:else if agentLogs.length === 0}
+      <p class="p-4 text-gray-500">No agent log entries.</p>
+    {:else}
+      <table class="w-full">
+        <thead class="sticky top-0 bg-surface-800 z-10">
+          <tr>
+            <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-32">Time</th>
+            <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-32">Agent</th>
+            <th class="text-left px-4 py-1.5 text-gray-500 font-medium">Event</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each agentLogs as entry (entry.id)}
+            <tr class="border-t border-surface-700 hover:bg-surface-700/20">
+              <td class="px-4 py-1 text-gray-600 whitespace-nowrap">{formatTime(entry.created_at ?? entry.timestamp)}</td>
+              <td class="px-4 py-1 text-gray-400 truncate max-w-[8rem]" title={entry.agent_id}>{entry.agent_id?.slice(0,12) ?? '—'}</td>
+              <td class="px-4 py-1 text-gray-300">{entry.event_type ?? entry.message ?? ''}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+  </div>
+
+  {:else if activeTab === 'task'}
+
+  <!-- ── Task logs tab ──────────────────────────────────────────────────────── -->
+  <div class="shrink-0 px-6 py-2 border-b border-surface-600 flex items-center gap-2">
+    <select
+      class="bg-surface-700 border border-surface-600 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none"
+      bind:value={taskLogsLimit}
+      onchange={loadTaskLogs}
+    >
+      <option value={50}>50</option>
+      <option value={200}>200</option>
+      <option value={500}>500</option>
+    </select>
+    <span class="ml-auto text-gray-600">{taskLogs.length} entries</span>
+    <button class="text-gray-500 hover:text-gray-300" onclick={loadTaskLogs}>↻</button>
+    <button
+      class="px-2 py-1 text-xs rounded bg-red-900/40 text-red-400 hover:bg-red-900/70 transition-colors"
+      onclick={handleClearTaskLogs}
+    >Clear</button>
+  </div>
+  <div class="flex-1 overflow-y-auto font-mono text-xs">
+    {#if taskLogsLoading}
+      <p class="p-4 text-gray-500">Loading…</p>
+    {:else if taskLogs.length === 0}
+      <p class="p-4 text-gray-500">No task log entries.</p>
+    {:else}
+      <table class="w-full">
+        <thead class="sticky top-0 bg-surface-800 z-10">
+          <tr>
+            <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-32">Time</th>
+            <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-28">Task</th>
+            <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-28">Agent</th>
+            <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-24">Event</th>
+            <th class="text-left px-4 py-1.5 text-gray-500 font-medium w-20">Status</th>
+            <th class="text-left px-4 py-1.5 text-gray-500 font-medium">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each taskLogs as entry (entry.id)}
+            <tr class="border-t border-surface-700 hover:bg-surface-700/20">
+              <td class="px-4 py-1 text-gray-600 whitespace-nowrap">{formatTime(entry.created_at ?? entry.timestamp)}</td>
+              <td class="px-4 py-1 text-gray-400 truncate max-w-[7rem]" title={entry.task_id}>{entry.task_id?.slice(0,8) ?? '—'}…</td>
+              <td class="px-4 py-1 text-gray-500 truncate max-w-[7rem]" title={entry.agent_id}>{entry.agent_id ? entry.agent_id.slice(0,8) + '…' : '—'}</td>
+              <td class="px-4 py-1 text-gray-400">{entry.event_type ?? ''}</td>
+              <td class="px-4 py-1">
+                {#if entry.old_status && entry.new_status}
+                  <span class="text-[10px] text-gray-500">{entry.old_status} → {entry.new_status}</span>
+                {/if}
+              </td>
+              <td class="px-4 py-1 text-gray-300 truncate">{entry.description ?? ''}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+  </div>
+
+  {/if}
 
 </div>
