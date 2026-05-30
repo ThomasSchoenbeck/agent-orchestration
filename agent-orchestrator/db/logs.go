@@ -108,6 +108,15 @@ func (d *Database) CreateMetric(ctx context.Context, m *Metric) error {
 	return err
 }
 
+// DeleteLogsByTask removes all log entries for a specific task.
+func (d *Database) DeleteLogsByTask(ctx context.Context, taskID string) (int64, error) {
+	res, err := d.db.ExecContext(ctx, `DELETE FROM logs WHERE task_id=?`, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // DeleteOldLogs removes system log entries older than cutoff.
 func (d *Database) DeleteOldLogs(ctx context.Context, cutoff time.Time) (int64, error) {
 	res, err := d.db.ExecContext(ctx,

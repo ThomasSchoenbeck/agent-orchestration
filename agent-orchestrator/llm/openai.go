@@ -142,6 +142,23 @@ func openaiMessages(msgs []Message) []map[string]interface{} {
 		if m.ToolCallID != "" {
 			entry["tool_call_id"] = m.ToolCallID
 		}
+		// Assistant messages that triggered tool calls must include the
+		// tool_calls array so the model can correlate results in later rounds.
+		if len(m.ToolCalls) > 0 {
+			calls := make([]map[string]interface{}, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				argsJSON, _ := json.Marshal(tc.Arguments)
+				calls[j] = map[string]interface{}{
+					"id":   tc.ID,
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":      tc.Name,
+						"arguments": string(argsJSON),
+					},
+				}
+			}
+			entry["tool_calls"] = calls
+		}
 		out[i] = entry
 	}
 	return out
@@ -206,7 +223,15 @@ func parseOpenAIResponse(data []byte) (ChatResponse, error) {
 
 	for _, tc := range choice.Message.ToolCalls {
 		var args map[string]interface{}
-		_ = json.Unmarshal(tc.Function.Arguments, &args)
+		// The OpenAI API returns arguments as a JSON-encoded string, not a JSON
+		// object. Try that first; fall back to direct object unmarshal for servers
+		// that already return a parsed object.
+		var argsStr string
+		if json.Unmarshal(tc.Function.Arguments, &argsStr) == nil {
+			_ = json.Unmarshal([]byte(argsStr), &args)
+		} else {
+			_ = json.Unmarshal(tc.Function.Arguments, &args)
+		}
 		resp.ToolCalls = append(resp.ToolCalls, ToolCall{
 			ID:        tc.ID,
 			Name:      tc.Function.Name,

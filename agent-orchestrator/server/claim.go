@@ -90,6 +90,22 @@ func (s *Server) provisionColocatedWorktree(ctx context.Context, task *db.Task, 
 
 	resp.WorktreePath = worktreePath
 
+	// Redirect the worktree's origin to the embedded HTTP git server so the
+	// agent pushes over HTTP. go-git's HTTP transport is reliable; local
+	// file-path push has packfile negotiation issues.
+	host := s.cfg.Server.Host
+	if host == "" || host == "0.0.0.0" {
+		host = "localhost"
+	}
+	slug := project.Slug
+	if slug == "" {
+		slug = project.ID
+	}
+	httpRepoURL := fmt.Sprintf("http://%s:%d/git/%s.git", host, s.cfg.Server.Port, slug)
+	if err := git.SetRemoteURL(worktreePath, "origin", httpRepoURL); err != nil {
+		log.Printf("claim: SetRemoteURL task %q: %v", task.ID, err)
+	}
+
 	// Write .agent_context/ files into the worktree.
 	if err := writeAgentContext(ctx, s.db, task, worktreePath); err != nil {
 		log.Printf("claim: writeAgentContext task %q: %v", task.ID, err)

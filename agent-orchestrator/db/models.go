@@ -170,7 +170,8 @@ type RoleDefinition struct {
 	SystemPrompt   string    `json:"system_prompt"`
 	ContextInclude []string  `json:"context_include"`
 	ContextExclude []string  `json:"context_exclude"`
-	TaskTypes      []string  `json:"task_types"` // task types routed to this role
+	TaskTypes      []string  `json:"task_types"`       // task types routed to this role
+	AllowedTools   []string  `json:"allowed_tools"`    // if non-empty, only these tools are sent to the LLM
 	Temperature    float64   `json:"temperature"`
 	MaxTokens      int       `json:"max_tokens"`
 	Enabled        bool      `json:"enabled"`

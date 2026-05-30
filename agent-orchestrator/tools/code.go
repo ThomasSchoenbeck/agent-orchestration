@@ -33,12 +33,11 @@ func RegisterCodeTools(reg *Registry) error {
 func readFileTool() Definition {
 	return Definition{
 		Name:        "read_file",
-		Description: "Read the contents of a file from the repository.",
+		Description: "Read the contents of a file from the workspace.",
 		Parameters: map[string]Param{
-			"repo_path": {Type: "string", Description: "Absolute path to the repository root"},
-			"file_path": {Type: "string", Description: "Path to the file relative to repo_path"},
+			"file_path": {Type: "string", Description: "Path to the file (relative to workspace root)"},
 		},
-		Required: []string{"repo_path", "file_path"},
+		Required: []string{"file_path"}, // repo_path injected by executor
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			repoPath, err := strArg(args, "repo_path")
 			if err != nil {
@@ -66,13 +65,12 @@ func readFileTool() Definition {
 func writeFileTool() Definition {
 	return Definition{
 		Name:        "write_file",
-		Description: "Write content to a file in the repository. Creates parent directories as needed. Overwrites if file exists.",
+		Description: "Write content to a file in the workspace. Creates parent directories as needed. Overwrites if the file exists.",
 		Parameters: map[string]Param{
-			"repo_path": {Type: "string", Description: "Absolute path to the repository root"},
-			"file_path": {Type: "string", Description: "Path to the file relative to repo_path"},
-			"content":   {Type: "string", Description: "Content to write to the file"},
+			"file_path": {Type: "string", Description: "Path to the file (relative to workspace root), e.g. src/main.go"},
+			"content":   {Type: "string", Description: "The exact text content to write into the file"},
 		},
-		Required: []string{"repo_path", "file_path", "content"},
+		Required: []string{"file_path", "content"}, // repo_path injected by executor
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			repoPath, err := strArg(args, "repo_path")
 			if err != nil {
@@ -106,12 +104,11 @@ func writeFileTool() Definition {
 func applyDiffTool() Definition {
 	return Definition{
 		Name:        "apply_diff",
-		Description: "Apply a unified diff to the repository using the `patch` command.",
+		Description: "Apply a unified diff to the workspace using the `patch` command.",
 		Parameters: map[string]Param{
-			"repo_path": {Type: "string", Description: "Absolute path to the repository root"},
-			"diff":      {Type: "string", Description: "Unified diff content (output of git diff or similar)"},
+			"diff": {Type: "string", Description: "Unified diff content (output of git diff or similar)"},
 		},
-		Required: []string{"repo_path", "diff"},
+		Required: []string{"diff"}, // repo_path injected by executor
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			repoPath, err := strArg(args, "repo_path")
 			if err != nil {
@@ -144,13 +141,12 @@ func applyDiffTool() Definition {
 func runTestsTool() Definition {
 	return Definition{
 		Name:        "run_tests",
-		Description: "Run the test suite in the repository. Returns exit code, stdout, stderr, and a pass/fail summary.",
+		Description: "Run the test suite in the workspace. Returns stdout, stderr, and a pass/fail summary.",
 		Parameters: map[string]Param{
-			"repo_path":    {Type: "string", Description: "Absolute path to the repository root"},
-			"test_command": {Type: "string", Description: "Shell command to run tests (e.g. 'go test ./...' or 'pytest')"},
+			"test_command": {Type: "string", Description: "Shell command to run tests, e.g. 'go test ./...' or 'pytest'"},
 			"timeout_sec":  {Type: "number", Description: "Timeout in seconds (default 120)"},
 		},
-		Required: []string{"repo_path", "test_command"},
+		Required: []string{"test_command"}, // repo_path injected by executor
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			repoPath, err := strArg(args, "repo_path")
 			if err != nil {
@@ -219,13 +215,12 @@ func gitCloneTool() Definition {
 func gitCheckoutTool() Definition {
 	return Definition{
 		Name:        "git_checkout",
-		Description: "Checkout a branch or commit in an existing repository.",
+		Description: "Checkout a branch or commit in the workspace repository.",
 		Parameters: map[string]Param{
-			"repo_path": {Type: "string", Description: "Absolute path to the repository"},
-			"branch":    {Type: "string", Description: "Branch name or commit SHA to checkout"},
-			"create":    {Type: "string", Description: "Set to 'true' to create the branch if it does not exist"},
+			"branch": {Type: "string", Description: "Branch name or commit SHA to checkout"},
+			"create": {Type: "string", Description: "Set to 'true' to create the branch if it does not exist"},
 		},
-		Required: []string{"repo_path", "branch"},
+		Required: []string{"branch"}, // repo_path injected by executor
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			repoPath, err := strArg(args, "repo_path")
 			if err != nil {
@@ -265,13 +260,12 @@ func gitCheckoutTool() Definition {
 func listFilesTool() Definition {
 	return Definition{
 		Name:        "list_files",
-		Description: "List files in a directory within the repository.",
+		Description: "List files in a directory within the workspace.",
 		Parameters: map[string]Param{
-			"repo_path": {Type: "string", Description: "Absolute path to the repository root"},
-			"dir_path":  {Type: "string", Description: "Directory path relative to repo_path (default: '.')"},
-			"pattern":   {Type: "string", Description: "Optional glob pattern to filter results (e.g. '*.go')"},
+			"dir_path": {Type: "string", Description: "Directory path relative to workspace root (default: '.')"},
+			"pattern":  {Type: "string", Description: "Optional glob pattern to filter results (e.g. '*.go')"},
 		},
-		Required: []string{"repo_path"},
+		Required: []string{}, // repo_path injected by executor
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			repoPath, err := strArg(args, "repo_path")
 			if err != nil {

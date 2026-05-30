@@ -775,19 +775,32 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		api.WriteJSON(w, http.StatusOK, t)
 
 	case "logs":
-		if r.Method != http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
+			logs, err := s.db.ListTaskLogs(r.Context(), db.TaskLogFilters{TaskID: id, Limit: 200})
+			if err != nil {
+				s.internalError(w, err)
+				return
+			}
+			if logs == nil {
+				logs = []*db.TaskLog{}
+			}
+			api.WriteJSON(w, http.StatusOK, logs)
+		case http.MethodDelete:
+			n1, err := s.db.DeleteTaskLogsByTask(r.Context(), id)
+			if err != nil {
+				s.internalError(w, err)
+				return
+			}
+			n2, err := s.db.DeleteLogsByTask(r.Context(), id)
+			if err != nil {
+				s.internalError(w, err)
+				return
+			}
+			api.WriteJSON(w, http.StatusOK, map[string]int64{"deleted": n1 + n2})
+		default:
 			methodNotAllowed(w)
-			return
 		}
-		logs, err := s.db.ListTaskLogs(r.Context(), db.TaskLogFilters{TaskID: id, Limit: 200})
-		if err != nil {
-			s.internalError(w, err)
-			return
-		}
-		if logs == nil {
-			logs = []*db.TaskLog{}
-		}
-		api.WriteJSON(w, http.StatusOK, logs)
 
 	case "links":
 		s.handleTaskLinks(w, r, id)

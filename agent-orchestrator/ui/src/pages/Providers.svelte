@@ -27,7 +27,7 @@
 
   const emptyForm = () => ({
     name: '', type: 'openai_compatible', api_key: '',
-    base_url: '', model_name: '', enabled: true, deployment: '',
+    base_url: '', model_name: '', enabled: true, deployment: '', text_tool_calls: false, fold_system_into_user: false, system_prefix: '', tool_allowlist: '',
     roles: [],
   })
   let form = $state(emptyForm())
@@ -96,7 +96,11 @@
       base_url:   p.base_url,
       model_name: p.model_name,
       enabled:    p.enabled,
-      deployment: p.config?.deployment ?? '',
+      deployment:      p.config?.deployment ?? '',
+      text_tool_calls:      p.config?.text_tool_calls ?? false,
+      fold_system_into_user: p.config?.fold_system_into_user ?? false,
+      system_prefix:         p.config?.system_prefix ?? '',
+      tool_allowlist:        (p.config?.tool_allowlist ?? []).join(', '),
       roles:      p.roles ?? [],
     }
     editingId = p.id
@@ -113,7 +117,13 @@
       model_name: form.model_name.trim(),
       enabled:    form.enabled,
       roles:      form.roles,
-      config:     form.deployment ? { deployment: form.deployment.trim() } : {},
+      config: {
+        ...(form.deployment ? { deployment: form.deployment.trim() } : {}),
+        ...(form.text_tool_calls ? { text_tool_calls: true } : {}),
+        ...(form.fold_system_into_user ? { fold_system_into_user: true } : {}),
+        ...(form.system_prefix ? { system_prefix: form.system_prefix } : {}),
+        ...(form.tool_allowlist.trim() ? { tool_allowlist: form.tool_allowlist.split(',').map(s => s.trim()).filter(Boolean) } : {}),
+      },
     }
     if (form.api_key.trim()) body.api_key = form.api_key.trim()
 
@@ -302,6 +312,50 @@
         <input type="checkbox" bind:checked={form.enabled} class="accent-accent" />
         Enabled
       </label>
+
+      <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+        <input type="checkbox" bind:checked={form.text_tool_calls} class="accent-accent" />
+        <span>
+          Text tool calls
+          <span class="text-xs text-gray-500 ml-1">(for models that don't support structured function calling)</span>
+        </span>
+      </label>
+
+      <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+        <input type="checkbox" bind:checked={form.fold_system_into_user} class="accent-accent" />
+        <span>
+          Fold system prompt into user message
+          <span class="text-xs text-gray-500 ml-1">(for models without a system role, e.g. Gemma)</span>
+        </span>
+      </label>
+
+      <div>
+        <label for="provider-system-prefix" class="text-xs text-gray-500 mb-1 block">
+          System prompt prefix
+          <span class="text-gray-600 ml-1">(prepended before the system message, e.g. &lt;|think|&gt; for Gemma)</span>
+        </label>
+        <input
+          id="provider-system-prefix"
+          class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
+                 text-gray-200 font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
+          placeholder="<|think|>"
+          bind:value={form.system_prefix}
+        />
+      </div>
+
+      <div>
+        <label for="provider-tool-allowlist" class="text-xs text-gray-500 mb-1 block">
+          Tool allowlist
+          <span class="text-gray-600 ml-1">(comma-separated — leave empty to send all tools; recommended for small models)</span>
+        </label>
+        <input
+          id="provider-tool-allowlist"
+          class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
+                 text-gray-200 font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
+          placeholder="write_file, read_file, list_files, apply_diff, run_tests"
+          bind:value={form.tool_allowlist}
+        />
+      </div>
 
       <div>
         <label for="provider-roles" class="text-xs text-gray-500 mb-1 block">Roles</label>

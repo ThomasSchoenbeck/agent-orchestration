@@ -44,6 +44,12 @@ func CreateWorktree(repoPath, worktreePath, branchName, baseBranch string) (head
 	}
 	sha := resolvedRef.Hash().String()
 
+	// Always start from a clean directory. Re-queued tasks may have a leftover
+	// worktree from a previous run containing stale or incorrectly-placed files.
+	// Removing it ensures the agent starts with a pristine checkout every time.
+	if err := os.RemoveAll(worktreePath); err != nil {
+		return "", fmt.Errorf("git.CreateWorktree clean %q: %w", worktreePath, err)
+	}
 	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
 		return "", fmt.Errorf("git.CreateWorktree mkdir %q: %w", worktreePath, err)
 	}
@@ -82,12 +88,27 @@ func CreateWorktree(repoPath, worktreePath, branchName, baseBranch string) (head
 		ReferenceName: branchRef,
 		SingleBranch:  true,
 	}
-	_, err = gogit.PlainClone(worktreePath, false, cloneOpts)
-	if err != nil && err != gogit.ErrRepositoryAlreadyExists {
+	if _, err = gogit.PlainClone(worktreePath, false, cloneOpts); err != nil {
 		return "", fmt.Errorf("git.CreateWorktree clone into %q: %w", worktreePath, err)
 	}
 
 	return sha, nil
+}
+
+// SetRemoteURL updates (or creates) a named remote in the repo at repoPath.
+// Used to redirect a locally-cloned worktree's origin from the file-system
+// path to the embedded HTTP server URL so all pushes go over HTTP.
+func SetRemoteURL(repoPath, remoteName, url string) error {
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("git.SetRemoteURL open %q: %w", repoPath, err)
+	}
+	_ = repo.DeleteRemote(remoteName) // ignore "not found"
+	_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{
+		Name: remoteName,
+		URLs: []string{url},
+	})
+	return err
 }
 
 // RemoveWorktree deletes the worktree directory. Safe to call even if the

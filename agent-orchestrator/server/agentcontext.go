@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"agent-orchestrator/db"
 )
@@ -36,6 +37,21 @@ func writeAgentContext(ctx context.Context, database *db.Database, task *db.Task
 	if task.Status == db.TaskStatusDeveloping || task.Status == db.TaskStatusAwaitingRevision {
 		if err := writeReviewContext(ctx, database, ctxDir, task.ID); err != nil {
 			return err
+		}
+	}
+
+	// Ensure .agent_context/ is gitignored so provisioning files are never
+	// committed as agent work by CommitAndPush.
+	gitignorePath := filepath.Join(worktreePath, ".gitignore")
+	existing, _ := os.ReadFile(gitignorePath)
+	if !strings.Contains(string(existing), ".agent_context/") {
+		f, err := os.OpenFile(gitignorePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err == nil {
+			if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+				_, _ = f.WriteString("\n")
+			}
+			_, _ = f.WriteString(".agent_context/\n")
+			_ = f.Close()
 		}
 	}
 

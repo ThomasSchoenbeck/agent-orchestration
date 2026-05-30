@@ -30,9 +30,13 @@ type Router struct {
 
 // cachedRole holds a DB-backed role definition and the resolved provider name.
 type cachedRole struct {
-	def          *db.RoleDefinition
-	providerName string
-	defaultModel string // provider's default model (fallback when ModelOverride is "")
+	def                *db.RoleDefinition
+	providerName       string
+	defaultModel       string // provider's default model (fallback when ModelOverride is "")
+	textToolCalls      bool     // true when the provider can't do structured tool calling
+	foldSystemIntoUser bool     // true when the model has no system role (e.g. Gemma via llama.cpp)
+	systemPrefix       string   // prepended to the system prompt (e.g. "<|think|>" for Gemma)
+	toolAllowlist      []string // if non-empty, only these tools are sent to the LLM
 }
 
 // New creates a Router from the loaded config and provider registry.
@@ -49,10 +53,14 @@ func New(cfg *config.Config, registry *llm.Registry) *Router {
 
 // RouteResult carries everything needed to execute a chat call.
 type RouteResult struct {
-	Provider     llm.LLMProvider
-	Model        string // resolved model identifier sent to the provider
-	Role         string // resolved role
-	SystemPrompt string // filled system prompt (may be empty)
+	Provider           llm.LLMProvider
+	Model              string // resolved model identifier sent to the provider
+	Role               string // resolved role
+	SystemPrompt       string // filled system prompt (may be empty)
+	TextToolCalls      bool     // when true, skip native tool calling and parse tool calls from text
+	FoldSystemIntoUser bool     // when true, prepend system content to the first user message
+	SystemPrefix       string   // prepended to the system prompt before it is sent
+	ToolAllowlist      []string // if non-empty, only these tools are sent to the LLM
 }
 
 // LoadFromDB populates the in-memory role cache from the database.
@@ -88,6 +96,29 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 		if prov, ok := provByID[role.ProviderID]; ok {
 			cr.providerName = prov.Name
 			cr.defaultModel = prov.ModelName
+			if v, ok := prov.Config["text_tool_calls"]; ok {
+				cr.textToolCalls, _ = v.(bool)
+			}
+			if v, ok := prov.Config["fold_system_into_user"]; ok {
+				cr.foldSystemIntoUser, _ = v.(bool)
+			}
+			if v, ok := prov.Config["system_prefix"]; ok {
+				cr.systemPrefix, _ = v.(string)
+			}
+			// Provider-level allowlist (fallback when role doesn't define its own).
+			if v, ok := prov.Config["tool_allowlist"]; ok {
+				if raw, ok := v.([]interface{}); ok {
+					for _, item := range raw {
+						if s, ok := item.(string); ok {
+							cr.toolAllowlist = append(cr.toolAllowlist, s)
+						}
+					}
+				}
+			}
+		}
+		// Role-level allowlist overrides the provider-level one.
+		if len(role.AllowedTools) > 0 {
+			cr.toolAllowlist = role.AllowedTools
 		}
 		r.rolesByName[role.Name] = cr
 		for _, tt := range role.TaskTypes {
@@ -209,10 +240,14 @@ func (r *Router) routeFromCache(cr *cachedRole) (*RouteResult, error) {
 		model = cr.defaultModel
 	}
 	return &RouteResult{
-		Provider:     prov,
-		Model:        model,
-		Role:         def.Name,
-		SystemPrompt: def.SystemPrompt,
+		Provider:           prov,
+		Model:              model,
+		Role:               def.Name,
+		SystemPrompt:       def.SystemPrompt,
+		TextToolCalls:      cr.textToolCalls,
+		FoldSystemIntoUser: cr.foldSystemIntoUser,
+		SystemPrefix:       cr.systemPrefix,
+		ToolAllowlist:      cr.toolAllowlist,
 	}, nil
 }
 

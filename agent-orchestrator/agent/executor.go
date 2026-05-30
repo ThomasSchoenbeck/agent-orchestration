@@ -2,7 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"agent-orchestrator/api"
@@ -187,40 +191,104 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 
 	// Build the initial system + user message.
 	systemMsg := e.buildSystemMessage(task, route)
+	if route.SystemPrefix != "" && systemMsg != "" {
+		systemMsg = route.SystemPrefix + "\n" + systemMsg
+	}
 	userMsg := e.buildUserMessage(task)
 
-	// Log the full prompt so the user can see what was sent to the LLM.
-	tlog.LogWithMeta(ctx, "info", "LLM prompt", map[string]interface{}{
-		"provider": route.Provider.Name(),
-		"model":    route.Model,
-		"system":   systemMsg,
-		"user":     userMsg,
-	})
-
-	messages := []llm.Message{
-		{Role: "system", Content: systemMsg},
-		{Role: "user", Content: userMsg},
+	// Some models (e.g. Gemma via llama.cpp) have no system role in their chat
+	// template; injecting one breaks tool-call argument generation. Fold the
+	// system content into the first user message instead.
+	var messages []llm.Message
+	if route.FoldSystemIntoUser || systemMsg == "" {
+		content := userMsg
+		if systemMsg != "" {
+			content = systemMsg + "\n\n" + userMsg
+		}
+		messages = []llm.Message{{Role: "user", Content: content}}
+	} else {
+		messages = []llm.Message{
+			{Role: "system", Content: systemMsg},
+			{Role: "user", Content: userMsg},
+		}
 	}
 
-	toolDefs := e.tools.List()
+	// In text tool call mode we don't send tool definitions to the LLM —
+	// the model outputs JSON blocks that we parse ourselves.
+	var toolDefs []llm.ToolDef
+	if !route.TextToolCalls {
+		all := e.tools.List()
+		// Use the role's configured allowlist; fall back to built-in defaults for
+		// known roles so the platform works out of the box without any config.
+		// Clearing the field in the UI restores the defaults, not "all tools".
+		allowlist := route.ToolAllowlist
+		if len(allowlist) == 0 {
+			allowlist = defaultToolsForRole(route.Role)
+		}
+		if len(allowlist) > 0 {
+			allowed := make(map[string]bool, len(allowlist))
+			for _, name := range allowlist {
+				allowed[name] = true
+			}
+			for _, t := range all {
+				if allowed[t.Name] {
+					toolDefs = append(toolDefs, t)
+				}
+			}
+		} else {
+			toolDefs = all
+		}
+	}
+
+	// Log the full request so the UI shows exactly what is sent to the LLM.
+	promptMeta := map[string]interface{}{
+		"provider":      route.Provider.Name(),
+		"model":         route.Model,
+		"system":        systemMsg,
+		"system_prefix": route.SystemPrefix,
+		"user":          userMsg,
+		"tool_count":    len(toolDefs),
+		"tool_choice":   map[bool]string{true: "auto", false: "none"}[len(toolDefs) > 0],
+	}
+	if len(toolDefs) > 0 {
+		names := make([]string, len(toolDefs))
+		for i, t := range toolDefs {
+			names[i] = t.Name
+		}
+		promptMeta["tools"] = names
+	}
+	tlog.LogWithMeta(ctx, "info", "LLM prompt", promptMeta)
+
+	// consecutiveErrorRounds counts rounds where every tool call returned an
+	// error. After 3 such rounds we abort — the model is stuck.
+	consecutiveErrorRounds := 0
+	const maxConsecutiveErrorRounds = 3
 
 	// LLM ↔ tool loop.
 	for round := 0; round < maxToolRounds; round++ {
 		tlog.InfoCtx(ctx, "calling LLM provider=%q model=%q round=%d messages=%d",
 			route.Provider.Name(), route.Model, round, len(messages))
-		resp, callErr := route.Provider.Chat(ctx, llm.ChatRequest{
-			Model:     route.Model,
-			Messages:  messages,
-			Tools:     toolDefs,
-			MaxTokens: 8192,
-		})
+		req := llm.ChatRequest{
+			Model:    route.Model,
+			Messages: messages,
+			Tools:    toolDefs,
+		}
+		if len(toolDefs) > 0 {
+			req.ToolChoice = "auto"
+		}
+		resp, callErr := route.Provider.Chat(ctx, req)
 		if callErr != nil {
 			tlog.ErrorCtx(ctx, "LLM call failed (round=%d): %v", round, callErr)
 			return nil, db.TaskStatusFailed, totalTokens, fmt.Errorf("llm chat (round %d): %w", round, callErr)
 		}
 		totalTokens += resp.TokensUsed
 
-		// Log the full response content and any tool calls.
+		// In text mode, parse tool calls out of the response content.
+		if route.TextToolCalls && len(resp.ToolCalls) == 0 {
+			resp.ToolCalls = parseTextToolCalls(resp.Content)
+		}
+
+		// Log the full response.
 		respMeta := map[string]interface{}{
 			"round":       round,
 			"stop_reason": resp.StopReason,
@@ -239,27 +307,57 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 				round, resp.StopReason, len(resp.ToolCalls), resp.TokensUsed),
 			respMeta)
 
-		// Append assistant turn.
+		// Append assistant turn — include ToolCalls so the model can correlate
+		// tool results with what it requested in previous rounds.
 		messages = append(messages, llm.Message{
-			Role:    "assistant",
-			Content: resp.Content,
+			Role:      "assistant",
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
 		})
 
 		// No tool calls — we're done.
-		if resp.StopReason == "end_turn" || len(resp.ToolCalls) == 0 {
+		if len(resp.ToolCalls) == 0 {
 			tlog.InfoCtx(ctx, "task complete after %d round(s), total_tokens=%d", round+1, totalTokens)
 			return map[string]interface{}{
 				"output": resp.Content,
 			}, db.TaskStatusCompleted, totalTokens, nil
 		}
 
-		// Execute each tool call and build tool-result messages.
+		// Execute each tool call and collect results.
+		roundHadSuccess := false
+		var textResults []string // used in text mode
 		for _, tc := range resp.ToolCalls {
-			toolResult, jsonErr := e.tools.ExecuteJSON(ctx, tc.Name, tc.Arguments)
-			toolResultStr := toolResult
-			if jsonErr != nil {
-				tlog.Warn("tool %s error: %v", tc.Name, jsonErr)
-				toolResultStr = fmt.Sprintf(`{"error":%q}`, jsonErr.Error())
+			// Inject repo_path for file tools when the LLM omitted it.
+			if task.WorktreePath != "" {
+				if tc.Arguments == nil {
+					tc.Arguments = make(map[string]interface{})
+				}
+				if _, ok := tc.Arguments["repo_path"]; !ok {
+					tc.Arguments["repo_path"] = task.WorktreePath
+				}
+				// Strip workspace prefix from file_path if the model erroneously
+				// included it (e.g. "data/worktrees/.../test.txt" → "test.txt").
+				if fp, ok := tc.Arguments["file_path"].(string); ok {
+					prefix := filepath.ToSlash(task.WorktreePath)
+					cleanFP := strings.TrimPrefix(strings.TrimPrefix(filepath.ToSlash(fp), prefix), "/")
+					if cleanFP != fp {
+						tc.Arguments["file_path"] = cleanFP
+					}
+				}
+			}
+			// Validate required arguments; give the model a specific error.
+			toolResultStr := validateToolArgs(e.tools, tc.Name, tc.Arguments)
+			if toolResultStr == "" {
+				result, jsonErr := e.tools.ExecuteJSON(ctx, tc.Name, tc.Arguments)
+				if jsonErr != nil {
+					tlog.Warn("tool %s error: %v", tc.Name, jsonErr)
+					toolResultStr = fmt.Sprintf(`{"error":%q}`, jsonErr.Error())
+				} else {
+					toolResultStr = result
+				}
+			}
+			if !strings.HasPrefix(toolResultStr, `{"error"`) {
+				roundHadSuccess = true
 			}
 			tlog.LogWithMeta(ctx, "info", fmt.Sprintf("tool call: %s", tc.Name),
 				map[string]interface{}{
@@ -267,11 +365,36 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 					"arguments": tc.Arguments,
 					"result":    toolResultStr,
 				})
+			if route.TextToolCalls {
+				textResults = append(textResults, fmt.Sprintf("[%s] %s", tc.Name, toolResultStr))
+			} else {
+				messages = append(messages, llm.Message{
+					Role:       "tool",
+					Content:    toolResultStr,
+					ToolCallID: tc.ID,
+				})
+			}
+		}
+
+		// In text mode, bundle all tool results into one user message.
+		if route.TextToolCalls {
 			messages = append(messages, llm.Message{
-				Role:       "tool",
-				Content:    toolResultStr,
-				ToolCallID: tc.ID,
+				Role:    "user",
+				Content: "Tool results:\n" + strings.Join(textResults, "\n"),
 			})
+		}
+
+		// Abort if the model has been stuck producing only failing tool calls.
+		if !roundHadSuccess {
+			consecutiveErrorRounds++
+			if consecutiveErrorRounds >= maxConsecutiveErrorRounds {
+				tlog.WarnCtx(ctx, "aborting after %d consecutive rounds with all tool calls failing", consecutiveErrorRounds)
+				return map[string]interface{}{
+					"warning": fmt.Sprintf("aborted after %d consecutive all-error tool rounds", consecutiveErrorRounds),
+				}, db.TaskStatusFailed, totalTokens, fmt.Errorf("model stuck: %d consecutive rounds of failing tool calls", consecutiveErrorRounds)
+			}
+		} else {
+			consecutiveErrorRounds = 0
 		}
 	}
 
@@ -287,6 +410,95 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 	return map[string]interface{}{
 		"warning": "max tool rounds exceeded with no assistant output",
 	}, db.TaskStatusFailed, totalTokens, nil
+}
+
+// textToolCallRe extracts fenced code blocks (```json ... ``` or ``` ... ```)
+// so we can parse tool calls the model emits as text rather than native calls.
+var textToolCallRe = regexp.MustCompile("(?s)```(?:json)?\\s*\\n?([\\s\\S]*?)\\n?```")
+
+// parseTextToolCalls scans content for JSON blocks containing a "tool_call" key
+// and returns them as ToolCall values.
+func parseTextToolCalls(content string) []llm.ToolCall {
+	matches := textToolCallRe.FindAllStringSubmatch(content, -1)
+	var calls []llm.ToolCall
+	for i, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(m[1])), &obj); err != nil {
+			continue
+		}
+		tcRaw, ok := obj["tool_call"]
+		if !ok {
+			continue
+		}
+		tcMap, ok := tcRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := tcMap["name"].(string)
+		if name == "" {
+			continue
+		}
+		args, _ := tcMap["arguments"].(map[string]interface{})
+		calls = append(calls, llm.ToolCall{
+			ID:        fmt.Sprintf("text_call_%d", i),
+			Name:      name,
+			Arguments: args,
+		})
+	}
+	return calls
+}
+
+// defaultToolsForRole returns the built-in tool set for well-known roles.
+// These act as the runtime fallback when no explicit allowlist is configured —
+// the platform works correctly out of the box without any setup.
+// Returning nil means send all tools (for unknown/custom roles).
+func defaultToolsForRole(role string) []string {
+	switch role {
+	case "worker":
+		return []string{"read_file", "write_file", "list_files", "apply_diff", "run_tests", "task_comment"}
+	case "reviewer":
+		return []string{"read_file", "list_files", "task_comment"}
+	case "orchestrator":
+		return []string{"list_tasks", "create_work_package", "plan_project", "query_context", "save_context", "task_comment"}
+	default:
+		return nil // unknown role: send all tools
+	}
+}
+
+// validateToolArgs checks that all required arguments for the named tool are
+// present in args. Returns an instructional error JSON string if any are
+// missing, or "" if the call is valid and should proceed.
+func validateToolArgs(reg *tools.Registry, toolName string, args map[string]interface{}) string {
+	def, err := reg.Get(toolName)
+	if err != nil {
+		// Unknown tool — let ExecuteJSON handle it.
+		return ""
+	}
+	var missing []string
+	for _, req := range def.Required {
+		if _, ok := args[req]; !ok {
+			missing = append(missing, req)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	// Build a detailed hint that lists every parameter with its type and description.
+	var paramDocs []string
+	for name, p := range def.Parameters {
+		paramDocs = append(paramDocs, fmt.Sprintf("%s (%s): %s", name, p.Type, p.Description))
+	}
+	hint := fmt.Sprintf(
+		"missing required arguments: %s. %s accepts: %s",
+		strings.Join(missing, ", "),
+		toolName,
+		strings.Join(paramDocs, "; "),
+	)
+	b, _ := json.Marshal(map[string]string{"error": hint})
+	return string(b)
 }
 
 // commitTaskWork stages, commits, and pushes any changes in the worktree.
@@ -339,11 +551,61 @@ Respond with a JSON object containing:
 Be constructive. Reference specific files and line numbers where possible.`
 	}
 
-	// Generic fallback — tell the agent to use available tools to do real work.
-	return fmt.Sprintf(
-		"You are a software development agent. Use the available tools (read_file, write_file, list_files, run_tests, etc.) to complete the task.\n\nTask ID: %s\nType: %s\nRole: %s",
-		task.ID, task.Type, task.Role,
-	)
+	// Generic fallback.
+	if route.TextToolCalls {
+		// Text mode: tools are not sent via the API, so document them in the prompt.
+		toolDocs := e.buildToolDocs()
+		return fmt.Sprintf(
+			"You are a software development agent. Complete the task by calling tools using JSON code blocks.\n\n"+
+				"%s\n\nTask ID: %s\nType: %s\nRole: %s",
+			toolDocs, task.ID, task.Type, task.Role,
+		)
+	}
+	// Normal mode: tools are sent via the API.
+	return "You are a precise software development agent. " +
+		"Perform actions exclusively by invoking the provided tools. " +
+		"Always supply correct JSON arguments that strictly match the required schema. " +
+		"Do not respond in chat text when a tool can complete the task."
+}
+
+// buildToolDocs generates human-readable tool documentation for text-mode prompts
+// (where tools are not sent via the API and the model must emit JSON code blocks).
+func (e *Executor) buildToolDocs() string {
+	defs := e.tools.List()
+	if len(defs) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("## How to call tools\n")
+	sb.WriteString("Output a fenced JSON code block for each tool call:\n")
+	sb.WriteString("```json\n{\"tool_call\": {\"name\": \"write_file\", \"arguments\": {\"file_path\": \"hello.txt\", \"content\": \"hello world!\"}}}\n```\n")
+	sb.WriteString("You will receive the tool result, then continue.\n\n")
+	sb.WriteString("## Available Tools\n")
+	for _, t := range defs {
+		sb.WriteString("\n### ")
+		sb.WriteString(t.Name)
+		sb.WriteString("\n")
+		sb.WriteString(t.Description)
+		sb.WriteString("\n")
+		// Required args first.
+		requiredSet := make(map[string]bool, len(t.InputSchema.Required))
+		for _, r := range t.InputSchema.Required {
+			requiredSet[r] = true
+		}
+		for _, name := range t.InputSchema.Required {
+			if p, ok := t.InputSchema.Properties[name]; ok {
+				sb.WriteString(fmt.Sprintf("- %s (%s, REQUIRED): %s\n", name, p.Type, p.Description))
+			}
+		}
+		// Optional args.
+		for name, p := range t.InputSchema.Properties {
+			if requiredSet[name] || name == "repo_path" {
+				continue // skip required (already listed) and auto-injected repo_path
+			}
+			sb.WriteString(fmt.Sprintf("- %s (%s, optional): %s\n", name, p.Type, p.Description))
+		}
+	}
+	return sb.String()
 }
 
 // buildUserMessage constructs the initial user message from the task payload.
@@ -363,11 +625,13 @@ func (e *Executor) buildUserMessage(task *db.Task) string {
 	if msg == "" {
 		msg = fmt.Sprintf("Execute task %s (type=%s, role=%s).", task.ID, task.Type, task.Role)
 	}
-	// Tell the agent where to find its workspace so it can use file tools.
+	// Tell the agent where its workspace is. Use forward slashes so the model
+	// never sees backslashes mid-sentence, which can break JSON argument generation.
 	if task.WorktreePath != "" {
-		msg += fmt.Sprintf("\n\nWorkspace directory: %s\nUse this path as repo_path when calling read_file, write_file, list_files, and other file tools.", task.WorktreePath)
+		msg += fmt.Sprintf("\n\nWorkspace directory: %s", filepath.ToSlash(task.WorktreePath))
 	} else {
 		e.log.ForTask(task.ID).Warn("task has no WorktreePath — agent will not be able to read or write files")
 	}
+	msg += "\n\nPlease respond with a structured tool call."
 	return msg
 }

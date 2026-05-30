@@ -16,6 +16,23 @@ import (
 // Roles (agent role definitions)
 // =========================================================================
 
+// defaultToolsForRole returns the suggested tool set for well-known role names.
+// These are applied when a new role is created without an explicit allowed_tools
+// list, so the UI immediately shows a sensible starting point for small models.
+// Returning nil means "no restriction — send all tools".
+func defaultToolsForRole(name string) []string {
+	switch name {
+	case "worker":
+		return []string{"read_file", "write_file", "list_files", "apply_diff", "run_tests", "task_comment"}
+	case "reviewer":
+		return []string{"read_file", "list_files", "task_comment"}
+	case "orchestrator":
+		return []string{"list_tasks", "create_work_package", "plan_project", "query_context", "save_context", "task_comment"}
+	default:
+		return nil
+	}
+}
+
 func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -45,6 +62,11 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 			rd.MaxTokens = 4096
 		}
 		rd.Enabled = true
+		// Pre-populate allowed_tools with sensible defaults when not provided.
+		// Users can edit these in the UI at any time.
+		if len(rd.AllowedTools) == 0 {
+			rd.AllowedTools = defaultToolsForRole(rd.Name)
+		}
 		if err := s.db.CreateRoleDefinition(r.Context(), &rd); err != nil {
 			s.internalError(w, err)
 			return
@@ -161,6 +183,7 @@ func (s *Server) handleRoleSeed(w http.ResponseWriter, r *http.Request) {
 				rd.ModelOverride = model.Model
 			}
 		}
+		rd.AllowedTools = defaultToolsForRole(roleName)
 		toSeed = append(toSeed, rd)
 	}
 

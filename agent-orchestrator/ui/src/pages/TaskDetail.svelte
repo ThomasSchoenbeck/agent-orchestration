@@ -28,6 +28,8 @@
     deleteComment,
     listBranches,
     listCommits,
+    readFile,
+    deleteTaskLogs,
     getAgent,
     listLogs,
   } from "../lib/api.js"
@@ -86,10 +88,38 @@
   let reviews = $state([])
 
   // ── Code panel ────────────────────────────────────────────────────────────
-  let taskBranch      = $state('')   // "task/<taskId>"
-  let taskBranchExists = $state(false)
-  let taskCommits     = $state([])
-  let codeLoading     = $state(false)
+  let taskBranch        = $state('')   // "task/<taskId>"
+  let taskBranchExists  = $state(false)
+  let taskCommits       = $state([])
+  let codeLoading       = $state(false)
+  let selectedFilePath    = $state(null)
+  let selectedFileContent = $state(null)
+
+  // ── Event clearing ────────────────────────────────────────────────────────
+  let clearingEvents = $state(false)
+
+  async function clearEvents() {
+    if (!confirm('Delete all events for this task?')) return
+    clearingEvents = true
+    try {
+      await deleteTaskLogs(task.id)
+    } finally {
+      clearingEvents = false
+      taskLogs = []
+      agentExecLogs = []
+    }
+  }
+
+  async function handleFileSelect(path) {
+    selectedFilePath = path
+    selectedFileContent = null
+    try {
+      const data = await readFile(task.project_id, taskBranch, path)
+      selectedFileContent = data?.content ?? ''
+    } catch {
+      selectedFileContent = '(error loading file)'
+    }
+  }
 
   async function loadCodePanel(t) {
     if (!t.project_id) return
@@ -1015,7 +1045,16 @@
       {/if}
 
       <div class="mt-6">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">Task Events</h3>
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold text-gray-300">Task Events</h3>
+          {#if allEvents.length > 0}
+            <button
+              class="px-2 py-0.5 text-xs rounded border border-red-800 text-red-400 hover:bg-red-900 transition-colors disabled:opacity-50"
+              onclick={clearEvents}
+              disabled={clearingEvents}
+            >{clearingEvents ? 'Clearing…' : 'Clear events'}</button>
+          {/if}
+        </div>
         {#if logsLoading}
           <p class="text-xs text-gray-400">Loading events…</p>
         {:else if allEvents.length === 0}
@@ -1089,15 +1128,23 @@
 
         {#if codeLoading}
           <p class="text-xs text-gray-500">Loading…</p>
-        {:else if taskBranchExists}
+        {:else}
           <div class="flex gap-4">
-            <!-- File tree -->
-            <div class="flex-1 min-w-0 border border-surface-600 rounded overflow-hidden" style="height:280px">
-              <FileTree projectId={task.project_id} ref={taskBranch} onFileSelect={() => {}} />
+            <!-- File tree (fixed 220px) -->
+            <div class="shrink-0 border border-surface-600 rounded overflow-hidden" style="width:220px;height:280px">
+              <FileTree projectId={task.project_id} ref={taskBranch} onFileSelect={handleFileSelect} />
             </div>
 
+            <!-- File content viewer -->
+            {#if selectedFilePath}
+              <div class="flex-1 min-w-0 flex flex-col overflow-hidden">
+                <div class="text-xs text-gray-500 mb-1 font-mono truncate">{selectedFilePath}</div>
+                <pre class="text-xs font-mono bg-surface-700 rounded p-2 overflow-auto flex-1" style="max-height:264px">{selectedFileContent ?? 'Loading…'}</pre>
+              </div>
+            {/if}
+
             <!-- Commit log -->
-            <div class="w-64 shrink-0 flex flex-col gap-1 overflow-y-auto" style="max-height:280px">
+            <div class="w-56 shrink-0 flex flex-col gap-1 overflow-y-auto" style="max-height:280px">
               {#if taskCommits.length === 0}
                 <p class="text-xs text-gray-600 italic">No commits yet</p>
               {:else}

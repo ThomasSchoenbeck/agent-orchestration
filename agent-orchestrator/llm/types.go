@@ -9,6 +9,10 @@ type Message struct {
 	Content string `json:"content"`
 	// ToolCallID is set when Role == "tool" (the result of a tool call).
 	ToolCallID string `json:"tool_call_id,omitempty"`
+	// ToolCalls is set on assistant messages that triggered tool calls.
+	// Must be included in conversation history for the model to understand
+	// what happened in previous rounds.
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // ChatRequest represents a completion/chat request.

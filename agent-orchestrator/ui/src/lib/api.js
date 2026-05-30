@@ -111,6 +111,8 @@ export const deleteLogs = (before) => {
   const qs = before ? '?before=' + encodeURIComponent(before) : ''
   return request('DELETE', `/api/logs${qs}`)
 }
+export const deleteTaskLogs = (taskId) =>
+  request('DELETE', `/api/tasks/${taskId}/logs`)
 
 // ── Metrics ──────────────────────────────────────────────────────────────────
 export const getMetrics = () => get('/api/metrics')

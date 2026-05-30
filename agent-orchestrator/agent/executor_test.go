@@ -756,6 +756,87 @@ func TestExecutor_UppercaseStatusOnFailure(t *testing.T) {
 	}
 }
 
+// TestExecutor_InjectsRepoPath verifies that the executor injects task.WorktreePath
+// as repo_path into tool call arguments when the LLM omits it.
+func TestExecutor_InjectsRepoPath(t *testing.T) {
+	const agentID = "inject-agent"
+	const worktreePath = "/tmp/test-worktree"
+
+	// Record the arguments received by the tool.
+	var capturedArgs atomic.Value
+	capturedArgs.Store(map[string]interface{}{})
+
+	task := &db.Task{
+		ID:          "inject-task",
+		Type:        "implement",
+		Role:        "worker",
+		Status:      db.TaskStatusDeveloping,
+		WorktreePath: worktreePath,
+		Payload:     map[string]interface{}{"description": "Test injection"},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/comments", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := buildExecutorConfig()
+	reg := llm.NewRegistry()
+	_ = reg.Register("mock", &mockLLMProvider{
+		name: "mock",
+		response: llm.ChatResponse{
+			// First call returns a tool call with no repo_path.
+			// Second call (after tool result) ends the loop.
+			Content:    "",
+			StopReason: "tool_calls",
+			TokensUsed: 10,
+			ToolCalls: []llm.ToolCall{
+				{ID: "tc1", Name: "spy_tool", Arguments: map[string]interface{}{
+					"file_path": "hello.txt",
+					// repo_path intentionally omitted
+				}},
+			},
+		},
+	})
+
+	rtr := router.New(cfg, reg)
+	toolReg := tools.NewRegistry()
+
+	// Register a spy tool that captures args.
+	_ = toolReg.Register(tools.Definition{
+		Name:    "spy_tool",
+		Handler: func(_ context.Context, args map[string]interface{}) (interface{}, error) {
+			capturedArgs.Store(args)
+			return map[string]interface{}{"ok": true}, nil
+		},
+	})
+
+	client := agent.NewServerClient(srv.URL)
+	exec := agent.NewExecutor(rtr, toolReg, client, agentID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	exec.Run(ctx, task)
+
+	args := capturedArgs.Load().(map[string]interface{})
+	got, ok := args["repo_path"]
+	if !ok {
+		t.Fatal("expected repo_path to be injected into tool arguments, but it was missing")
+	}
+	if got != worktreePath {
+		t.Errorf("repo_path = %q, want %q", got, worktreePath)
+	}
+}
+
 // TestExecutor_LogsErrorToServer verifies that when the LLM fails, the executor
 // ships an error-level entry to POST /api/logs.
 func TestExecutor_LogsErrorToServer(t *testing.T) {

@@ -25,6 +25,7 @@
     context_include: '',  // space-separated tags
     context_exclude: '',
     task_types:      '',
+    allowed_tools:   '',
     temperature:     0.7,
     max_tokens:      4096,
     enabled:         true,
@@ -107,6 +108,7 @@
       context_include: joinTags(r.context_include),
       context_exclude: joinTags(r.context_exclude),
       task_types:      joinTags(r.task_types),
+      allowed_tools:   joinTags(r.allowed_tools),
       temperature:     r.temperature ?? 0.7,
       max_tokens:      r.max_tokens ?? 4096,
       enabled:         r.enabled,
@@ -129,6 +131,7 @@
       context_include: splitTags(form.context_include),
       context_exclude: splitTags(form.context_exclude),
       task_types:      splitTags(form.task_types),
+      allowed_tools:   splitTags(form.allowed_tools),
       temperature:     parseFloat(form.temperature) || 0.7,
       max_tokens:      parseInt(form.max_tokens, 10) || 4096,
       enabled:         form.enabled,
@@ -330,6 +333,18 @@
                    text-gray-200 font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
             placeholder="e.g. implement review test"
             bind:value={form.task_types}
+          />
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">
+            Tool allowlist
+            <span class="text-gray-600 ml-1">(space or comma-separated — leave empty to send all tools)</span>
+          </label>
+          <input
+            class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
+                   text-gray-200 font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
+            placeholder="e.g. write_file read_file list_files apply_diff run_tests"
+            bind:value={form.allowed_tools}
           />
         </div>
       </div>

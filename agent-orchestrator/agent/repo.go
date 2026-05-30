@@ -28,48 +28,41 @@ func CommitAndPush(worktreePath, commitMsg, authorName, authorEmail, remoteURL, 
 		return "", fmt.Errorf("repo.CommitAndPush worktree: %w", err)
 	}
 
-	// Check status BEFORE staging so we can return early cleanly.
+	// Check status BEFORE staging.
 	status, err := wt.Status()
 	if err != nil {
 		return "", fmt.Errorf("repo.CommitAndPush status: %w", err)
 	}
-	if status.IsClean() {
-		// Nothing changed — resolve and return current HEAD if it exists.
-		head, err := repo.Head()
-		if err != nil {
-			// Unborn branch — no commits yet, nothing to push.
-			return "", nil
+
+	if !status.IsClean() {
+		// Stage and commit new changes.
+		if err := wt.AddWithOptions(&gogit.AddOptions{All: true}); err != nil {
+			return "", fmt.Errorf("repo.CommitAndPush add: %w", err)
 		}
-		return head.Hash().String(), nil
+		sig := &object.Signature{
+			Name:  authorName,
+			Email: authorEmail,
+			When:  time.Now().UTC(),
+		}
+		if _, err = wt.Commit(commitMsg, &gogit.CommitOptions{Author: sig}); err != nil {
+			return "", fmt.Errorf("repo.CommitAndPush commit: %w", err)
+		}
 	}
 
-	// Stage everything.
-	if err := wt.AddWithOptions(&gogit.AddOptions{All: true}); err != nil {
-		return "", fmt.Errorf("repo.CommitAndPush add: %w", err)
-	}
-
-	sig := &object.Signature{
-		Name:  authorName,
-		Email: authorEmail,
-		When:  time.Now().UTC(),
-	}
-	hash, err := wt.Commit(commitMsg, &gogit.CommitOptions{Author: sig})
-	if err != nil {
-		return "", fmt.Errorf("repo.CommitAndPush commit: %w", err)
-	}
-
-	// Resolve the local branch so we can push it explicitly.
-	// Using an explicit refspec avoids go-git defaulting to "master" and
-	// ensures the task branch is created on the remote even for orphan worktrees.
+	// Resolve HEAD — unborn branch means nothing to push.
 	head, err := repo.Head()
 	if err != nil {
-		return "", fmt.Errorf("repo.CommitAndPush head after commit: %w", err)
+		return "", nil
 	}
-	localBranch := head.Name() // e.g. refs/heads/task/<id>
-	refSpec := gogitconfig.RefSpec(localBranch.String() + ":" + localBranch.String())
 
+	// Push over HTTP. The worktree's origin was set to the embedded HTTP server
+	// URL by the server during worktree provisioning (SetRemoteURL in claim.go),
+	// so both colocated and remote agents use go-git's HTTP transport here.
+	// This avoids go-git's unreliable local-file push packfile negotiation.
+	refSpec := gogitconfig.RefSpec("+" + head.Name().String() + ":" + head.Name().String())
 	pushOpts := &gogit.PushOptions{
 		RefSpecs: []gogitconfig.RefSpec{refSpec},
+		Force:    true,
 	}
 	if remoteURL != "" {
 		pushOpts.RemoteURL = remoteURL
@@ -81,5 +74,5 @@ func CommitAndPush(worktreePath, commitMsg, authorName, authorEmail, remoteURL, 
 		return "", fmt.Errorf("repo.CommitAndPush push: %w", err)
 	}
 
-	return hash.String(), nil
+	return head.Hash().String(), nil
 }
