@@ -22,9 +22,6 @@ func (d *Database) CreateRoleDefinition(ctx context.Context, r *RoleDefinition) 
 	if r.ContextExclude == nil {
 		r.ContextExclude = []string{}
 	}
-	if r.TaskTypes == nil {
-		r.TaskTypes = []string{}
-	}
 	if r.Capabilities == nil {
 		r.Capabilities = []string{}
 	}
@@ -35,13 +32,13 @@ func (d *Database) CreateRoleDefinition(ctx context.Context, r *RoleDefinition) 
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO agent_role_definitions
 		 (id, name, label, description, provider_id, model_override, system_prompt,
-		  context_include, context_exclude, task_types, capabilities, allowed_tools,
+		  context_include, context_exclude, capabilities, allowed_tools,
 		  temperature, max_tokens, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, r.Name, r.Label, r.Description,
 		nullableStr(r.ProviderID), r.ModelOverride, r.SystemPrompt,
 		marshalJSONArray(r.ContextInclude), marshalJSONArray(r.ContextExclude),
-		marshalJSONArray(r.TaskTypes), marshalJSONArray(r.Capabilities), marshalJSONArray(r.AllowedTools),
+		marshalJSONArray(r.Capabilities), marshalJSONArray(r.AllowedTools),
 		r.Temperature, r.MaxTokens, r.Enabled,
 		r.CreatedAt, r.UpdatedAt,
 	)
@@ -87,9 +84,6 @@ func (d *Database) UpdateRoleDefinition(ctx context.Context, r *RoleDefinition) 
 	if r.ContextExclude == nil {
 		r.ContextExclude = []string{}
 	}
-	if r.TaskTypes == nil {
-		r.TaskTypes = []string{}
-	}
 	if r.Capabilities == nil {
 		r.Capabilities = []string{}
 	}
@@ -100,13 +94,13 @@ func (d *Database) UpdateRoleDefinition(ctx context.Context, r *RoleDefinition) 
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE agent_role_definitions SET
 		 name=?, label=?, description=?, provider_id=?, model_override=?, system_prompt=?,
-		 context_include=?, context_exclude=?, task_types=?, capabilities=?, allowed_tools=?,
+		 context_include=?, context_exclude=?, capabilities=?, allowed_tools=?,
 		 temperature=?, max_tokens=?, enabled=?, updated_at=?
 		 WHERE id=?`,
 		r.Name, r.Label, r.Description,
 		nullableStr(r.ProviderID), r.ModelOverride, r.SystemPrompt,
 		marshalJSONArray(r.ContextInclude), marshalJSONArray(r.ContextExclude),
-		marshalJSONArray(r.TaskTypes), marshalJSONArray(r.Capabilities), marshalJSONArray(r.AllowedTools),
+		marshalJSONArray(r.Capabilities), marshalJSONArray(r.AllowedTools),
 		r.Temperature, r.MaxTokens, r.Enabled, r.UpdatedAt, r.ID,
 	)
 	return err
@@ -149,19 +143,19 @@ func (d *Database) SeedRoleDefinitions(ctx context.Context, roles []*RoleDefinit
 // ── SQL / scan helpers ────────────────────────────────────────────────────────
 
 const roleDefSelectSQL = `SELECT id, name, label, description, provider_id, model_override,
-    system_prompt, context_include, context_exclude, task_types, capabilities, allowed_tools,
+    system_prompt, context_include, context_exclude, capabilities, allowed_tools,
     temperature, max_tokens, enabled, created_at, updated_at
     FROM agent_role_definitions`
 
 func scanRoleDef(row *sql.Row) (*RoleDefinition, error) {
 	var r RoleDefinition
 	var providerID sql.NullString
-	var ciJSON, ceJSON, ttJSON, capJSON, atJSON, createdAt, updatedAt string
+	var ciJSON, ceJSON, capJSON, atJSON, createdAt, updatedAt string
 	var enabled int
 	err := row.Scan(
 		&r.ID, &r.Name, &r.Label, &r.Description,
 		&providerID, &r.ModelOverride, &r.SystemPrompt,
-		&ciJSON, &ceJSON, &ttJSON, &capJSON, &atJSON,
+		&ciJSON, &ceJSON, &capJSON, &atJSON,
 		&r.Temperature, &r.MaxTokens, &enabled,
 		&createdAt, &updatedAt,
 	)
@@ -172,7 +166,6 @@ func scanRoleDef(row *sql.Row) (*RoleDefinition, error) {
 	r.Enabled = enabled != 0
 	r.ContextInclude = unmarshalJSONStringSlice(ciJSON)
 	r.ContextExclude = unmarshalJSONStringSlice(ceJSON)
-	r.TaskTypes = unmarshalJSONStringSlice(ttJSON)
 	r.Capabilities = unmarshalJSONStringSlice(capJSON)
 	r.AllowedTools = unmarshalJSONStringSlice(atJSON)
 	r.CreatedAt = parseTime(createdAt)
@@ -185,12 +178,12 @@ func scanRoleDefs(rows *sql.Rows) ([]*RoleDefinition, error) {
 	for rows.Next() {
 		var r RoleDefinition
 		var providerID sql.NullString
-		var ciJSON, ceJSON, ttJSON, capJSON, atJSON, createdAt, updatedAt string
+		var ciJSON, ceJSON, capJSON, atJSON, createdAt, updatedAt string
 		var enabled int
 		if err := rows.Scan(
 			&r.ID, &r.Name, &r.Label, &r.Description,
 			&providerID, &r.ModelOverride, &r.SystemPrompt,
-			&ciJSON, &ceJSON, &ttJSON, &capJSON, &atJSON,
+			&ciJSON, &ceJSON, &capJSON, &atJSON,
 			&r.Temperature, &r.MaxTokens, &enabled,
 			&createdAt, &updatedAt,
 		); err != nil {
@@ -200,7 +193,6 @@ func scanRoleDefs(rows *sql.Rows) ([]*RoleDefinition, error) {
 		r.Enabled = enabled != 0
 		r.ContextInclude = unmarshalJSONStringSlice(ciJSON)
 		r.ContextExclude = unmarshalJSONStringSlice(ceJSON)
-		r.TaskTypes = unmarshalJSONStringSlice(ttJSON)
 		r.Capabilities = unmarshalJSONStringSlice(capJSON)
 		r.AllowedTools = unmarshalJSONStringSlice(atJSON)
 		r.CreatedAt = parseTime(createdAt)

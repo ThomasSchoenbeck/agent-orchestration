@@ -249,7 +249,6 @@ func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int3
 func TestAgent_PollLoop_PicksUpTask(t *testing.T) {
 	task := &db.Task{
 		ID:     "task-poll-001",
-		Type:   "implement",
 		Role:   "worker",
 		Status: db.TaskStatusBacklog,
 	}
@@ -367,7 +366,6 @@ func TestAgent_ReconnectsAfterHeartbeatFailures(t *testing.T) {
 func TestAgent_PollLoop_SkipsWhenProviderUnavailable(t *testing.T) {
 	task := &db.Task{
 		ID:     "no-provider-task",
-		Type:   "implement",
 		Role:   "worker",
 		Status: db.TaskStatusBacklog,
 	}
@@ -404,7 +402,6 @@ func TestAgent_PollLoop_SkipsWhenProviderUnavailable(t *testing.T) {
 func TestAgent_PollLoop_SkipsWrongRoleTask(t *testing.T) {
 	reviewerTask := &db.Task{
 		ID:     "task-reviewer-only",
-		Type:   "review",
 		Role:   "reviewer",
 		Status: db.TaskStatusBacklog,
 	}

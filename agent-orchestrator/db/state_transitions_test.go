@@ -17,7 +17,6 @@ func TestTransitionTaskState_RecordsHistory(t *testing.T) {
 	}
 	task := &db.Task{
 		ProjectID: proj.ID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusBacklog,
 		Priority:  5,
@@ -73,7 +72,7 @@ func TestTransitionTaskState_WrongFromState(t *testing.T) {
 	proj := &db.Project{Name: "bad-from", Status: "active"}
 	_ = d.CreateProject(ctx, proj)
 	task := &db.Task{
-		ProjectID: proj.ID, Type: "implement", Role: "worker",
+		ProjectID: proj.ID, Role: "worker",
 		Status: db.TaskStatusBacklog, Priority: 1, Payload: map[string]interface{}{},
 	}
 	_ = d.CreateTask(ctx, task)
@@ -94,7 +93,7 @@ func TestTransitionTaskState_MultipleTransitions(t *testing.T) {
 	proj := &db.Project{Name: "multi-transition", Status: "active"}
 	_ = d.CreateProject(ctx, proj)
 	task := &db.Task{
-		ProjectID: proj.ID, Type: "implement", Role: "worker",
+		ProjectID: proj.ID, Role: "worker",
 		Status: db.TaskStatusBacklog, Priority: 1, Payload: map[string]interface{}{},
 	}
 	_ = d.CreateTask(ctx, task)

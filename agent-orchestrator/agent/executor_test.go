@@ -53,11 +53,7 @@ func buildExecutorConfig() *config.Config {
 		Models: []config.ModelConfig{
 			{Name: "mock-model", Provider: "mock", Model: "mock-v1", Roles: []string{"worker"}},
 		},
-		Roles:   map[string]string{"worker": "mock-model"},
-		Routing: map[string]string{"implement": "worker"},
-		Prompts: map[string]string{
-			"implement": "Implement: {description}",
-		},
+		Roles:    map[string]string{"worker": "mock-model"},
 		Server:   config.ServerConfig{Port: 8080},
 		Database: config.DatabaseConfig{Path: ":memory:"},
 		Agents: config.AgentConfig{
@@ -125,7 +121,6 @@ func TestExecutor_SubmitsResult(t *testing.T) {
 	client := agent.NewServerClient(srv.URL)
 	task := &db.Task{
 		ID:      "task-001",
-		Type:    "implement",
 		Role:    "worker",
 		Status:  db.TaskStatusDeveloping,
 		Payload: map[string]interface{}{"description": "Write a hello world program"},
@@ -170,15 +165,6 @@ func TestExecutor_RouterFallback(t *testing.T) {
 	}
 	if result.Role != "worker" {
 		t.Errorf("expected role worker, got %s", result.Role)
-	}
-
-	// RouteByTaskType("implement") should map to "worker".
-	result2, err := rtr.RouteByTaskType("implement")
-	if err != nil {
-		t.Fatalf("RouteByTaskType: %v", err)
-	}
-	if result2.Role != "worker" {
-		t.Errorf("expected role worker, got %s", result2.Role)
 	}
 }
 
@@ -259,7 +245,6 @@ func TestRouter_LoadFromDB_ProviderResolution(t *testing.T) {
 		Label:         "Worker",
 		ProviderID:    prov.ID,
 		ModelOverride: "mock-v1",
-		TaskTypes:     []string{"implement"},
 		Enabled:       true,
 	}
 	if err := database.CreateRoleDefinition(ctx, role); err != nil {
@@ -290,54 +275,6 @@ func TestRouter_LoadFromDB_ProviderResolution(t *testing.T) {
 	}
 }
 
-// TestRouter_LoadFromDB_TaskTypeMapping verifies that task type → role mapping
-// loaded from the DB is honoured by RouteByTaskType.
-func TestRouter_LoadFromDB_TaskTypeMapping(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "router_tt_test.db")
-	database, err := db.Open(dbPath)
-	if err != nil {
-		t.Fatalf("db.Open: %v", err)
-	}
-	defer database.Close()
-
-	ctx := context.Background()
-
-	prov := &db.Provider{Name: "mock", Type: "ollama", BaseURL: "http://x", ModelName: "m", Enabled: true}
-	_ = database.CreateProvider(ctx, prov)
-
-	role := &db.RoleDefinition{
-		Name:       "reviewer",
-		Label:      "Reviewer",
-		ProviderID: prov.ID,
-		TaskTypes:  []string{"review", "audit"},
-		Enabled:    true,
-	}
-	_ = database.CreateRoleDefinition(ctx, role)
-
-	cfg := buildExecutorConfig()
-	reg := llm.NewRegistry()
-	_ = reg.Register("mock", &mockLLMProvider{name: "mock"})
-
-	rtr := router.New(cfg, reg)
-	_ = rtr.LoadFromDB(database)
-
-	result, err := rtr.RouteByTaskType("review")
-	if err != nil {
-		t.Fatalf("RouteByTaskType(review): %v", err)
-	}
-	if result.Role != "reviewer" {
-		t.Errorf("expected role reviewer, got %s", result.Role)
-	}
-
-	result2, err := rtr.RouteByTaskType("audit")
-	if err != nil {
-		t.Fatalf("RouteByTaskType(audit): %v", err)
-	}
-	if result2.Role != "reviewer" {
-		t.Errorf("expected role reviewer for audit, got %s", result2.Role)
-	}
-}
-
 // TestRouter_LoadFromDB_DisabledRoleSkipped ensures disabled roles are not
 // added to the routing cache.
 func TestRouter_LoadFromDB_DisabledRoleSkipped(t *testing.T) {
@@ -355,7 +292,6 @@ func TestRouter_LoadFromDB_DisabledRoleSkipped(t *testing.T) {
 		Name:       "disabled-role",
 		Label:      "Disabled",
 		ProviderID: prov.ID,
-		TaskTypes:  []string{"special"},
 		Enabled:    false, // disabled!
 	}
 	_ = database.CreateRoleDefinition(ctx, role)
@@ -444,7 +380,6 @@ func fullExecMockServer(t *testing.T, task *db.Task) (
 func TestAgent_FullTaskExecution(t *testing.T) {
 	task := &db.Task{
 		ID:      "full-exec-task",
-		Type:    "implement",
 		Role:    "worker",
 		Status:  db.TaskStatusBacklog,
 		Payload: map[string]interface{}{"description": "Write hello world"},
@@ -498,7 +433,6 @@ func TestAgent_FullTaskExecution(t *testing.T) {
 func TestAgent_LLMFailure_MarksTaskFailed(t *testing.T) {
 	task := &db.Task{
 		ID:      "fail-exec-task",
-		Type:    "implement",
 		Role:    "worker",
 		Status:  db.TaskStatusBacklog,
 		Payload: map[string]interface{}{"description": "Fail me"},
@@ -564,7 +498,6 @@ func TestExecutor_PostsCompletionComment(t *testing.T) {
 
 	task := &db.Task{
 		ID:      "comment-task",
-		Type:    "implement",
 		Role:    "worker",
 		Status:  db.TaskStatusDeveloping,
 		Payload: map[string]interface{}{"description": "Do something"},
@@ -671,7 +604,6 @@ func TestExecutor_SubmitsForReviewOnSuccess(t *testing.T) {
 
 	task := &db.Task{
 		ID:      "status-task",
-		Type:    "implement",
 		Role:    "worker",
 		Status:  db.TaskStatusDeveloping,
 		Payload: map[string]interface{}{"description": "Verify review submission"},
@@ -728,7 +660,6 @@ func TestExecutor_SubmitsReviewOnReviewingTask(t *testing.T) {
 
 	task := &db.Task{
 		ID:         "review-task",
-		Type:       "", // type-less: routing falls back to the (review) role
 		Role:       "worker",
 		ReviewRole: "reviewer",
 		Status:     db.TaskStatusReviewing,
@@ -791,7 +722,6 @@ func TestExecutor_UppercaseStatusOnFailure(t *testing.T) {
 
 	task := &db.Task{
 		ID:      "fail-status-task",
-		Type:    "implement",
 		Role:    "worker",
 		Status:  db.TaskStatusDeveloping,
 		Payload: map[string]interface{}{"description": "Fail me"},
@@ -843,7 +773,6 @@ func TestExecutor_PushFailureSetsTaskFailed(t *testing.T) {
 
 	task := &db.Task{
 		ID:           "push-fail-task",
-		Type:         "implement",
 		Role:         "worker",
 		Status:       db.TaskStatusDeveloping,
 		WorktreePath: "/nonexistent/worktree/path", // will cause CommitAndPush to fail
@@ -908,7 +837,6 @@ func TestExecutor_InjectsRepoPath(t *testing.T) {
 
 	task := &db.Task{
 		ID:          "inject-task",
-		Type:        "implement",
 		Role:        "worker",
 		Status:      db.TaskStatusDeveloping,
 		WorktreePath: worktreePath,
@@ -988,7 +916,6 @@ func TestExecutor_LogsErrorToServer(t *testing.T) {
 
 	task := &db.Task{
 		ID:      "log-fail-task",
-		Type:    "implement",
 		Role:    "worker",
 		Status:  db.TaskStatusDeveloping,
 		Payload: map[string]interface{}{"description": "Fail me"},

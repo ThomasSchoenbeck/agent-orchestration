@@ -62,10 +62,10 @@ func writeTaskMD(ctxDir string, task *db.Task) error {
 	title, _ := task.Payload["title"].(string)
 	description, _ := task.Payload["description"].(string)
 	if title == "" {
-		title = task.Type
+		title = task.Role
 	}
-	content := fmt.Sprintf("# Task: %s\n\n**ID:** %s\n**Type:** %s\n**Role:** %s\n**Status:** %s\n\n## Description\n\n%s\n",
-		title, task.ID, task.Type, task.Role, task.Status, description)
+	content := fmt.Sprintf("# Task: %s\n\n**ID:** %s\n**Role:** %s\n**Status:** %s\n\n## Description\n\n%s\n",
+		title, task.ID, task.Role, task.Status, description)
 	return os.WriteFile(filepath.Join(ctxDir, "task.md"), []byte(content), 0o644)
 }
 

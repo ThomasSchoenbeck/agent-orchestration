@@ -14,7 +14,7 @@ func TestMergeLocks_CreateAndList(t *testing.T) {
 	proj := &db.Project{Name: "lock-test", Status: "active"}
 	_ = d.CreateProject(ctx, proj)
 	task := &db.Task{
-		ProjectID: proj.ID, Type: "implement", Role: "worker",
+		ProjectID: proj.ID, Role: "worker",
 		Status: db.TaskStatusAwaitingMerge, Priority: 1, Payload: map[string]interface{}{},
 	}
 	_ = d.CreateTask(ctx, task)
@@ -46,7 +46,7 @@ func TestMergeLocks_Delete(t *testing.T) {
 	proj := &db.Project{Name: "lock-del", Status: "active"}
 	_ = d.CreateProject(ctx, proj)
 	task := &db.Task{
-		ProjectID: proj.ID, Type: "implement", Role: "worker",
+		ProjectID: proj.ID, Role: "worker",
 		Status: db.TaskStatusMerging, Priority: 1, Payload: map[string]interface{}{},
 	}
 	_ = d.CreateTask(ctx, task)
@@ -73,11 +73,11 @@ func TestMergeLocks_MultipleTasksOrdering(t *testing.T) {
 	_ = d.CreateProject(ctx, proj)
 
 	t1 := &db.Task{
-		ProjectID: proj.ID, Type: "implement", Role: "worker",
+		ProjectID: proj.ID, Role: "worker",
 		Status: db.TaskStatusMerging, Priority: 1, Payload: map[string]interface{}{},
 	}
 	t2 := &db.Task{
-		ProjectID: proj.ID, Type: "implement", Role: "worker",
+		ProjectID: proj.ID, Role: "worker",
 		Status: db.TaskStatusMerging, Priority: 2, Payload: map[string]interface{}{},
 	}
 	_ = d.CreateTask(ctx, t1)

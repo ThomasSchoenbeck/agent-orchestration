@@ -62,8 +62,7 @@ func IsExecutionState(s string) bool {
 type Task struct {
 	ID              string                 `json:"id"`
 	ProjectID       string                 `json:"project_id"`
-	Type            string                 `json:"type"`   // plan | implement | review | test | ... (deprecated; see Feature 3)
-	Role            string                 `json:"role"`   // orchestrator | worker | reviewer | ...
+	Role            string                 `json:"role"`   // worker | reviewer | planner | ...
 	ReviewRole      string                 `json:"review_role,omitempty"` // role that should handle this task's review step
 	Status          string                 `json:"status"` // BACKLOG | DEVELOPING | AWAITING_REVIEW | REVIEWING | AWAITING_REVISION | AWAITING_MERGE | MERGING | COMPLETED | FAILED
 	Priority        int                    `json:"priority"`
@@ -191,7 +190,6 @@ type RoleDefinition struct {
 	SystemPrompt   string    `json:"system_prompt"`
 	ContextInclude []string  `json:"context_include"`
 	ContextExclude []string  `json:"context_exclude"`
-	TaskTypes      []string  `json:"task_types"`       // task types routed to this role (deprecated; see Feature 3)
 	Capabilities   []string  `json:"capabilities"`     // lifecycle capabilities, e.g. handles_review, creates_tasks, handles_merge
 	AllowedTools   []string  `json:"allowed_tools"`    // if non-empty, only these tools are sent to the LLM
 	Temperature    float64   `json:"temperature"`

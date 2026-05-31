@@ -19,7 +19,6 @@ func TestTaskReviews_CreateAndList(t *testing.T) {
 	}
 	task := &db.Task{
 		ProjectID: proj.ID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusAwaitingReview,
 		Priority:  5,
@@ -70,7 +69,7 @@ func TestTaskReviews_GetByID(t *testing.T) {
 	proj := &db.Project{Name: "rev-get-test", Status: "active"}
 	_ = d.CreateProject(ctx, proj)
 	task := &db.Task{
-		ProjectID: proj.ID, Type: "implement", Role: "worker",
+		ProjectID: proj.ID, Role: "worker",
 		Status: db.TaskStatusReviewing, Priority: 1,
 		Payload: map[string]interface{}{},
 	}
@@ -102,7 +101,7 @@ func TestTaskReviews_ListEmpty(t *testing.T) {
 	proj := &db.Project{Name: "rev-empty", Status: "active"}
 	_ = d.CreateProject(ctx, proj)
 	task := &db.Task{
-		ProjectID: proj.ID, Type: "implement", Role: "worker",
+		ProjectID: proj.ID, Role: "worker",
 		Status: db.TaskStatusBacklog, Priority: 1, Payload: map[string]interface{}{},
 	}
 	_ = d.CreateTask(ctx, task)

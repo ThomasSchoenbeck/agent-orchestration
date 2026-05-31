@@ -25,15 +25,6 @@ func testConfig() *config.Config {
 			"orchestrator": "o4-mini",
 			"reviewer":     "o4-mini",
 		},
-		Routing: map[string]string{
-			"implement": "worker",
-			"plan":      "orchestrator",
-			"review":    "reviewer",
-		},
-		Prompts: map[string]string{
-			"implement": "Implement: {task_description}\nRepo: {repo_path}\nContext: {context}",
-			"review":    "Review: {diff}",
-		},
 		ContextRules: map[string]config.ContextRule{
 			"worker": {
 				Include: []string{"code", "diff", "test_results"},
@@ -94,7 +85,6 @@ func TestRouteByRole_ProviderRolePreferenceFallback(t *testing.T) {
 		Providers: []config.ProviderConfig{},
 		Models:    []config.ModelConfig{},
 		Roles:     map[string]string{},
-		Routing:   map[string]string{},
 	}
 	reg := llm.NewRegistry()
 	p := llm.NewOllamaProvider("local", "http://localhost:11434", "llama3")
@@ -114,95 +104,6 @@ func TestRouteByRole_ProviderRolePreferenceFallback(t *testing.T) {
 	}
 	if result.Role != "reviewer" {
 		t.Errorf("expected role reviewer, got %s", result.Role)
-	}
-}
-
-func TestRouteByTaskType_Implement(t *testing.T) {
-	cfg := testConfig()
-	reg := testRegistry(t, cfg)
-	r := router.New(cfg, reg)
-
-	result, err := r.RouteByTaskType("implement")
-	if err != nil {
-		t.Fatalf("RouteByTaskType: %v", err)
-	}
-	if result.Role != "worker" {
-		t.Errorf("expected role worker, got %s", result.Role)
-	}
-}
-
-func TestRouteByTaskType_FallbackToRole(t *testing.T) {
-	cfg := testConfig()
-	reg := testRegistry(t, cfg)
-	r := router.New(cfg, reg)
-
-	// "worker" is not in routing map but IS a valid role
-	result, err := r.RouteByTaskType("worker")
-	if err != nil {
-		t.Fatalf("RouteByTaskType fallback: %v", err)
-	}
-	if result.Role != "worker" {
-		t.Errorf("expected role worker, got %s", result.Role)
-	}
-}
-
-func TestRoleForTaskType(t *testing.T) {
-	cfg := testConfig()
-	r := router.New(cfg, llm.NewRegistry())
-
-	if role := r.RoleForTaskType("implement"); role != "worker" {
-		t.Errorf("expected worker, got %s", role)
-	}
-	if role := r.RoleForTaskType("unknown-type"); role != "unknown-type" {
-		t.Errorf("expected passthrough, got %s", role)
-	}
-}
-
-// --- Prompter tests ---
-
-func TestBuildPrompt_WithVars(t *testing.T) {
-	cfg := testConfig()
-	r := router.New(cfg, llm.NewRegistry())
-
-	prompt := r.BuildPrompt("implement", map[string]interface{}{
-		"task_description": "Add login endpoint",
-		"repo_path":        "/tmp/myapp",
-		"context":          "Uses JWT auth",
-	})
-	if prompt == "" {
-		t.Fatal("expected non-empty prompt")
-	}
-	if !contains(prompt, "Add login endpoint") {
-		t.Error("prompt missing task_description")
-	}
-	if !contains(prompt, "/tmp/myapp") {
-		t.Error("prompt missing repo_path")
-	}
-}
-
-func TestBuildPrompt_Fallback(t *testing.T) {
-	cfg := testConfig()
-	r := router.New(cfg, llm.NewRegistry())
-
-	prompt := r.BuildPrompt("unknown-type", map[string]interface{}{
-		"payload": "do something",
-	})
-	if !contains(prompt, "do something") {
-		t.Errorf("fallback prompt should include payload, got: %s", prompt)
-	}
-}
-
-func TestBuildPrompt_MissingVar(t *testing.T) {
-	cfg := testConfig()
-	r := router.New(cfg, llm.NewRegistry())
-
-	// {context} is not provided — should remain in output unreplaced
-	prompt := r.BuildPrompt("implement", map[string]interface{}{
-		"task_description": "x",
-		"repo_path":        "y",
-	})
-	if !contains(prompt, "{context}") {
-		t.Errorf("expected unfilled {context} placeholder, got: %s", prompt)
 	}
 }
 
@@ -308,7 +209,6 @@ func setupProviderWithModels(
 		Name:       roleName,
 		Label:      roleName,
 		ProviderID: prov.ID,
-		TaskTypes:  []string{roleName},
 		Enabled:    true,
 	}
 	if err := d.CreateRoleDefinition(ctx, role); err != nil {
@@ -319,7 +219,6 @@ func setupProviderWithModels(
 		Providers: []config.ProviderConfig{},
 		Models:    []config.ModelConfig{},
 		Roles:     map[string]string{},
-		Routing:   map[string]string{},
 	}
 	reg := llm.NewRegistry()
 	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
@@ -353,12 +252,12 @@ func TestRouterModelLevelTextToolCalls(t *testing.T) {
 	} {
 		_ = d.CreateRoleDefinition(ctx, &db.RoleDefinition{
 			Name: roleDef.name, Label: roleDef.name,
-			ProviderID: prov.ID, TaskTypes: []string{roleDef.name}, Enabled: true,
+			ProviderID: prov.ID, Enabled: true,
 		})
 	}
 
 	cfg := &config.Config{Providers: []config.ProviderConfig{}, Models: []config.ModelConfig{},
-		Roles: map[string]string{}, Routing: map[string]string{}}
+		Roles: map[string]string{}}
 	reg := llm.NewRegistry()
 	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
 	rtr := router.New(cfg, reg)
@@ -417,17 +316,17 @@ func TestRouterModelLevelToolAllowlist(t *testing.T) {
 	// Worker role: no AllowedTools → model-level should apply.
 	_ = d.CreateRoleDefinition(ctx, &db.RoleDefinition{
 		Name: "worker", Label: "Worker", ProviderID: prov.ID,
-		TaskTypes: []string{"worker"}, Enabled: true,
+		Enabled: true,
 	})
 	// Orchestrator role: has AllowedTools → role-level should win.
 	_ = d.CreateRoleDefinition(ctx, &db.RoleDefinition{
 		Name: "orchestrator", Label: "Orchestrator", ProviderID: prov.ID,
-		TaskTypes: []string{"orchestrator"}, Enabled: true,
+		Enabled: true,
 		AllowedTools: []string{"list_tasks", "create_work_package"},
 	})
 
 	cfg := &config.Config{Providers: []config.ProviderConfig{}, Models: []config.ModelConfig{},
-		Roles: map[string]string{}, Routing: map[string]string{}}
+		Roles: map[string]string{}}
 	reg := llm.NewRegistry()
 	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
 	rtr := router.New(cfg, reg)
@@ -470,11 +369,11 @@ func TestRouterProviderLevelFallback(t *testing.T) {
 	_ = d.CreateProvider(ctx, prov)
 	_ = d.CreateRoleDefinition(ctx, &db.RoleDefinition{
 		Name: "worker", Label: "Worker", ProviderID: prov.ID,
-		TaskTypes: []string{"worker"}, Enabled: true,
+		Enabled: true,
 	})
 
 	cfg := &config.Config{Providers: []config.ProviderConfig{}, Models: []config.ModelConfig{},
-		Roles: map[string]string{}, Routing: map[string]string{}}
+		Roles: map[string]string{}}
 	reg := llm.NewRegistry()
 	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
 	rtr := router.New(cfg, reg)

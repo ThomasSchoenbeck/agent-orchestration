@@ -14,8 +14,6 @@ type Config struct {
 	Providers    []ProviderConfig          `yaml:"providers"`
 	Models       []ModelConfig             `yaml:"models"`
 	Roles        map[string]string         `yaml:"roles"`        // role → model name
-	Routing      map[string]string         `yaml:"routing"`      // task type → role
-	Prompts      map[string]string         `yaml:"prompts"`
 	ContextRules map[string]ContextRule    `yaml:"context_rules"`
 	Pricing      map[string]ModelPricing   `yaml:"pricing"`      // model → pricing (Phase 4)
 	Server       ServerConfig              `yaml:"server"`

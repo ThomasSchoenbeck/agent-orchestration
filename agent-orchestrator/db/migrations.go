@@ -10,7 +10,34 @@ func (d *Database) migrate() error {
 	if err := d.applyColumnMigrations(); err != nil {
 		return err
 	}
-	return d.migrateTaskStates()
+	if err := d.migrateTaskStates(); err != nil {
+		return err
+	}
+	return d.migrateDropDeprecatedColumns()
+}
+
+// migrateDropDeprecatedColumns removes columns retired by Feature 3
+// (tasks.type, agent_role_definitions.task_types) from legacy databases.
+// It is idempotent: a column that does not exist (fresh databases, where the
+// CREATE TABLE no longer declares it) is simply skipped.
+func (d *Database) migrateDropDeprecatedColumns() error {
+	for _, dc := range []struct{ table, column string }{
+		{"tasks", "type"},
+		{"agent_role_definitions", "task_types"},
+	} {
+		var n int
+		q := "SELECT COUNT(*) FROM pragma_table_info('" + dc.table + "') WHERE name=?"
+		if err := d.db.QueryRow(q, dc.column).Scan(&n); err != nil {
+			return fmt.Errorf("check column %s.%s: %w", dc.table, dc.column, err)
+		}
+		if n == 0 {
+			continue
+		}
+		if _, err := d.db.Exec(fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", dc.table, dc.column)); err != nil {
+			return fmt.Errorf("drop column %s.%s: %w", dc.table, dc.column, err)
+		}
+	}
+	return nil
 }
 
 // migrateSchema creates all base tables and indexes (idempotent).
@@ -32,7 +59,6 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS tasks (
     id                TEXT PRIMARY KEY,
     project_id        TEXT NOT NULL,
-    type              TEXT NOT NULL,
     role              TEXT NOT NULL,
     status            TEXT NOT NULL DEFAULT 'planned',
     priority          INTEGER NOT NULL DEFAULT 0,
@@ -139,7 +165,6 @@ CREATE TABLE IF NOT EXISTS agent_role_definitions (
     system_prompt   TEXT NOT NULL DEFAULT '',
     context_include TEXT NOT NULL DEFAULT '[]',
     context_exclude TEXT NOT NULL DEFAULT '[]',
-    task_types      TEXT NOT NULL DEFAULT '[]',
     temperature     REAL NOT NULL DEFAULT 0.7,
     max_tokens      INTEGER NOT NULL DEFAULT 4096,
     enabled         INTEGER NOT NULL DEFAULT 1,

@@ -26,7 +26,6 @@ func seedTask(t *testing.T, d *db.Database, projectID, status string) *db.Task {
 	t.Helper()
 	task := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    status,
 		Priority:  5,
@@ -97,11 +96,11 @@ func TestListTasks_FilterByRole(t *testing.T) {
 	d, reg, projectID := openTaskToolDB(t)
 
 	workerTask := &db.Task{
-		ProjectID: projectID, Type: "implement", Role: "worker", Status: db.TaskStatusBacklog,
+		ProjectID: projectID, Role: "worker", Status: db.TaskStatusBacklog,
 		Payload: map[string]interface{}{},
 	}
 	reviewerTask := &db.Task{
-		ProjectID: projectID, Type: "review", Role: "reviewer", Status: db.TaskStatusBacklog,
+		ProjectID: projectID, Role: "reviewer", Status: db.TaskStatusBacklog,
 		Payload: map[string]interface{}{},
 	}
 	_ = d.CreateTask(context.Background(), workerTask)

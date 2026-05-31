@@ -27,9 +27,9 @@ func (d *Database) CreateTask(ctx context.Context, t *Task) error {
 
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO tasks
-		 (id, project_id, type, role, review_role, status, priority, assigned_agent_id, payload, attempts, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.ID, t.ProjectID, t.Type, t.Role, t.ReviewRole, t.Status, t.Priority,
+		 (id, project_id, role, review_role, status, priority, assigned_agent_id, payload, attempts, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.ProjectID, t.Role, t.ReviewRole, t.Status, t.Priority,
 		nullableStr(t.AssignedAgentID), marshalJSON(t.Payload), t.Attempts,
 		t.CreatedAt, t.UpdatedAt,
 	)
@@ -333,7 +333,7 @@ func (d *Database) RequeueTimedOutTasks(ctx context.Context, timeoutSec int) (in
 
 // --- SQL fragment and scan helpers ---
 
-const taskSelectSQL = `SELECT id, project_id, type, role, status, priority,
+const taskSelectSQL = `SELECT id, project_id, role, status, priority,
     COALESCE(assigned_agent_id,''), COALESCE(payload,'{}'), COALESCE(result,'{}'),
     attempts,
     COALESCE(branch_head_sha,''), COALESCE(last_push_at,''),
@@ -351,7 +351,7 @@ func scanTask(row *sql.Row) (*Task, error) {
 	var createdAt, updatedAt, startedAt, completedAt string
 
 	err := row.Scan(
-		&t.ID, &t.ProjectID, &t.Type, &t.Role, &t.Status, &t.Priority,
+		&t.ID, &t.ProjectID, &t.Role, &t.Status, &t.Priority,
 		&assignedID, &payloadJSON, &resultJSON,
 		&t.Attempts,
 		&branchSHA, &lastPushAt,
@@ -400,7 +400,7 @@ func scanTasks(rows *sql.Rows) ([]*Task, error) {
 		var createdAt, updatedAt, startedAt, completedAt string
 
 		if err := rows.Scan(
-			&t.ID, &t.ProjectID, &t.Type, &t.Role, &t.Status, &t.Priority,
+			&t.ID, &t.ProjectID, &t.Role, &t.Status, &t.Priority,
 			&assignedID, &payloadJSON, &resultJSON,
 			&t.Attempts,
 			&branchSHA, &lastPushAt,

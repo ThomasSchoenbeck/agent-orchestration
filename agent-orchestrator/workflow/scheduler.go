@@ -78,10 +78,6 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 		return fmt.Errorf("retry failed tasks: %w", err)
 	}
 
-	if err := s.createFollowOnTasks(ctx); err != nil {
-		return fmt.Errorf("create follow-on tasks: %w", err)
-	}
-
 	return nil
 }
 
@@ -110,98 +106,6 @@ func (s *Scheduler) retryFailedTasks(ctx context.Context) error {
 			log.Printf("[scheduler] retrying task %s (attempt %d/%d)", t.ID, t.Attempts, s.maxRetries)
 		}
 	}
-	return nil
-}
-
-// createFollowOnTasks inspects recently completed tasks and spawns follow-on tasks.
-func (s *Scheduler) createFollowOnTasks(ctx context.Context) error {
-	tasks, err := s.db.ListTasks(ctx, db.TaskFilters{Status: db.TaskStatusCompleted})
-	if err != nil {
-		return err
-	}
-
-	for _, t := range tasks {
-		followType, ok := FollowOnType(TaskType(t.Type), "completed")
-		if !ok {
-			continue
-		}
-		existing, err := s.db.ListTasks(ctx, db.TaskFilters{
-			ProjectID: t.ProjectID,
-			Status:    db.TaskStatusBacklog,
-		})
-		if err != nil {
-			continue
-		}
-		alreadyExists := false
-		for _, e := range existing {
-			if e.Type == string(followType) {
-				if pid, ok := e.Payload["parent_task_id"].(string); ok && pid == t.ID {
-					alreadyExists = true
-					break
-				}
-			}
-		}
-		if alreadyExists {
-			continue
-		}
-
-		// Check other non-terminal states to avoid duplicates.
-		for _, status := range []string{
-			db.TaskStatusDeveloping, db.TaskStatusAwaitingReview,
-			db.TaskStatusReviewing, db.TaskStatusAwaitingRevision,
-			db.TaskStatusAwaitingMerge, db.TaskStatusMerging,
-		} {
-			more, err := s.db.ListTasks(ctx, db.TaskFilters{
-				ProjectID: t.ProjectID,
-				Status:    status,
-			})
-			if err != nil {
-				continue
-			}
-			for _, e := range more {
-				if e.Type == string(followType) {
-					if pid, ok := e.Payload["parent_task_id"].(string); ok && pid == t.ID {
-						alreadyExists = true
-					}
-				}
-			}
-		}
-		if alreadyExists {
-			continue
-		}
-
-		if err := s.CreateFollowOnTask(ctx, t, followType); err != nil {
-			log.Printf("[scheduler] failed to create follow-on task for %s: %v", t.ID, err)
-		}
-	}
-	return nil
-}
-
-// CreateFollowOnTask creates a new task that follows up on a completed parent task.
-func (s *Scheduler) CreateFollowOnTask(ctx context.Context, parent *db.Task, followType TaskType) error {
-	role := RoleForType(followType)
-
-	payload := make(map[string]interface{})
-	for k, v := range parent.Payload {
-		payload[k] = v
-	}
-	payload["parent_task_id"] = parent.ID
-	payload["parent_task_type"] = parent.Type
-
-	followOn := &db.Task{
-		ProjectID: parent.ProjectID,
-		Type:      string(followType),
-		Role:      role,
-		Status:    db.TaskStatusBacklog,
-		Priority:  parent.Priority,
-		Payload:   payload,
-	}
-
-	if err := s.db.CreateTask(ctx, followOn); err != nil {
-		return fmt.Errorf("create follow-on %s task: %w", followType, err)
-	}
-	log.Printf("[scheduler] created follow-on %s task %s for completed %s task %s",
-		followType, followOn.ID, parent.Type, parent.ID)
 	return nil
 }
 

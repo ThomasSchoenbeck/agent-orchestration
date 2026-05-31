@@ -46,16 +46,6 @@ func IsTerminalState(s TaskStatus) bool {
 	return s == StatusCompleted || s == StatusFailed
 }
 
-// TaskType identifies the kind of work a task represents.
-type TaskType string
-
-const (
-	TypePlan      TaskType = "plan"
-	TypeImplement TaskType = "implement"
-	TypeReview    TaskType = "review"
-	TypeTest      TaskType = "test"
-)
-
 // Transition describes a valid state change.
 type Transition struct {
 	From TaskStatus
@@ -104,35 +94,3 @@ func ValidateTransition(from, to TaskStatus) error {
 	return fmt.Errorf("invalid task state transition: %s → %s", from, to)
 }
 
-// FollowOnType returns the task type that should be created when a task of
-// type src completes with the given result outcome. Returns ("", false) when
-// no follow-on task is needed.
-func FollowOnType(src TaskType, outcome string) (TaskType, bool) {
-	switch src {
-	case TypeImplement:
-		if outcome == "completed" {
-			return TypeReview, true
-		}
-	case TypeReview:
-		if outcome == "approved" {
-			return TypeTest, true
-		}
-	}
-	return "", false
-}
-
-// RoleForType returns the default role for a given task type.
-func RoleForType(t TaskType) string {
-	switch t {
-	case TypePlan:
-		return "orchestrator"
-	case TypeImplement:
-		return "worker"
-	case TypeReview:
-		return "reviewer"
-	case TypeTest:
-		return "worker"
-	default:
-		return "worker"
-	}
-}

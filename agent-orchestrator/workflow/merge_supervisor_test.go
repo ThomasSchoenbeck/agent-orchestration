@@ -13,7 +13,6 @@ func createTaskForMerge(t *testing.T, d *db.Database, projectID string) *db.Task
 	t.Helper()
 	task := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusAwaitingMerge,
 		Priority:  1,

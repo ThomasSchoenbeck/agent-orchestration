@@ -46,7 +46,6 @@ func TestClaimTask_NoConcurrentDoubleClaim(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusBacklog,
 		Payload:   map[string]interface{}{},
@@ -109,7 +108,6 @@ func TestClaimTask_ManyAgentsManyTasks(t *testing.T) {
 	for i := 0; i < numTasks; i++ {
 		task := &db.Task{
 			ProjectID: projectID,
-			Type:      "implement",
 			Role:      "worker",
 			Status:    db.TaskStatusBacklog,
 			Payload:   map[string]interface{}{"index": i},
@@ -177,7 +175,6 @@ func TestClaimTask_AlreadyClaimed(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusBacklog,
 		Payload:   map[string]interface{}{},
@@ -204,7 +201,6 @@ func TestClaimTask_CompletedTask(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusCompleted,
 		Payload:   map[string]interface{}{},
@@ -226,7 +222,6 @@ func TestRequeueTimedOutTasks(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusDeveloping,
 		Payload:   map[string]interface{}{},
@@ -266,7 +261,6 @@ func TestRequeueTimedOutTasks_ReviewingGoesToAwaitingReview(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusReviewing,
 		Payload:   map[string]interface{}{},
@@ -300,7 +294,6 @@ func TestRequeueTimedOutTasks_NotExpired(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusDeveloping,
 		Payload:   map[string]interface{}{},

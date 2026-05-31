@@ -47,7 +47,7 @@ func (s *Server) handleTaskChat(w http.ResponseWriter, r *http.Request, taskID s
 			title = v
 		}
 		if title == "" {
-			title = task.Type
+			title = task.Role
 		}
 		conv := &db.Conversation{
 			Title:      fmt.Sprintf("Task: %s", title),
@@ -119,8 +119,8 @@ func (s *Server) buildTaskSystemPrompt(ctx context.Context, task *db.Task) strin
 
 	var parts []string
 	parts = append(parts, fmt.Sprintf(
-		"You are an assistant helping with a task.\nTask: %s\nType: %s | Role: %s | Status: %s",
-		title, task.Type, task.Role, task.Status,
+		"You are an assistant helping with a task.\nTask: %s\nRole: %s | Status: %s",
+		title, task.Role, task.Status,
 	))
 	if desc != "" {
 		parts = append(parts, "Description:\n"+desc)

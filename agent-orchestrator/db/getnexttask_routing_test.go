@@ -29,7 +29,6 @@ func TestGetNextTask_CapabilityReviewRouting(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID:  "p1",
-		Type:       "implement",
 		Role:       "worker",
 		ReviewRole: "reviewer",
 		Status:     db.TaskStatusAwaitingReview,
@@ -65,7 +64,6 @@ func TestGetNextTask_ReviewRoleWithoutCapability(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID:  "p1",
-		Type:       "implement",
 		Role:       "worker",
 		ReviewRole: "worker", // review pinned to a role without the capability
 		Status:     db.TaskStatusAwaitingReview,
@@ -90,7 +88,6 @@ func TestGetNextTask_MergeRoutingByCapability(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID: "p1",
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusAwaitingMerge,
 	}
@@ -122,7 +119,7 @@ func TestCreateTask_ResolvesDefaultReviewRole(t *testing.T) {
 	ctx := context.Background()
 	seedRole(t, d, "reviewer", []string{"handles_review"})
 
-	task := &db.Task{ProjectID: "p1", Type: "implement", Role: "worker"}
+	task := &db.Task{ProjectID: "p1", Role: "worker"}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -135,7 +132,7 @@ func TestCreateTask_DefaultReviewRoleFallback(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
 	// No roles seeded → fallback to the literal "reviewer".
-	task := &db.Task{ProjectID: "p1", Type: "implement", Role: "worker"}
+	task := &db.Task{ProjectID: "p1", Role: "worker"}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

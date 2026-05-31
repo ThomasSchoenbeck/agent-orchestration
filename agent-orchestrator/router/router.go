@@ -1,5 +1,5 @@
 // Package router implements config-driven routing of tasks to LLM providers.
-// It resolves: task_type → role → model name → provider config.
+// It resolves: role → model name → provider config.
 // When role definitions are loaded from the database they take precedence over
 // the static config, allowing live updates without a server restart.
 package router
@@ -20,12 +20,10 @@ import (
 type Router struct {
 	cfg      *config.Config
 	registry *llm.Registry
-	prompter *Prompter
 	ctxBuild *ContextBuilder
 
-	mu              sync.RWMutex
-	rolesByName     map[string]*cachedRole
-	rolesByTaskType map[string]*cachedRole
+	mu          sync.RWMutex
+	rolesByName map[string]*cachedRole
 }
 
 // cachedRole holds a DB-backed role definition and the resolved provider name.
@@ -46,12 +44,10 @@ type cachedRole struct {
 // New creates a Router from the loaded config and provider registry.
 func New(cfg *config.Config, registry *llm.Registry) *Router {
 	return &Router{
-		cfg:             cfg,
-		registry:        registry,
-		prompter:        NewPrompter(cfg),
-		ctxBuild:        NewContextBuilder(cfg),
-		rolesByName:     make(map[string]*cachedRole),
-		rolesByTaskType: make(map[string]*cachedRole),
+		cfg:         cfg,
+		registry:    registry,
+		ctxBuild:    NewContextBuilder(cfg),
+		rolesByName: make(map[string]*cachedRole),
 	}
 }
 
@@ -91,7 +87,6 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rolesByName = make(map[string]*cachedRole)
-	r.rolesByTaskType = make(map[string]*cachedRole)
 
 	for _, role := range roles {
 		if !role.Enabled {
@@ -128,9 +123,6 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 			cr.roleToolAllowlist = role.AllowedTools
 		}
 		r.rolesByName[role.Name] = cr
-		for _, tt := range role.TaskTypes {
-			r.rolesByTaskType[tt] = cr
-		}
 	}
 
 	// Register model-level role entries in the registry for each provider.
@@ -142,8 +134,8 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 
 	log.Printf("router: loaded %d role definition(s) from database", len(roles))
 	for name, cr := range r.rolesByName {
-		log.Printf("router: role %q → provider=%q model=%q task_types=%v",
-			name, cr.providerName, cr.def.ModelOverride, cr.def.TaskTypes)
+		log.Printf("router: role %q → provider=%q model=%q",
+			name, cr.providerName, cr.def.ModelOverride)
 	}
 	return nil
 }
@@ -186,31 +178,6 @@ func (r *Router) RouteByRole(role string) (*RouteResult, error) {
 	return nil, fmt.Errorf("no provider available for role %q (no DB definition, config mapping, or provider preference)", role)
 }
 
-// RouteByTaskType resolves a task type → role → provider + model.
-// DB-backed definitions take precedence over config.
-func (r *Router) RouteByTaskType(taskType string) (*RouteResult, error) {
-	r.mu.RLock()
-	cr, ok := r.rolesByTaskType[taskType]
-	r.mu.RUnlock()
-
-	if ok {
-		return r.routeFromCache(cr)
-	}
-
-	// Config fallback.
-	role, ok := r.cfg.Routing[taskType]
-	if !ok {
-		// Treat task type as role directly.
-		role = taskType
-	}
-	return r.RouteByRole(role)
-}
-
-// BuildPrompt fills in a prompt template for the given task type and variables.
-func (r *Router) BuildPrompt(taskType string, vars map[string]interface{}) string {
-	return r.prompter.Render(taskType, vars)
-}
-
 // BuildContext assembles a context string for the given role (config-backed fallback).
 // Deprecated: use BuildContextForRole instead for DB-backed rules.
 func (r *Router) BuildContext(role string, entries []ContextEntry) string {
@@ -221,21 +188,6 @@ func (r *Router) BuildContext(role string, entries []ContextEntry) string {
 // include/exclude rules.
 func (r *Router) BuildContextForRole(role *db.RoleDefinition, entries []ContextEntry) string {
 	return r.ctxBuild.BuildWithRules(entries, role.ContextInclude, role.ContextExclude)
-}
-
-// RoleForTaskType returns the role string for a task type (without fully routing).
-func (r *Router) RoleForTaskType(taskType string) string {
-	r.mu.RLock()
-	if cr, ok := r.rolesByTaskType[taskType]; ok {
-		r.mu.RUnlock()
-		return cr.def.Name
-	}
-	r.mu.RUnlock()
-
-	if role, ok := r.cfg.Routing[taskType]; ok {
-		return role
-	}
-	return taskType
 }
 
 // routeFromCache builds a RouteResult from a cached DB-backed role definition.

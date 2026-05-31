@@ -21,7 +21,6 @@ func TestUpdateTask_StatusChangeLogged(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID: p.ID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusBacklog,
 	}
@@ -71,7 +70,6 @@ func TestUpdateTask_NoStatusChange(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID: p.ID,
-		Type:      "implement",
 		Role:      "worker",
 		Priority:  3,
 	}

@@ -112,8 +112,8 @@ func TestTokenMetrics_ByProject(t *testing.T) {
 		t.Fatalf("create p2: %v", err)
 	}
 
-	task1 := &db.Task{ProjectID: p1.ID, Type: "implement", Role: "worker"}
-	task2 := &db.Task{ProjectID: p2.ID, Type: "implement", Role: "worker"}
+	task1 := &db.Task{ProjectID: p1.ID, Role: "worker"}
+	task2 := &db.Task{ProjectID: p2.ID, Role: "worker"}
 	if err := d.CreateTask(ctx, task1); err != nil {
 		t.Fatalf("create task1: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestCostMetrics_ByProject(t *testing.T) {
 	if err := d.CreateProject(ctx, p); err != nil {
 		t.Fatalf("create project: %v", err)
 	}
-	task := &db.Task{ProjectID: p.ID, Type: "implement", Role: "worker"}
+	task := &db.Task{ProjectID: p.ID, Role: "worker"}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("create task: %v", err)
 	}

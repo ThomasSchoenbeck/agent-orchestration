@@ -63,12 +63,12 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 	// Tag logs with both task and project so they appear in project-scoped views.
 	tlog := e.log.ForTask(task.ID).ForProject(task.ProjectID)
 	start := time.Now()
-	tlog.InfoCtx(ctx, "starting task (type=%s role=%s)", task.Type, task.Role)
+	tlog.InfoCtx(ctx, "starting task (role=%s)", task.Role)
 
 	// Notify the user which branch this agent is working on.
 	branchName := fmt.Sprintf("task/%s", task.ID)
-	startComment := fmt.Sprintf("Agent picked up task (role=%s type=%s).\n\nWorking on branch `%s`.",
-		task.Role, task.Type, branchName)
+	startComment := fmt.Sprintf("Agent picked up task (role=%s).\n\nWorking on branch `%s`.",
+		task.Role, branchName)
 	if err := e.client.PostComment(ctx, task.ID, startComment, e.agentID); err != nil {
 		tlog.Warn("failed to post start comment: %v", err)
 	}
@@ -149,11 +149,11 @@ func (e *Executor) postCompletionComment(ctx context.Context, task *db.Task, res
 // buildCompletionComment constructs the comment body for a finished task.
 func (e *Executor) buildCompletionComment(task *db.Task, result map[string]interface{}, status string, tokens, durationMs int, execErr error) string {
 	if execErr != nil {
-		return fmt.Sprintf("**Task failed** (role=%s type=%s duration=%dms)\n\nError: %v",
-			task.Role, task.Type, durationMs, execErr)
+		return fmt.Sprintf("**Task failed** (role=%s duration=%dms)\n\nError: %v",
+			task.Role, durationMs, execErr)
 	}
-	header := fmt.Sprintf("**Task %s** (role=%s type=%s duration=%dms tokens=%d)",
-		status, task.Role, task.Type, durationMs, tokens)
+	header := fmt.Sprintf("**Task %s** (role=%s duration=%dms tokens=%d)",
+		status, task.Role, durationMs, tokens)
 	if out, ok := result["output"].(string); ok && out != "" {
 		if len(out) > 500 {
 			out = out[:500] + "…"
@@ -219,15 +219,11 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 	// Resolve the provider for this task. For a review the reviewing agent's role
 	// is task.ReviewRole, not the task's own implementation role.
 	effRole := effectiveRole(task)
-	tlog.InfoCtx(ctx, "routing task type=%q role=%q", task.Type, effRole)
-	route, err := e.rtr.RouteByTaskType(task.Type)
+	tlog.InfoCtx(ctx, "routing task role=%q", effRole)
+	route, err := e.rtr.RouteByRole(effRole)
 	if err != nil {
-		tlog.InfoCtx(ctx, "RouteByTaskType(%q) failed — trying RouteByRole(%q): %v", task.Type, effRole, err)
-		route, err = e.rtr.RouteByRole(effRole)
-		if err != nil {
-			tlog.ErrorCtx(ctx, "routing failed (type=%s role=%s): %v", task.Type, effRole, err)
-			return nil, db.TaskStatusFailed, stats, fmt.Errorf("route task (type=%s role=%s): %w", task.Type, effRole, err)
-		}
+		tlog.ErrorCtx(ctx, "routing failed (role=%s): %v", effRole, err)
+		return nil, db.TaskStatusFailed, stats, fmt.Errorf("route task (role=%s): %w", effRole, err)
 	}
 	if route.Provider == nil {
 		tlog.ErrorCtx(ctx, "routing returned nil provider for role %q", route.Role)
@@ -607,8 +603,8 @@ Be constructive. Reference specific files and line numbers where possible.`
 		toolDocs := e.buildToolDocs()
 		return fmt.Sprintf(
 			"You are a software development agent. Complete the task by calling tools using JSON code blocks.\n\n"+
-				"%s\n\nTask ID: %s\nType: %s\nRole: %s",
-			toolDocs, task.ID, task.Type, task.Role,
+				"%s\n\nTask ID: %s\nRole: %s",
+			toolDocs, task.ID, task.Role,
 		)
 	}
 	// Normal mode: tools are sent via the API.
@@ -673,7 +669,7 @@ func (e *Executor) buildUserMessage(task *db.Task) string {
 		}
 	}
 	if msg == "" {
-		msg = fmt.Sprintf("Execute task %s (type=%s, role=%s).", task.ID, task.Type, task.Role)
+		msg = fmt.Sprintf("Execute task %s (role=%s).", task.ID, task.Role)
 	}
 	// Tell the agent where its workspace is. Use forward slashes so the model
 	// never sees backslashes mid-sentence, which can break JSON argument generation.

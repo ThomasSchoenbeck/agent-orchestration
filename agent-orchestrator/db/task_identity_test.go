@@ -23,7 +23,7 @@ func TestLogTaskEvent_StoresAgentName(t *testing.T) {
 	if err := d.CreateAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateAgent: %v", err)
 	}
-	task := &db.Task{ProjectID: "p1", Type: "implement", Role: "worker"}
+	task := &db.Task{ProjectID: "p1", Role: "worker"}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestTransitionTaskState_LogsStatusEvent(t *testing.T) {
 	if err := d.CreateAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateAgent: %v", err)
 	}
-	task := &db.Task{ProjectID: "p1", Type: "implement", Role: "worker"}
+	task := &db.Task{ProjectID: "p1", Role: "worker"}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestCreateComment_StoresAuthorName(t *testing.T) {
 	if err := d.CreateAgent(ctx, agent); err != nil {
 		t.Fatalf("CreateAgent: %v", err)
 	}
-	task := &db.Task{ProjectID: "p1", Type: "review", Role: "reviewer"}
+	task := &db.Task{ProjectID: "p1", Role: "reviewer"}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestCreateComment_UserAuthorNoLookup(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
 
-	task := &db.Task{ProjectID: "p1", Type: "implement", Role: "worker"}
+	task := &db.Task{ProjectID: "p1", Role: "worker"}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

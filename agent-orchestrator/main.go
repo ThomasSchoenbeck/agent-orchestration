@@ -166,18 +166,12 @@ func runServer(args []string) error {
 		for _, p := range dbProvs {
 			provByName[p.Name] = p
 		}
-		// Inverse routing: role → task types
-		roleTaskTypes := make(map[string][]string)
-		for tt, role := range cfg.Routing {
-			roleTaskTypes[role] = append(roleTaskTypes[role], tt)
-		}
 		var rolesToSeed []*db.RoleDefinition
 		for roleName, modelName := range cfg.Roles {
 			label := strings.ToUpper(roleName[:1]) + roleName[1:]
 			rd := &db.RoleDefinition{
 				Name:        roleName,
 				Label:       label,
-				TaskTypes:   roleTaskTypes[roleName],
 				Enabled:     true,
 				Temperature: 0.7,
 				MaxTokens:   4096,

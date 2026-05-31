@@ -99,7 +99,6 @@ func TestTaskCRUD(t *testing.T) {
 	// Create task
 	task := &db.Task{
 		ProjectID: p.ID,
-		Type:      "implement",
 		Role:      "worker",
 		Priority:  5,
 		Payload:   map[string]interface{}{"desc": "do something"},
@@ -246,8 +245,8 @@ func TestGetNextTask(t *testing.T) {
 	_ = d.CreateProject(ctx, p)
 
 	// Create two tasks with different priorities
-	t1 := &db.Task{ProjectID: p.ID, Type: "implement", Role: "worker", Priority: 1}
-	t2 := &db.Task{ProjectID: p.ID, Type: "implement", Role: "worker", Priority: 10}
+	t1 := &db.Task{ProjectID: p.ID, Role: "worker", Priority: 1}
+	t2 := &db.Task{ProjectID: p.ID, Role: "worker", Priority: 10}
 	_ = d.CreateTask(ctx, t1)
 	_ = d.CreateTask(ctx, t2)
 

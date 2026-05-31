@@ -160,19 +160,12 @@ func (s *Server) handleRoleSeed(w http.ResponseWriter, r *http.Request) {
 		provByName[p.Name] = p
 	}
 
-	// Inverse routing: role → []task_types
-	roleTaskTypes := make(map[string][]string)
-	for tt, role := range s.cfg.Routing {
-		roleTaskTypes[role] = append(roleTaskTypes[role], tt)
-	}
-
 	var toSeed []*db.RoleDefinition
 	for roleName, modelName := range s.cfg.Roles {
 		label := strings.ToUpper(roleName[:1]) + roleName[1:]
 		rd := &db.RoleDefinition{
 			Name:        roleName,
 			Label:       label,
-			TaskTypes:   roleTaskTypes[roleName],
 			Enabled:     true,
 			Temperature: 0.7,
 			MaxTokens:   4096,

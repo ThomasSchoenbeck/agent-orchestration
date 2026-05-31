@@ -68,7 +68,7 @@ func TestTask_ReviewRoleRoundTrip(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
 
-	task := &db.Task{ProjectID: "p1", Type: "implement", Role: "worker", ReviewRole: "reviewer"}
+	task := &db.Task{ProjectID: "p1", Role: "worker", ReviewRole: "reviewer"}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

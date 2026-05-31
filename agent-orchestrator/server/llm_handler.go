@@ -29,7 +29,6 @@ func (s *Server) handleLLMChat(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Role        string        `json:"role"`
-		TaskType    string        `json:"task_type"`
 		Messages    []llm.Message `json:"messages"`
 		Tools       []llm.ToolDef `json:"tools"`
 		MaxTokens   int           `json:"max_tokens"`
@@ -49,20 +48,13 @@ func (s *Server) handleLLMChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the routing target — task_type takes priority over role.
+	// Resolve the routing target by role.
 	var (
 		provider llm.LLMProvider
 		model    string
 		role     string
 	)
-	if req.TaskType != "" {
-		result, err := s.router.RouteByTaskType(req.TaskType)
-		if err != nil {
-			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, err.Error())
-			return
-		}
-		provider, model, role = result.Provider, result.Model, result.Role
-	} else if req.Role != "" {
+	if req.Role != "" {
 		result, err := s.router.RouteByRole(req.Role)
 		if err != nil {
 			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, err.Error())
@@ -70,7 +62,7 @@ func (s *Server) handleLLMChat(w http.ResponseWriter, r *http.Request) {
 		}
 		provider, model, role = result.Provider, result.Model, result.Role
 	} else {
-		api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, "role or task_type is required")
+		api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, "role is required")
 		return
 	}
 

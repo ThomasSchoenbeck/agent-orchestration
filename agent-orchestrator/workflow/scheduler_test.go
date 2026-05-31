@@ -58,51 +58,6 @@ func TestRetryDelay(t *testing.T) {
 	}
 }
 
-// --- CreateFollowOnTask ---
-
-func TestScheduler_CreateFollowOnTask(t *testing.T) {
-	d := openTestDB(t)
-	projectID := createProject(t, d, "TestProject")
-	s := NewScheduler(d, 300, 3, time.Minute)
-
-	parent := &db.Task{
-		ProjectID: projectID,
-		Type:      "implement",
-		Role:      "worker",
-		Status:    db.TaskStatusCompleted,
-		Priority:  5,
-		Payload:   map[string]interface{}{"description": "build feature"},
-	}
-	if err := d.CreateTask(context.Background(), parent); err != nil {
-		t.Fatalf("create parent task: %v", err)
-	}
-
-	if err := s.CreateFollowOnTask(context.Background(), parent, TypeReview); err != nil {
-		t.Fatalf("CreateFollowOnTask: %v", err)
-	}
-
-	tasks, err := d.ListTasks(context.Background(), db.TaskFilters{ProjectID: projectID, Status: db.TaskStatusBacklog})
-	if err != nil {
-		t.Fatalf("ListTasks: %v", err)
-	}
-	if len(tasks) != 1 {
-		t.Fatalf("expected 1 follow-on task, got %d", len(tasks))
-	}
-	followOn := tasks[0]
-	if followOn.Type != "review" {
-		t.Errorf("expected type %q, got %q", "review", followOn.Type)
-	}
-	if followOn.Role != "reviewer" {
-		t.Errorf("expected role %q, got %q", "reviewer", followOn.Role)
-	}
-	if followOn.Priority != 5 {
-		t.Errorf("expected inherited priority 5, got %d", followOn.Priority)
-	}
-	if followOn.Payload["parent_task_id"] != parent.ID {
-		t.Errorf("expected parent_task_id %q in payload, got %v", parent.ID, followOn.Payload["parent_task_id"])
-	}
-}
-
 // --- HandleReviewResult ---
 
 func TestScheduler_HandleReviewResult_Approved(t *testing.T) {
@@ -112,7 +67,6 @@ func TestScheduler_HandleReviewResult_Approved(t *testing.T) {
 
 	implTask := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusCompleted,
 		Payload:   map[string]interface{}{},
@@ -123,7 +77,6 @@ func TestScheduler_HandleReviewResult_Approved(t *testing.T) {
 
 	reviewTask := &db.Task{
 		ProjectID: projectID,
-		Type:      "review",
 		Role:      "reviewer",
 		Status:    db.TaskStatusReviewing,
 		Payload:   map[string]interface{}{"parent_task_id": implTask.ID},
@@ -152,7 +105,6 @@ func TestScheduler_HandleReviewResult_Changes(t *testing.T) {
 
 	implTask := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusDeveloping,
 		Attempts:  1,
@@ -164,7 +116,6 @@ func TestScheduler_HandleReviewResult_Changes(t *testing.T) {
 
 	reviewTask := &db.Task{
 		ProjectID: projectID,
-		Type:      "review",
 		Role:      "reviewer",
 		Status:    db.TaskStatusReviewing,
 		Payload:   map[string]interface{}{"parent_task_id": implTask.ID},
@@ -205,7 +156,6 @@ func TestScheduler_Tick_RetriesFailedTask(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusFailed,
 		Attempts:  1,
@@ -241,7 +191,6 @@ func TestScheduler_Tick_DoesNotRetryMaxAttempts(t *testing.T) {
 
 	task := &db.Task{
 		ProjectID: projectID,
-		Type:      "implement",
 		Role:      "worker",
 		Status:    db.TaskStatusFailed,
 		Attempts:  3, // already at max
