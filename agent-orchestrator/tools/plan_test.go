@@ -272,9 +272,6 @@ func TestCreateWorkPackage_Defaults(t *testing.T) {
 	if task.Priority != 5 {
 		t.Errorf("expected default priority 5, got %d", task.Priority)
 	}
-	if task.Type != "implement" {
-		t.Errorf("expected default type implement, got %q", task.Type)
-	}
 }
 
 func TestCreateWorkPackage_Custom(t *testing.T) {
@@ -286,7 +283,6 @@ func TestCreateWorkPackage_Custom(t *testing.T) {
 		"description": "Review the implementation",
 		"role":        "reviewer",
 		"priority":    float64(8), // float64 matches intArgOpt's JSON-decode path
-		"task_type":   "review",
 	})
 
 	taskID, _ := result["task_id"].(string)
@@ -302,9 +298,6 @@ func TestCreateWorkPackage_Custom(t *testing.T) {
 	}
 	if task.Priority != 8 {
 		t.Errorf("expected priority 8, got %d", task.Priority)
-	}
-	if task.Type != "review" {
-		t.Errorf("expected type review, got %q", task.Type)
 	}
 }
 

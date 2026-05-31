@@ -197,6 +197,17 @@ func runServer(args []string) error {
 		}
 	}
 
+	// Seed the built-in seven-role taxonomy on a fresh DB that has no roles yet
+	// (re-read the count so this runs only when config seeding did not populate
+	// roles above). Existing/config-driven role sets are left untouched.
+	if count, _ := database.CountRoleDefinitions(startCtx); count == 0 {
+		if n, serr := database.SeedRoleDefinitions(startCtx, db.DefaultRoleDefinitions()); serr != nil {
+			log.Printf("warning: seed default role definitions: %v", serr)
+		} else if n > 0 {
+			log.Printf("seeded %d default role definition(s)", n)
+		}
+	}
+
 	// Seed default platform settings (debug_mode, autorefresh_ms).
 	if err := database.SeedDefaultPlatformSettings(startCtx); err != nil {
 		log.Printf("warning: seed platform settings: %v", err)

@@ -719,6 +719,70 @@ func TestExecutor_SubmitsForReviewOnSuccess(t *testing.T) {
 	}
 }
 
+// TestExecutor_SubmitsReviewOnReviewingTask verifies that a task claimed for
+// review (status REVIEWING, review_role set) posts a verdict to /reviews rather
+// than calling submit-for-review again (Bug 9 B). Routing resolves the review
+// role, not the task's original implementation role.
+func TestExecutor_SubmitsReviewOnReviewingTask(t *testing.T) {
+	var reviewPosted atomic.Bool
+
+	task := &db.Task{
+		ID:         "review-task",
+		Type:       "", // type-less: routing falls back to the (review) role
+		Role:       "worker",
+		ReviewRole: "reviewer",
+		Status:     db.TaskStatusReviewing,
+		Payload:    map[string]interface{}{"description": "Review the change"},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks/"+task.ID+"/reviews", func(w http.ResponseWriter, _ *http.Request) {
+		reviewPosted.Store(true)
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/submit-for-review", func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("unexpected call to submit-for-review for a review task")
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/comments", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Wire both worker and reviewer to the mock provider so the review role resolves.
+	cfg := buildExecutorConfig()
+	cfg.Models[0].Roles = []string{"worker", "reviewer"}
+	cfg.Roles["reviewer"] = "mock-model"
+
+	reg := llm.NewRegistry()
+	_ = reg.Register("mock", &mockLLMProvider{
+		name: "mock",
+		response: llm.ChatResponse{
+			Content:    `{"review_status":"approved","review_body":"LGTM"}`,
+			StopReason: "end_turn",
+			TokensUsed: 10,
+		},
+	})
+	rtr := router.New(cfg, reg)
+	client := agent.NewServerClient(srv.URL)
+	exec := agent.NewExecutor(rtr, tools.NewRegistry(), client, "review-agent")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	exec.Run(ctx, task)
+
+	if !reviewPosted.Load() {
+		t.Error("expected a review verdict to be posted to /reviews, but it was not")
+	}
+}
+
 // TestExecutor_UppercaseStatusOnFailure verifies that an LLM error results in
 // status=FAILED (not lowercase "failed").
 func TestExecutor_UppercaseStatusOnFailure(t *testing.T) {

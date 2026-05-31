@@ -154,8 +154,8 @@ describe('Tasks — create form', () => {
     const user = userEvent.setup()
     render(Tasks)
     await user.click(screen.getByText('+ New'))
-    expect(screen.getByRole('combobox', { name: /Task type/i })).toBeInTheDocument()
-    expect(screen.getByRole('combobox', { name: /Role/i })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Role' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Review role' })).toBeInTheDocument()
   })
 
   it('posts task with all required fields', async () => {
@@ -179,8 +179,7 @@ describe('Tasks — create form', () => {
     await user.click(screen.getByText('+ New'))
 
     await user.selectOptions(screen.getByDisplayValue('Select project *'), 'proj1')
-    await user.selectOptions(screen.getByRole('combobox', { name: /Task type/i }), 'implement')
-    await user.selectOptions(screen.getByRole('combobox', { name: /Role/i }), 'worker')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Role' }), 'worker')
     await user.type(screen.getByPlaceholderText('Title'), 'New task')
     await user.click(screen.getByText('Create'))
 
@@ -190,7 +189,6 @@ describe('Tasks — create form', () => {
       )
       expect(postCall).toBeTruthy()
       const body = JSON.parse(postCall[1].body)
-      expect(body.type).toBe('implement')
       expect(body.role).toBe('worker')
       expect(body.project_id).toBe('proj1')
       expect(body.payload.title).toBe('New task')

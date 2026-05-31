@@ -31,11 +31,11 @@ type UpdateProjectRequest struct {
 // --- Task request/response types ---
 
 type CreateTaskRequest struct {
-	ProjectID string                 `json:"project_id"`
-	Type      string                 `json:"type"`
-	Role      string                 `json:"role"`
-	Priority  int                    `json:"priority"`
-	Payload   map[string]interface{} `json:"payload"`
+	ProjectID  string                 `json:"project_id"`
+	Role       string                 `json:"role"`
+	ReviewRole string                 `json:"review_role,omitempty"`
+	Priority   int                    `json:"priority"`
+	Payload    map[string]interface{} `json:"payload"`
 }
 
 type UpdateTaskRequest struct {

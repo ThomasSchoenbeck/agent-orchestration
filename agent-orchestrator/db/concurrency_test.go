@@ -257,6 +257,41 @@ func TestRequeueTimedOutTasks(t *testing.T) {
 	}
 }
 
+// TestRequeueTimedOutTasks_ReviewingGoesToAwaitingReview verifies that a timed-out
+// REVIEWING task returns to AWAITING_REVIEW (Bug 9 C), not BACKLOG.
+func TestRequeueTimedOutTasks_ReviewingGoesToAwaitingReview(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	projectID := createConcurrencyProject(t, d)
+
+	task := &db.Task{
+		ProjectID: projectID,
+		Type:      "implement",
+		Role:      "worker",
+		Status:    db.TaskStatusReviewing,
+		Payload:   map[string]interface{}{},
+	}
+	if err := d.CreateTask(ctx, task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if _, err := d.RawDB().ExecContext(ctx,
+		`UPDATE tasks SET updated_at=datetime('now','-600 seconds') WHERE id=?`, task.ID); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	if _, err := d.RequeueTimedOutTasks(ctx, 300); err != nil {
+		t.Fatalf("RequeueTimedOutTasks: %v", err)
+	}
+
+	updated, err := d.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if updated.Status != db.TaskStatusAwaitingReview {
+		t.Errorf("expected status %q, got %q", db.TaskStatusAwaitingReview, updated.Status)
+	}
+}
+
 // TestRequeueTimedOutTasks_NotExpired verifies that non-expired tasks are not requeued.
 func TestRequeueTimedOutTasks_NotExpired(t *testing.T) {
 	d := openTestDB(t)

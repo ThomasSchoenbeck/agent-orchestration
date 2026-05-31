@@ -89,8 +89,10 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		Model:        stats.model,
 	}
 
-	// Reviewer tasks post a review instead of a generic result.
-	if task.Role == "reviewer" && execErr == nil {
+	// Review tasks (claimed from AWAITING_REVIEW, now in REVIEWING) post a review
+	// verdict instead of a generic result. The legacy role=="reviewer" signal is
+	// retained for backward compatibility.
+	if isReviewTask(task) && execErr == nil {
 		reviewStatus, body := extractReviewFromResult(result)
 		if err := e.client.PostReview(ctx, task.ID, reviewStatus, body, task.BranchHeadSHA, e.agentID); err != nil {
 			tlog.WarnCtx(ctx, "PostReview failed: %v", err)
@@ -161,6 +163,23 @@ func (e *Executor) buildCompletionComment(task *db.Task, result map[string]inter
 	return header
 }
 
+// isReviewTask reports whether the executor is performing a review. A review
+// task is one claimed from AWAITING_REVIEW (now in REVIEWING); the legacy
+// role=="reviewer" form is retained for backward compatibility.
+func isReviewTask(task *db.Task) bool {
+	return task.Status == db.TaskStatusReviewing || task.Role == "reviewer"
+}
+
+// effectiveRole is the role whose configuration (model, prompt, tools) drives
+// execution. For a review the reviewing agent's role is task.ReviewRole rather
+// than the task's own (implementation) role.
+func effectiveRole(task *db.Task) string {
+	if task.Status == db.TaskStatusReviewing && task.ReviewRole != "" {
+		return task.ReviewRole
+	}
+	return task.Role
+}
+
 // extractReviewFromResult pulls the review status and body out of the LLM
 // result map. The LLM is expected to return:
 //
@@ -197,15 +216,17 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 ) {
 	tlog := e.log.ForTask(task.ID)
 
-	// Resolve the provider for this task.
-	tlog.InfoCtx(ctx, "routing task type=%q role=%q", task.Type, task.Role)
+	// Resolve the provider for this task. For a review the reviewing agent's role
+	// is task.ReviewRole, not the task's own implementation role.
+	effRole := effectiveRole(task)
+	tlog.InfoCtx(ctx, "routing task type=%q role=%q", task.Type, effRole)
 	route, err := e.rtr.RouteByTaskType(task.Type)
 	if err != nil {
-		tlog.InfoCtx(ctx, "RouteByTaskType(%q) failed — trying RouteByRole(%q): %v", task.Type, task.Role, err)
-		route, err = e.rtr.RouteByRole(task.Role)
+		tlog.InfoCtx(ctx, "RouteByTaskType(%q) failed — trying RouteByRole(%q): %v", task.Type, effRole, err)
+		route, err = e.rtr.RouteByRole(effRole)
 		if err != nil {
-			tlog.ErrorCtx(ctx, "routing failed (type=%s role=%s): %v", task.Type, task.Role, err)
-			return nil, db.TaskStatusFailed, stats, fmt.Errorf("route task (type=%s role=%s): %w", task.Type, task.Role, err)
+			tlog.ErrorCtx(ctx, "routing failed (type=%s role=%s): %v", task.Type, effRole, err)
+			return nil, db.TaskStatusFailed, stats, fmt.Errorf("route task (type=%s role=%s): %w", task.Type, effRole, err)
 		}
 	}
 	if route.Provider == nil {
@@ -568,9 +589,9 @@ func (e *Executor) buildSystemMessage(task *db.Task, route *router.RouteResult) 
 		return route.SystemPrompt
 	}
 
-	// Reviewer role gets a structured fallback that instructs the LLM on
+	// Review tasks get a structured fallback that instructs the LLM on
 	// the expected output format.
-	if task.Role == "reviewer" {
+	if isReviewTask(task) {
 		return `You are a code reviewer agent. Review the code changes in the provided worktree or diff.
 
 Respond with a JSON object containing:

@@ -61,7 +61,6 @@ func (s *Server) registerHandlers() {
 	s.mux.HandleFunc("/api/chat-log", s.handleChatLog)
 
 	// Meta (enumerations)
-	s.mux.HandleFunc("/api/meta/task-types", s.handleMetaTaskTypes)
 	s.mux.HandleFunc("/api/meta/task-roles", s.handleMetaTaskRoles)
 
 	// Metrics
@@ -626,17 +625,17 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		if !s.decodeJSON(w, r, &req) {
 			return
 		}
-		if req.ProjectID == "" || req.Type == "" || req.Role == "" {
+		if req.ProjectID == "" || req.Role == "" {
 			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput,
-				"project_id, type, and role are required")
+				"project_id and role are required")
 			return
 		}
 		t := &db.Task{
-			ProjectID: req.ProjectID,
-			Type:      req.Type,
-			Role:      req.Role,
-			Priority:  req.Priority,
-			Payload:   req.Payload,
+			ProjectID:  req.ProjectID,
+			Role:       req.Role,
+			ReviewRole: req.ReviewRole,
+			Priority:   req.Priority,
+			Payload:    req.Payload,
 		}
 		if err := s.db.CreateTask(r.Context(), t); err != nil {
 			s.internalError(w, err)

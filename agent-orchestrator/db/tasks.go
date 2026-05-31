@@ -19,12 +19,17 @@ func (d *Database) CreateTask(ctx context.Context, t *Task) error {
 	if t.Status == "" {
 		t.Status = TaskStatusBacklog
 	}
+	// Resolve the review role if not explicitly set (Feature 3): the first
+	// enabled role with handles_review, or "reviewer" as a fallback.
+	if t.ReviewRole == "" {
+		t.ReviewRole = d.defaultReviewRole(ctx)
+	}
 
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO tasks
-		 (id, project_id, type, role, status, priority, assigned_agent_id, payload, attempts, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.ID, t.ProjectID, t.Type, t.Role, t.Status, t.Priority,
+		 (id, project_id, type, role, review_role, status, priority, assigned_agent_id, payload, attempts, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.ProjectID, t.Type, t.Role, t.ReviewRole, t.Status, t.Priority,
 		nullableStr(t.AssignedAgentID), marshalJSON(t.Payload), t.Attempts,
 		t.CreatedAt, t.UpdatedAt,
 	)
@@ -105,12 +110,12 @@ func (d *Database) UpdateTask(ctx context.Context, t *Task) error {
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE tasks SET status=?, priority=?, assigned_agent_id=?, payload=?,
 		 result=?, attempts=?, branch_head_sha=?, worktree_path=?, assigned_port=?,
-		 updated_at=?, started_at=?, completed_at=?
+		 review_role=?, updated_at=?, started_at=?, completed_at=?
 		 WHERE id=?`,
 		t.Status, t.Priority, nullableStr(t.AssignedAgentID),
 		marshalJSON(t.Payload), nullableJSON(t.Result), t.Attempts,
 		t.BranchHeadSHA, t.WorktreePath, nullableInt(t.AssignedPort),
-		t.UpdatedAt, nullableTime(t.StartedAt), nullableTime(t.CompletedAt),
+		t.ReviewRole, t.UpdatedAt, nullableTime(t.StartedAt), nullableTime(t.CompletedAt),
 		t.ID,
 	)
 	if err == nil {
@@ -190,23 +195,54 @@ func (d *Database) SubmitTaskResult(ctx context.Context, taskID string, result m
 	return err
 }
 
-// GetNextTask returns the highest-priority unassigned task matching any of the given roles.
+// GetNextTask returns the highest-priority unassigned task an agent with the
+// given roles may claim. Routing is capability-driven (Feature 3):
+//
+//	BACKLOG / AWAITING_REVISION : task.role matches one of the agent's roles
+//	AWAITING_REVIEW            : task.review_role matches an agent role that
+//	                             carries the handles_review capability
+//	AWAITING_MERGE             : any of the agent's roles carries handles_merge
 func (d *Database) GetNextTask(ctx context.Context, roles []string) (*Task, error) {
 	if len(roles) == 0 {
 		return nil, nil
 	}
-	placeholders := strings.Repeat("?,", len(roles))
-	placeholders = placeholders[:len(placeholders)-1]
 
-	args := make([]interface{}, len(roles))
-	for i, r := range roles {
-		args[i] = r
+	reviewerRoles, hasMerge, err := d.capabilityRoles(ctx, roles)
+	if err != nil {
+		return nil, err
+	}
+
+	ph := func(n int) string {
+		s := strings.Repeat("?,", n)
+		return s[:len(s)-1]
+	}
+
+	var clauses []string
+	var args []interface{}
+
+	// Normal work: task.role matches one of the agent's roles.
+	clauses = append(clauses, "(status IN ('BACKLOG','AWAITING_REVISION') AND role IN ("+ph(len(roles))+"))")
+	for _, r := range roles {
+		args = append(args, r)
+	}
+
+	// Review: task.review_role matches an agent role that has handles_review.
+	if len(reviewerRoles) > 0 {
+		clauses = append(clauses, "(status='AWAITING_REVIEW' AND review_role IN ("+ph(len(reviewerRoles))+"))")
+		for _, r := range reviewerRoles {
+			args = append(args, r)
+		}
+	}
+
+	// Merge: any of the agent's roles carries handles_merge (no per-task key).
+	if hasMerge {
+		clauses = append(clauses, "(status='AWAITING_MERGE')")
 	}
 
 	query := taskSelectSQL +
-		fmt.Sprintf(` WHERE (status='BACKLOG' OR status='AWAITING_REVISION' OR status='AWAITING_REVIEW' OR status='AWAITING_MERGE')
-		 AND (assigned_agent_id IS NULL OR assigned_agent_id='')
-		 AND role IN (%s) ORDER BY priority DESC, created_at ASC LIMIT 1`, placeholders)
+		" WHERE (assigned_agent_id IS NULL OR assigned_agent_id='') AND (" +
+		strings.Join(clauses, " OR ") +
+		") ORDER BY priority DESC, created_at ASC LIMIT 1"
 
 	row := d.db.QueryRowContext(ctx, query, args...)
 	t, err := scanTask(row)
@@ -216,10 +252,75 @@ func (d *Database) GetNextTask(ctx context.Context, roles []string) (*Task, erro
 	return t, err
 }
 
+// capabilityRoles inspects the given role names and returns the subset that
+// carry the handles_review capability, plus whether any carries handles_merge.
+// Capabilities are resolved in Go from the role definitions rather than via a
+// fragile SQL LIKE on the JSON column.
+func (d *Database) capabilityRoles(ctx context.Context, roleNames []string) (reviewerRoles []string, hasMerge bool, err error) {
+	if len(roleNames) == 0 {
+		return nil, false, nil
+	}
+	ph := strings.Repeat("?,", len(roleNames))
+	ph = ph[:len(ph)-1]
+	args := make([]interface{}, len(roleNames))
+	for i, r := range roleNames {
+		args[i] = r
+	}
+	rows, qerr := d.db.QueryContext(ctx,
+		"SELECT name, capabilities FROM agent_role_definitions WHERE enabled=1 AND name IN ("+ph+")", args...)
+	if qerr != nil {
+		return nil, false, qerr
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, capsJSON string
+		if serr := rows.Scan(&name, &capsJSON); serr != nil {
+			return nil, false, serr
+		}
+		for _, c := range unmarshalJSONStringSlice(capsJSON) {
+			switch c {
+			case "handles_review":
+				reviewerRoles = append(reviewerRoles, name)
+			case "handles_merge":
+				hasMerge = true
+			}
+		}
+	}
+	return reviewerRoles, hasMerge, rows.Err()
+}
+
+// defaultReviewRole resolves the review role for a newly created task when none
+// is supplied: the first enabled role with the handles_review capability, or the
+// literal "reviewer" as a fallback when no such role exists yet.
+func (d *Database) defaultReviewRole(ctx context.Context) string {
+	rows, err := d.db.QueryContext(ctx,
+		"SELECT name, capabilities FROM agent_role_definitions WHERE enabled=1 ORDER BY name")
+	if err != nil {
+		return "reviewer"
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, capsJSON string
+		if serr := rows.Scan(&name, &capsJSON); serr != nil {
+			return "reviewer"
+		}
+		for _, c := range unmarshalJSONStringSlice(capsJSON) {
+			if c == "handles_review" {
+				return name
+			}
+		}
+	}
+	return "reviewer"
+}
+
 // RequeueTimedOutTasks re-queues execution-state tasks that have not been updated for timeoutSec seconds.
+// A timed-out REVIEWING task returns to AWAITING_REVIEW (so only review-capable
+// agents pick it back up); DEVELOPING and MERGING tasks return to BACKLOG.
 func (d *Database) RequeueTimedOutTasks(ctx context.Context, timeoutSec int) (int64, error) {
 	res, err := d.db.ExecContext(ctx,
-		`UPDATE tasks SET status='BACKLOG', assigned_agent_id=NULL, updated_at=CURRENT_TIMESTAMP
+		`UPDATE tasks SET
+		   status = CASE WHEN status='REVIEWING' THEN 'AWAITING_REVIEW' ELSE 'BACKLOG' END,
+		   assigned_agent_id=NULL, updated_at=CURRENT_TIMESTAMP
 		 WHERE (status='DEVELOPING' OR status='REVIEWING' OR status='MERGING')
 		 AND CAST((julianday('now') - julianday(updated_at)) * 86400 AS INTEGER) > ?`,
 		timeoutSec,
@@ -238,7 +339,8 @@ const taskSelectSQL = `SELECT id, project_id, type, role, status, priority,
     COALESCE(branch_head_sha,''), COALESCE(last_push_at,''),
     COALESCE(worktree_path,''), COALESCE(assigned_port,0),
     created_at, updated_at,
-    COALESCE(started_at,''), COALESCE(completed_at,'')
+    COALESCE(started_at,''), COALESCE(completed_at,''),
+    COALESCE(review_role,'')
     FROM tasks`
 
 func scanTask(row *sql.Row) (*Task, error) {
@@ -255,6 +357,7 @@ func scanTask(row *sql.Row) (*Task, error) {
 		&branchSHA, &lastPushAt,
 		&worktreePath, &assignedPort,
 		&createdAt, &updatedAt, &startedAt, &completedAt,
+		&t.ReviewRole,
 	)
 	if err != nil {
 		return nil, err
@@ -303,6 +406,7 @@ func scanTasks(rows *sql.Rows) ([]*Task, error) {
 			&branchSHA, &lastPushAt,
 			&worktreePath, &assignedPort,
 			&createdAt, &updatedAt, &startedAt, &completedAt,
+			&t.ReviewRole,
 		); err != nil {
 			return nil, err
 		}

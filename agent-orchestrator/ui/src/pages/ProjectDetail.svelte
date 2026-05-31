@@ -5,7 +5,7 @@
   import {
     getProject, updateProject,
     listProjectTasks, createTask, updateTask, deleteTask, queueTask, unqueueTask,
-    getTaskTypes, getTaskRoles,
+    getTaskRoles,
     listRequirements, createRequirement, updateRequirement, deleteRequirement,
     listFeatures, createFeature, updateFeature, deleteFeature,
     initRepo, listBranches, commitFiles, listCommits,
@@ -22,7 +22,6 @@
   // ── State ─────────────────────────────────────────────────────────────────
   let project      = $state(null)
   let tasks        = $state([])
-  let taskTypes    = $state([])
   let taskRoles    = $state([])
   let loading      = $state(true)
   let editing      = $state(false)
@@ -209,7 +208,7 @@
   }
 
   // New task form
-  let taskForm = $state({ type: 'implement', role: 'worker', title: '', description: '', priority: 5 })
+  let taskForm = $state({ role: 'worker', review_role: '', title: '', description: '', priority: 5 })
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const statusColors = {
@@ -234,13 +233,11 @@
   async function loadAll() {
     loading = true
     try {
-      const [p, tt, tr] = await Promise.all([
+      const [p, tr] = await Promise.all([
         getProject(projectId),
-        getTaskTypes(),
         getTaskRoles(),
       ])
       project   = p
-      taskTypes = Array.isArray(tt) ? tt : []
       taskRoles = Array.isArray(tr) ? tr : []
       await Promise.all([loadTasks(), loadRequirements(), loadFeatures(), checkRepo()])
     } catch (e) {
@@ -374,13 +371,13 @@
     try {
       await createTask({
         project_id: projectId,
-        type:       taskForm.type,
         role:       taskForm.role,
+        ...(taskForm.review_role ? { review_role: taskForm.review_role } : {}),
         priority:   Number(taskForm.priority),
         payload:    { title: taskForm.title.trim(), description: taskForm.description.trim() },
       })
       toasts.success('Task created')
-      taskForm     = { type: 'implement', role: 'worker', title: '', description: '', priority: 5 }
+      taskForm     = { role: 'worker', review_role: '', title: '', description: '', priority: 5 }
       showTaskForm = false
       await loadTasks()
     } catch (e) {
@@ -894,19 +891,6 @@
         >
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label for="task-type" class="text-xs text-gray-500 mb-1 block">Type</label>
-              <select
-                id="task-type"
-                class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2
-                       text-sm text-gray-300 focus:outline-none focus:border-accent"
-                bind:value={taskForm.type}
-              >
-                {#each taskTypes as tt}
-                  <option value={tt.value} title={tt.description}>{tt.label}</option>
-                {/each}
-              </select>
-            </div>
-            <div>
               <label for="task-role" class="text-xs text-gray-500 mb-1 block">Role</label>
               <select
                 id="task-role"
@@ -914,6 +898,20 @@
                        text-sm text-gray-300 focus:outline-none focus:border-accent"
                 bind:value={taskForm.role}
               >
+                {#each taskRoles as tr}
+                  <option value={tr.value} title={tr.description}>{tr.label}</option>
+                {/each}
+              </select>
+            </div>
+            <div>
+              <label for="task-review-role" class="text-xs text-gray-500 mb-1 block">Review role</label>
+              <select
+                id="task-review-role"
+                class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2
+                       text-sm text-gray-300 focus:outline-none focus:border-accent"
+                bind:value={taskForm.review_role}
+              >
+                <option value="">Auto (default reviewer)</option>
                 {#each taskRoles as tr}
                   <option value={tr.value} title={tr.description}>{tr.label}</option>
                 {/each}

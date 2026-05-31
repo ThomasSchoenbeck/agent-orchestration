@@ -430,6 +430,16 @@ func (d *Database) applyColumnMigrations() error {
 			name: "add_author_name_to_task_comments",
 			sql:  "ALTER TABLE task_comments ADD COLUMN author_name TEXT NOT NULL DEFAULT ''",
 		},
+		// Feature 3: capability flags on role definitions
+		{
+			name: "add_capabilities_to_role_definitions",
+			sql:  "ALTER TABLE agent_role_definitions ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'",
+		},
+		// Feature 3: per-task review role (routing key for AWAITING_REVIEW)
+		{
+			name: "add_review_role_to_tasks",
+			sql:  "ALTER TABLE tasks ADD COLUMN review_role TEXT NOT NULL DEFAULT ''",
+		},
 	}
 
 	for _, m := range migrations {

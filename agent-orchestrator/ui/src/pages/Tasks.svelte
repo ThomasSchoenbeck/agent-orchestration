@@ -8,7 +8,6 @@
     deleteTask,
     queueTask,
     unqueueTask,
-    getTaskTypes,
     getTaskRoles,
     listAllTaskLogs,
     deleteAllTaskLogs,
@@ -24,7 +23,6 @@
   // ── Task list state ───────────────────────────────────────────────────────
   let tasks = $state([])
   let projects = $state([])
-  let taskTypes = $state([])
   let taskRoles = $state([])
   let loading = $state(false)
   let showForm = $state(false)
@@ -51,8 +49,8 @@
 
   let form = $state({
     project_id: "",
-    type: "implement",
     role: "worker",
+    review_role: "",
     title: "",
     description: "",
     priority: 5,
@@ -170,15 +168,13 @@
       if (filterProject) params.project_id = filterProject
       if (filterRequirement) params.requirement_id = filterRequirement
       if (filterFeature) params.feature_id = filterFeature
-      const [tr, pr, tt, tr2] = await Promise.all([
+      const [tr, pr, tr2] = await Promise.all([
         listTasks(params),
         listProjects(),
-        getTaskTypes(),
         getTaskRoles(),
       ])
       tasks = Array.isArray(tr) ? tr : (tr.tasks ?? [])
       projects = Array.isArray(pr) ? pr : (pr.projects ?? [])
-      taskTypes = Array.isArray(tt) ? tt : []
       taskRoles = Array.isArray(tr2) ? tr2 : []
     } catch (e) {
       toasts.error("Failed to load: " + e.message)
@@ -309,7 +305,7 @@
 
   // ── Create ────────────────────────────────────────────────────────────────
   async function submit() {
-    if (!form.type || !form.role) return
+    if (!form.role) return
     if (!form.project_id) {
       toasts.error("Please select a project")
       return
@@ -317,8 +313,8 @@
     try {
       const created = await createTask({
         project_id: form.project_id,
-        type: form.type.trim(),
         role: form.role.trim(),
+        ...(form.review_role ? { review_role: form.review_role } : {}),
         priority: Number(form.priority),
         payload: { title: form.title.trim(), description: form.description.trim() },
       })
@@ -327,7 +323,7 @@
       for (const id of formLinkedFeats) ops.push(addTaskLink(created.id, "feature", id))
       if (ops.length) await Promise.all(ops)
       toasts.success("Task created")
-      form = { project_id: "", type: "", role: "", title: "", description: "", priority: 5 }
+      form = { project_id: "", role: "worker", review_role: "", title: "", description: "", priority: 5 }
       formLinkedReqs = new Set()
       formLinkedFeats = new Set()
       formAvailReqs = []
@@ -518,17 +514,6 @@
               bind:value={form.title}
             />
             <select
-              aria-label="Task type"
-              class="bg-surface-700 border border-surface-500 rounded px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-accent"
-              bind:value={form.type}
-              required
-            >
-              {#each taskTypes as tt}<option value={tt.value} title={tt.description}
-                  >{tt.label}</option
-                >{/each}
-              {#if taskTypes.length === 0}<option value="implement">Implement</option>{/if}
-            </select>
-            <select
               aria-label="Role"
               class="bg-surface-700 border border-surface-500 rounded px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-accent"
               bind:value={form.role}
@@ -538,6 +523,16 @@
                   >{tr.label}</option
                 >{/each}
               {#if taskRoles.length === 0}<option value="worker">Worker</option>{/if}
+            </select>
+            <select
+              aria-label="Review role"
+              class="bg-surface-700 border border-surface-500 rounded px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-accent"
+              bind:value={form.review_role}
+            >
+              <option value="">Review: auto</option>
+              {#each taskRoles as tr}<option value={tr.value} title={tr.description}
+                  >Review: {tr.label}</option
+                >{/each}
             </select>
           </div>
           <textarea

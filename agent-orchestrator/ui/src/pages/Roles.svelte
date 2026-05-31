@@ -24,7 +24,7 @@
     system_prompt:   '',
     context_include: '',  // space-separated tags
     context_exclude: '',
-    task_types:      '',
+    capabilities:    '',
     allowed_tools:   '',
     temperature:     0.7,
     max_tokens:      4096,
@@ -107,7 +107,7 @@
       system_prompt:   r.system_prompt ?? '',
       context_include: joinTags(r.context_include),
       context_exclude: joinTags(r.context_exclude),
-      task_types:      joinTags(r.task_types),
+      capabilities:    joinTags(r.capabilities),
       allowed_tools:   joinTags(r.allowed_tools),
       temperature:     r.temperature ?? 0.7,
       max_tokens:      r.max_tokens ?? 4096,
@@ -130,7 +130,7 @@
       system_prompt:   form.system_prompt,
       context_include: splitTags(form.context_include),
       context_exclude: splitTags(form.context_exclude),
-      task_types:      splitTags(form.task_types),
+      capabilities:    splitTags(form.capabilities),
       allowed_tools:   splitTags(form.allowed_tools),
       temperature:     parseFloat(form.temperature) || 0.7,
       max_tokens:      parseInt(form.max_tokens, 10) || 4096,
@@ -327,12 +327,15 @@
       <div class="border-t border-surface-600 pt-3">
         <p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Routing</p>
         <div>
-          <label class="text-xs text-gray-500 mb-1 block">Task types (space or comma-separated)</label>
+          <label class="text-xs text-gray-500 mb-1 block">
+            Capabilities (space or comma-separated)
+            <span class="text-gray-600 ml-1">known: handles_review, creates_tasks, handles_merge, handles_deploy</span>
+          </label>
           <input
             class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
                    text-gray-200 font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
-            placeholder="e.g. implement review test"
-            bind:value={form.task_types}
+            placeholder="e.g. handles_review"
+            bind:value={form.capabilities}
           />
         </div>
         <div>
@@ -474,12 +477,12 @@
                 </span>
               </div>
 
-              <!-- Task type pills -->
-              {#if role.task_types && role.task_types.length > 0}
+              <!-- Capability pills -->
+              {#if role.capabilities && role.capabilities.length > 0}
                 <div class="flex flex-wrap gap-1">
-                  {#each role.task_types as tt}
+                  {#each role.capabilities as cap}
                     <span class="text-xs px-1.5 py-0.5 rounded bg-accent/20 text-accent/80 font-mono">
-                      {tt}
+                      {cap}
                     </span>
                   {/each}
                 </div>

@@ -16,6 +16,7 @@ func RegisterPlanTools(reg *Registry, database *db.Database) error {
 	defs := []Definition{
 		planProjectTool(database),
 		createWorkPackageTool(database),
+		bootstrapProjectTool(database),
 	}
 	for _, d := range defs {
 		if err := reg.Register(d); err != nil {
@@ -118,7 +119,6 @@ func planProjectTool(database *db.Database) Definition {
 				}
 				task := &db.Task{
 					ProjectID: projectID,
-					Type:      "implement",
 					Role:      role,
 					Status:    db.TaskStatusBacklog,
 					Priority:  priority,
@@ -144,6 +144,103 @@ func planProjectTool(database *db.Database) Definition {
 	}
 }
 
+// scopeItemJSON is the shape expected for each requirement/feature passed to
+// bootstrap_project.
+type scopeItemJSON struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
+// decodeScopeItems parses a JSON array (or single object) of scope items.
+// An empty string yields no items (the field is optional).
+func decodeScopeItems(s string) ([]scopeItemJSON, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	if strings.HasPrefix(s, "[") {
+		var out []scopeItemJSON
+		if err := json.Unmarshal([]byte(s), &out); err != nil {
+			return nil, fmt.Errorf("scope items JSON array: %w", err)
+		}
+		return out, nil
+	}
+	var single scopeItemJSON
+	if err := json.Unmarshal([]byte(s), &single); err != nil {
+		return nil, fmt.Errorf("scope item JSON object: %w", err)
+	}
+	return []scopeItemJSON{single}, nil
+}
+
+// bootstrapProjectTool defines a project's scope by creating requirements and
+// features from the project description. Intended for a planner agent that has
+// read the description and derived the structured scope.
+func bootstrapProjectTool(database *db.Database) Definition {
+	return Definition{
+		Name: "bootstrap_project",
+		Description: "Define a project's scope: create requirements and features derived from the " +
+			"project description. Use this before planning work packages when a project has only a description.",
+		Parameters: map[string]Param{
+			"project_id":   {Type: "string", Description: "ID of the project to bootstrap"},
+			"requirements": {Type: "string", Description: `JSON array of requirement objects with fields: title (string), body (string)`},
+			"features":     {Type: "string", Description: `JSON array of feature objects with fields: title (string), body (string)`},
+		},
+		Required: []string{"project_id"},
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			projectID, err := strArg(args, "project_id")
+			if err != nil {
+				return nil, err
+			}
+			if _, err := database.GetProject(ctx, projectID); err != nil {
+				return nil, fmt.Errorf("bootstrap_project: project not found: %w", err)
+			}
+
+			reqs, err := decodeScopeItems(strArgOpt(args, "requirements"))
+			if err != nil {
+				return nil, fmt.Errorf("bootstrap_project: %w", err)
+			}
+			feats, err := decodeScopeItems(strArgOpt(args, "features"))
+			if err != nil {
+				return nil, fmt.Errorf("bootstrap_project: %w", err)
+			}
+			if len(reqs) == 0 && len(feats) == 0 {
+				return nil, fmt.Errorf("bootstrap_project: provide at least one requirement or feature")
+			}
+
+			reqIDs := make([]string, 0, len(reqs))
+			for i, r := range reqs {
+				if strings.TrimSpace(r.Title) == "" {
+					continue
+				}
+				rec := &db.ProjectRequirement{ProjectID: projectID, Title: r.Title, Body: r.Body, Position: i}
+				if err := database.CreateRequirement(ctx, rec); err != nil {
+					return nil, fmt.Errorf("bootstrap_project: create requirement %q: %w", r.Title, err)
+				}
+				reqIDs = append(reqIDs, rec.ID)
+			}
+			featIDs := make([]string, 0, len(feats))
+			for i, f := range feats {
+				if strings.TrimSpace(f.Title) == "" {
+					continue
+				}
+				rec := &db.ProjectFeature{ProjectID: projectID, Title: f.Title, Body: f.Body, Position: i}
+				if err := database.CreateFeature(ctx, rec); err != nil {
+					return nil, fmt.Errorf("bootstrap_project: create feature %q: %w", f.Title, err)
+				}
+				featIDs = append(featIDs, rec.ID)
+			}
+
+			return map[string]interface{}{
+				"success":           true,
+				"requirement_ids":   reqIDs,
+				"feature_ids":       featIDs,
+				"requirement_count": len(reqIDs),
+				"feature_count":     len(featIDs),
+			}, nil
+		},
+	}
+}
+
 // createWorkPackageTool creates a single task in an existing project.
 func createWorkPackageTool(database *db.Database) Definition {
 	return Definition{
@@ -153,9 +250,8 @@ func createWorkPackageTool(database *db.Database) Definition {
 			"project_id":  {Type: "string", Description: "ID of the project"},
 			"title":       {Type: "string", Description: "Short title for the work package"},
 			"description": {Type: "string", Description: "Detailed description of what needs to be done"},
-			"role":        {Type: "string", Description: "Agent role required: worker|orchestrator|reviewer (default: worker)"},
+			"role":        {Type: "string", Description: "Agent role required: worker|reviewer|planner|… (default: worker)"},
 			"priority":    {Type: "number", Description: "Priority 1-10 (default: 5)"},
-			"task_type":   {Type: "string", Description: "Task type: implement|review|plan (default: implement)"},
 		},
 		Required: []string{"project_id", "title", "description"},
 		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -176,15 +272,10 @@ func createWorkPackageTool(database *db.Database) Definition {
 			if role == "" {
 				role = "worker"
 			}
-			taskType := strArgOpt(args, "task_type")
-			if taskType == "" {
-				taskType = "implement"
-			}
 			priority := intArgOpt(args, "priority", 5)
 
 			task := &db.Task{
 				ProjectID: projectID,
-				Type:      taskType,
 				Role:      role,
 				Status:    db.TaskStatusBacklog,
 				Priority:  priority,
@@ -202,7 +293,6 @@ func createWorkPackageTool(database *db.Database) Definition {
 				"task_id":   task.ID,
 				"title":     title,
 				"role":      role,
-				"task_type": taskType,
 				"priority":  priority,
 			}, nil
 		},
