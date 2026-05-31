@@ -420,6 +420,11 @@ func (d *Database) applyColumnMigrations() error {
 			name: "add_allowed_tools_to_role_definitions",
 			sql:  "ALTER TABLE agent_role_definitions ADD COLUMN allowed_tools TEXT NOT NULL DEFAULT '[]'",
 		},
+		// per-provider model list with role and pricing config
+		{
+			name: "add_models_to_providers",
+			sql:  "ALTER TABLE providers ADD COLUMN models TEXT NOT NULL DEFAULT '[]'",
+		},
 	}
 
 	for _, m := range migrations {

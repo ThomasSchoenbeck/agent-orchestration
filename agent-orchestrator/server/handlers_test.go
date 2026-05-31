@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -91,6 +92,69 @@ func TestCreateProject_MissingName(t *testing.T) {
 	}
 }
 
+func TestCreateProject_AutoGeneratesSlug(t *testing.T) {
+	srv, _ := newTestServer(t)
+	w := do(t, srv, http.MethodPost, "/api/projects", map[string]string{
+		"name": "My Cool Project",
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var p db.Project
+	_ = json.Unmarshal(w.Body.Bytes(), &p)
+	if p.Slug == "" {
+		t.Fatal("expected slug to be auto-generated, got empty string")
+	}
+	// Slug must be lowercase with no spaces.
+	if strings.Contains(p.Slug, " ") {
+		t.Errorf("slug contains space: %q", p.Slug)
+	}
+	if p.Slug != strings.ToLower(p.Slug) {
+		t.Errorf("slug is not lowercase: %q", p.Slug)
+	}
+	// Must start with "my" (derived from name).
+	if !strings.HasPrefix(p.Slug, "my") {
+		t.Errorf("slug %q does not start with expected prefix from name", p.Slug)
+	}
+}
+
+func TestCreateProject_ExplicitSlugPreserved(t *testing.T) {
+	srv, _ := newTestServer(t)
+	w := do(t, srv, http.MethodPost, "/api/projects", map[string]interface{}{
+		"name": "Some Project",
+		"slug": "my-custom-slug",
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var p db.Project
+	_ = json.Unmarshal(w.Body.Bytes(), &p)
+	if p.Slug != "my-custom-slug" {
+		t.Errorf("slug = %q, want %q", p.Slug, "my-custom-slug")
+	}
+}
+
+func TestCreateProject_SlugUniqueness(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	// Create two projects with the same name (no slug provided).
+	w1 := do(t, srv, http.MethodPost, "/api/projects", map[string]string{"name": "Duplicate"})
+	w2 := do(t, srv, http.MethodPost, "/api/projects", map[string]string{"name": "Duplicate"})
+	if w1.Code != http.StatusCreated || w2.Code != http.StatusCreated {
+		t.Fatalf("expected both 201, got %d and %d", w1.Code, w2.Code)
+	}
+	var p1, p2 db.Project
+	_ = json.Unmarshal(w1.Body.Bytes(), &p1)
+	_ = json.Unmarshal(w2.Body.Bytes(), &p2)
+
+	if p1.Slug == "" || p2.Slug == "" {
+		t.Fatalf("expected both slugs non-empty, got %q and %q", p1.Slug, p2.Slug)
+	}
+	if p1.Slug == p2.Slug {
+		t.Errorf("expected unique slugs, both got %q", p1.Slug)
+	}
+}
+
 func TestListProjects(t *testing.T) {
 	srv, _ := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/projects", map[string]string{"name": "P1"})
@@ -123,6 +187,99 @@ func createTestProject(t *testing.T, srv *server.Server) string {
 	var p db.Project
 	_ = json.Unmarshal(w.Body.Bytes(), &p)
 	return p.ID
+}
+
+// TestProvisionWorkspace_ReturnsRepoURL verifies that claiming a task always
+// returns repo_url and branch in the response, never worktree_path.
+func TestProvisionWorkspace_ReturnsRepoURL(t *testing.T) {
+	srv, _ := newTestServer(t)
+	projectID := createTestProject(t, srv)
+
+	// Register an agent and create a task.
+	aw := do(t, srv, http.MethodPost, "/api/agents/register", map[string]interface{}{
+		"name": "ws-agent", "roles": []string{"worker"},
+	})
+	var reg map[string]string
+	_ = json.Unmarshal(aw.Body.Bytes(), &reg)
+	agentID := reg["agent_id"]
+
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": projectID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	// Claim the task.
+	cw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/claim",
+		map[string]string{"agent_id": agentID})
+	if cw.Code != http.StatusOK {
+		t.Fatalf("claim: expected 200, got %d: %s", cw.Code, cw.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(cw.Body.Bytes(), &resp)
+
+	if resp["repo_url"] == nil || resp["repo_url"].(string) == "" {
+		t.Errorf("claim response missing repo_url, got: %v", resp)
+	}
+	if resp["branch"] == nil || resp["branch"].(string) == "" {
+		t.Errorf("claim response missing branch, got: %v", resp)
+	}
+	if resp["worktree_path"] != nil && resp["worktree_path"].(string) != "" {
+		t.Errorf("claim response must not include worktree_path, got: %q", resp["worktree_path"])
+	}
+}
+
+// TestExternalHost_UsedInRepoURL verifies that when external_host is configured
+// the claim response uses it instead of "localhost".
+func TestExternalHost_UsedInRepoURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	database, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	const externalHost = "192.168.1.100"
+	cfg := &config.Config{
+		Server:   config.ServerConfig{Port: 9000, Host: "0.0.0.0", ExternalHost: externalHost},
+		Database: config.DatabaseConfig{Path: path},
+		Agents:   config.AgentConfig{HeartbeatIntervalSec: 30, TaskTimeoutSec: 300},
+		Storage:  config.StorageConfig{Root: t.TempDir()},
+	}
+	reg := llm.NewRegistry()
+	srv := server.New(cfg, database, reg)
+
+	// Create project, agent, task, and claim.
+	pw := do(t, srv, http.MethodPost, "/api/projects", map[string]string{"name": "ext-host-project"})
+	var proj db.Project
+	_ = json.Unmarshal(pw.Body.Bytes(), &proj)
+
+	aw := do(t, srv, http.MethodPost, "/api/agents/register", map[string]interface{}{
+		"name": "ext-host-agent", "roles": []string{"worker"},
+	})
+	var areg map[string]string
+	_ = json.Unmarshal(aw.Body.Bytes(), &areg)
+
+	tw := do(t, srv, http.MethodPost, "/api/tasks", map[string]interface{}{
+		"project_id": proj.ID, "type": "implement", "role": "worker",
+	})
+	var task db.Task
+	_ = json.Unmarshal(tw.Body.Bytes(), &task)
+
+	cw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/claim",
+		map[string]string{"agent_id": areg["agent_id"]})
+	if cw.Code != http.StatusOK {
+		t.Fatalf("claim: %d %s", cw.Code, cw.Body.String())
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(cw.Body.Bytes(), &resp)
+
+	repoURL, _ := resp["repo_url"].(string)
+	if !strings.Contains(repoURL, externalHost) {
+		t.Errorf("repo_url = %q, want it to contain external_host %q", repoURL, externalHost)
+	}
 }
 
 func TestCreateTask(t *testing.T) {

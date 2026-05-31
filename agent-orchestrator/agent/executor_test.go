@@ -377,10 +377,10 @@ func TestRouter_LoadFromDB_DisabledRoleSkipped(t *testing.T) {
 // tests that exercise the poll → claim → LLM → submit-result path.
 // The task is served from tasks/next on the first call only.
 // Returns the server and pointers to: nextCalls, claimCalls, resultCalls,
-// and the last-received result status.
+// reviewCalls, and the last-received result status.
 func fullExecMockServer(t *testing.T, task *db.Task) (
 	srv *httptest.Server,
-	nextCalls, claimCalls, resultCalls *atomic.Int32,
+	nextCalls, claimCalls, resultCalls, reviewCalls *atomic.Int32,
 	resultStatus *atomic.Value,
 ) {
 	t.Helper()
@@ -388,6 +388,7 @@ func fullExecMockServer(t *testing.T, task *db.Task) (
 	nextCalls = new(atomic.Int32)
 	claimCalls = new(atomic.Int32)
 	resultCalls = new(atomic.Int32)
+	reviewCalls = new(atomic.Int32)
 	resultStatus = new(atomic.Value)
 	resultStatus.Store("")
 
@@ -424,6 +425,10 @@ func fullExecMockServer(t *testing.T, task *db.Task) (
 		resultCalls.Add(1)
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/submit-for-review", func(w http.ResponseWriter, r *http.Request) {
+		reviewCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -444,7 +449,7 @@ func TestAgent_FullTaskExecution(t *testing.T) {
 		Status:  db.TaskStatusBacklog,
 		Payload: map[string]interface{}{"description": "Write hello world"},
 	}
-	srv, _, _, resultCalls, resultStatus := fullExecMockServer(t, task)
+	srv, _, _, _, reviewCalls, _ := fullExecMockServer(t, task)
 
 	cfg := buildExecutorConfig()
 	cfg.Agents.TaskPollIntervalSec = 1
@@ -473,16 +478,14 @@ func TestAgent_FullTaskExecution(t *testing.T) {
 	}
 	defer a.Stop()
 
+	// Successful non-reviewer tasks must submit for review, not complete directly.
 	deadline := time.After(8 * time.Second)
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("timed out waiting for result submission (got %d)", resultCalls.Load())
+			t.Fatalf("timed out waiting for submit-for-review (got %d)", reviewCalls.Load())
 		case <-time.After(100 * time.Millisecond):
-			if resultCalls.Load() >= 1 {
-				if got := resultStatus.Load().(string); got != db.TaskStatusCompleted {
-					t.Errorf("result status = %q, want %q", got, db.TaskStatusCompleted)
-				}
+			if reviewCalls.Load() >= 1 {
 				return
 			}
 		}
@@ -500,7 +503,7 @@ func TestAgent_LLMFailure_MarksTaskFailed(t *testing.T) {
 		Status:  db.TaskStatusBacklog,
 		Payload: map[string]interface{}{"description": "Fail me"},
 	}
-	srv, nextCalls, _, resultCalls, resultStatus := fullExecMockServer(t, task)
+	srv, nextCalls, _, resultCalls, _, resultStatus := fullExecMockServer(t, task)
 
 	cfg := buildExecutorConfig()
 	cfg.Agents.TaskPollIntervalSec = 1
@@ -571,6 +574,9 @@ func TestExecutor_PostsCompletionComment(t *testing.T) {
 	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/submit-for-review", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("/api/tasks/"+task.ID+"/comments", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			commentCalls.Add(1)
@@ -614,28 +620,31 @@ func TestExecutor_PostsCompletionComment(t *testing.T) {
 	if body == "" {
 		t.Error("expected non-empty comment body")
 	}
-	if !strings.Contains(strings.ToLower(body), "completed") {
-		t.Errorf("comment body should mention 'completed', got: %q", body)
+	// Successful non-reviewer tasks now go to AWAITING_REVIEW.
+	if !strings.Contains(strings.ToUpper(body), "AWAITING_REVIEW") {
+		t.Errorf("comment body should mention AWAITING_REVIEW, got: %q", body)
 	}
 }
 
-// TestClaimTask_WorktreePathPropagated verifies that the WorktreePath from the
-// outer ClaimTaskResponse is applied to the returned task, so the executor can
-// tell the LLM where its workspace is.
-func TestClaimTask_WorktreePathPropagated(t *testing.T) {
-	const worktreePath = "/storage/worktrees/task-wt-001"
+// TestClaimTask_RepoURLAndBranchPropagated verifies that repo_url and branch
+// from the claim response are applied to the returned task so executeTask can
+// clone the repo before running the executor.
+func TestClaimTask_RepoURLAndBranchPropagated(t *testing.T) {
+	const repoURL = "http://localhost:8080/git/my-project.git"
+	const branch = "task/abc123"
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/tasks/wt-task/claim", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/tasks/claim-task/claim", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"task": map[string]interface{}{
-				"id":     "wt-task",
+				"id":     "claim-task",
 				"type":   "implement",
 				"role":   "worker",
 				"status": db.TaskStatusDeveloping,
 			},
-			"worktree_path": worktreePath,
+			"repo_url": repoURL,
+			"branch":   branch,
 		})
 	})
 	srv := httptest.NewServer(mux)
@@ -643,34 +652,39 @@ func TestClaimTask_WorktreePathPropagated(t *testing.T) {
 
 	client := agent.NewServerClient(srv.URL)
 	ctx := context.Background()
-	task, err := client.ClaimTask(ctx, "wt-task", "agent-1")
+	task, err := client.ClaimTask(ctx, "claim-task", "agent-1")
 	if err != nil {
 		t.Fatalf("ClaimTask: %v", err)
 	}
-	if task.WorktreePath != worktreePath {
-		t.Errorf("WorktreePath = %q, want %q", task.WorktreePath, worktreePath)
+	if task.RepoURL != repoURL {
+		t.Errorf("RepoURL = %q, want %q", task.RepoURL, repoURL)
+	}
+	if task.Branch != branch {
+		t.Errorf("Branch = %q, want %q", task.Branch, branch)
 	}
 }
 
-// TestExecutor_UppercaseStatusOnSuccess verifies that a successful task
-// execution results in status=COMPLETED (not lowercase "completed").
-func TestExecutor_UppercaseStatusOnSuccess(t *testing.T) {
-	var submittedStatus atomic.Value
-	submittedStatus.Store("")
+// TestExecutor_SubmitsForReviewOnSuccess verifies that a successful non-reviewer
+// task calls submit-for-review (not /result) so it enters AWAITING_REVIEW.
+func TestExecutor_SubmitsForReviewOnSuccess(t *testing.T) {
+	var reviewCalled atomic.Bool
 
 	task := &db.Task{
 		ID:      "status-task",
 		Type:    "implement",
 		Role:    "worker",
 		Status:  db.TaskStatusDeveloping,
-		Payload: map[string]interface{}{"description": "Verify status casing"},
+		Payload: map[string]interface{}{"description": "Verify review submission"},
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, r *http.Request) {
-		var req api.SubmitTaskResultRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		submittedStatus.Store(req.Status)
+	mux.HandleFunc("/api/tasks/"+task.ID+"/submit-for-review", func(w http.ResponseWriter, _ *http.Request) {
+		reviewCalled.Store(true)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, _ *http.Request) {
+		// Should not be called for a successful non-reviewer task.
+		t.Error("unexpected call to /result for successful non-reviewer task")
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/api/tasks/"+task.ID+"/comments", func(w http.ResponseWriter, _ *http.Request) {
@@ -700,9 +714,8 @@ func TestExecutor_UppercaseStatusOnSuccess(t *testing.T) {
 	defer cancel()
 	exec.Run(ctx, task)
 
-	got := submittedStatus.Load().(string)
-	if got != db.TaskStatusCompleted {
-		t.Errorf("submitted status = %q, want %q (COMPLETED)", got, db.TaskStatusCompleted)
+	if !reviewCalled.Load() {
+		t.Error("expected submit-for-review to be called, but it was not")
 	}
 }
 
@@ -753,6 +766,69 @@ func TestExecutor_UppercaseStatusOnFailure(t *testing.T) {
 	got := submittedStatus.Load().(string)
 	if got != db.TaskStatusFailed {
 		t.Errorf("submitted status = %q, want %q (FAILED)", got, db.TaskStatusFailed)
+	}
+}
+
+// TestExecutor_PushFailureSetsTaskFailed verifies that when CommitAndPush fails
+// (e.g. the worktree path doesn't exist), the task is submitted as FAILED and
+// not forwarded to submit-for-review.
+func TestExecutor_PushFailureSetsTaskFailed(t *testing.T) {
+	var submittedStatus atomic.Value
+	var reviewCalled atomic.Bool
+	submittedStatus.Store("")
+
+	task := &db.Task{
+		ID:           "push-fail-task",
+		Type:         "implement",
+		Role:         "worker",
+		Status:       db.TaskStatusDeveloping,
+		WorktreePath: "/nonexistent/worktree/path", // will cause CommitAndPush to fail
+		Payload:      map[string]interface{}{"description": "Push will fail"},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tasks/"+task.ID+"/result", func(w http.ResponseWriter, r *http.Request) {
+		var req api.SubmitTaskResultRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		submittedStatus.Store(req.Status)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/submit-for-review", func(w http.ResponseWriter, _ *http.Request) {
+		reviewCalled.Store(true)
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/tasks/"+task.ID+"/comments", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := buildExecutorConfig()
+	reg := llm.NewRegistry()
+	_ = reg.Register("mock", &mockLLMProvider{
+		name: "mock",
+		response: llm.ChatResponse{
+			Content:    "Done.",
+			StopReason: "end_turn",
+			TokensUsed: 10,
+		},
+	})
+	rtr := router.New(cfg, reg)
+	client := agent.NewServerClient(srv.URL)
+	exec := agent.NewExecutor(rtr, tools.NewRegistry(), client, "push-fail-agent")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	exec.Run(ctx, task)
+
+	if got := submittedStatus.Load().(string); got != db.TaskStatusFailed {
+		t.Errorf("submitted status = %q, want %q", got, db.TaskStatusFailed)
+	}
+	if reviewCalled.Load() {
+		t.Error("submit-for-review must not be called when push fails")
 	}
 }
 

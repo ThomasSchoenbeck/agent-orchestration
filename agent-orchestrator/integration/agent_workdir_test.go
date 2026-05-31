@@ -1,5 +1,3 @@
-//go:build integration
-
 // IT-9: Agent remote-mode workdir
 //
 // When an agent registers with default (remote) mode and claims a task, the
@@ -97,6 +95,67 @@ func TestAgentRemoteWorkdir(t *testing.T) {
 	apiJSON(t, "GET", srv.BaseURL, "/api/tasks/"+taskID, nil, &task)
 	if task.Status != db.TaskStatusAwaitingReview {
 		t.Errorf("status = %q, want %q", task.Status, db.TaskStatusAwaitingReview)
+	}
+	if task.BranchHeadSHA != commitHash {
+		t.Errorf("branch_head_sha = %q, want %q", task.BranchHeadSHA, commitHash)
+	}
+}
+
+// TestAgentCloneAndPush_E2E is the primary end-to-end regression test for
+// Bug 7. It exercises the full production path:
+//
+//  1. Create project via API (calls InitBare + InitialCommit server-side).
+//  2. Register agent, claim task → server returns RepoURL + Branch.
+//  3. Agent calls CloneOrOpen against the live embedded HTTP server.
+//  4. Agent writes a file, calls CommitAndPush.
+//  5. Assert task transitions to AWAITING_REVIEW and branch_head_sha is set.
+//
+// This test was missing before Bug 7 was discovered; had it existed, the
+// 500 error would have been caught before reaching production.
+func TestAgentCloneAndPush_E2E(t *testing.T) {
+	t.Parallel()
+
+	srv := newGitTestServer(t)
+
+	// Step 1: Create project — server calls InitBare + InitialCommit internally.
+	// Do NOT call seedMainBranch; we want to test the InitialCommit path.
+	projectID, slug := makeProject(t, srv.BaseURL, "e2e-clone-push")
+	_ = projectID
+
+	taskID := makeTask(t, srv.BaseURL, projectID)
+	workerID := registerAgent(t, srv.BaseURL, "e2e-worker", []string{"worker"})
+
+	// Step 2: Claim task — get RepoURL + Branch.
+	var claimResp api.ClaimTaskResponse
+	status := apiJSON(t, "POST", srv.BaseURL, "/api/tasks/"+taskID+"/claim",
+		map[string]string{"agent_id": workerID}, &claimResp)
+	if status != 200 {
+		t.Fatalf("claim: expected 200, got %d", status)
+	}
+	if claimResp.RepoURL == "" {
+		t.Fatal("claim response missing repo_url")
+	}
+	if claimResp.Branch == "" {
+		t.Fatal("claim response missing branch")
+	}
+
+	// Use the actual server URL (cfg.Server.Port=0 means assigned by OS).
+	repoURL := srv.BaseURL + "/git/" + slug + ".git"
+
+	// Step 3: Clone via CloneOrOpen — this is the operation that previously 500'd.
+	localPath := filepath.Join(t.TempDir(), "workspace")
+	if err := agent.CloneOrOpen(repoURL, localPath, claimResp.Branch); err != nil {
+		t.Fatalf("CloneOrOpen: %v", err)
+	}
+
+	// Step 4: Write a file and push.
+	commitHash := commitAndPush(t, localPath, "main.go", "package main", claimResp.Branch)
+
+	// Step 5: Verify task state.
+	var task db.Task
+	apiJSON(t, "GET", srv.BaseURL, "/api/tasks/"+taskID, nil, &task)
+	if task.Status != db.TaskStatusAwaitingReview {
+		t.Errorf("status = %q, want AWAITING_REVIEW", task.Status)
 	}
 	if task.BranchHeadSHA != commitHash {
 		t.Errorf("branch_head_sha = %q, want %q", task.BranchHeadSHA, commitHash)

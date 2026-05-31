@@ -17,7 +17,7 @@ func (s *Server) newGitHTTPHandler() *git.HTTPHandler {
 	resolver := func(slug string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		p, err := s.db.GetProjectBySlug(ctx, slug)
+		p, err := s.db.GetProjectBySlugOrID(ctx, slug)
 		if err != nil {
 			return "", err
 		}

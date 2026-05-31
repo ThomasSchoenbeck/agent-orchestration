@@ -12,6 +12,7 @@ import (
 	"agent-orchestrator/api"
 	"agent-orchestrator/db"
 	"agent-orchestrator/llm"
+	"agent-orchestrator/logging"
 	"agent-orchestrator/router"
 	"agent-orchestrator/tools"
 )
@@ -72,15 +73,21 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		tlog.Warn("failed to post start comment: %v", err)
 	}
 
-	result, status, tokensUsed, execErr := e.execute(ctx, task)
+	result, _, stats, execErr := e.execute(ctx, task)
 	if execErr != nil {
-		status = db.TaskStatusFailed
 		result = map[string]interface{}{"error": execErr.Error()}
 		tlog.ErrorCtx(ctx, "task failed: %v", execErr)
 	}
 
 	durationMs := int(time.Since(start).Milliseconds())
-	metrics := &api.TaskMetrics{TokensUsed: tokensUsed, DurationMs: durationMs}
+	metrics := &api.TaskMetrics{
+		TokensUsed:   stats.totalTokens,
+		InputTokens:  stats.inputTokens,
+		OutputTokens: stats.outputTokens,
+		Cost:         stats.cost,
+		DurationMs:   durationMs,
+		Model:        stats.model,
+	}
 
 	// Reviewer tasks post a review instead of a generic result.
 	if task.Role == "reviewer" && execErr == nil {
@@ -90,33 +97,42 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		}
 		_ = e.client.SubmitTaskResult(ctx, task.ID, result, db.TaskStatusCompleted, metrics)
 		tlog.InfoCtx(ctx, "reviewer task done (review_status=%s tokens=%d duration=%dms)",
-			reviewStatus, tokensUsed, durationMs)
-		e.postCompletionComment(ctx, task, result, db.TaskStatusCompleted, tokensUsed, durationMs, nil)
+			reviewStatus, stats.totalTokens, durationMs)
+		e.postCompletionComment(ctx, task, result, db.TaskStatusCompleted, stats.totalTokens, durationMs, nil)
 		return
 	}
 
-	// For non-reviewer tasks: commit work, push branch, then hand off to review.
-	if execErr == nil && task.WorktreePath != "" {
-		committed := e.commitTaskWork(ctx, task)
-		if committed {
-			// Work was pushed — transition to AWAITING_REVIEW for a reviewer to pick up.
-			if err := e.client.SubmitForReview(ctx, task.ID); err != nil {
-				tlog.WarnCtx(ctx, "SubmitForReview failed: %v", err)
-			} else {
-				tlog.InfoCtx(ctx, "task submitted for review (tokens=%d duration=%dms)", tokensUsed, durationMs)
+	// For non-reviewer tasks with execution errors: fail immediately.
+	if execErr != nil {
+		if err := e.client.SubmitTaskResult(ctx, task.ID, result, db.TaskStatusFailed, metrics); err != nil {
+			tlog.ErrorCtx(ctx, "failed to submit failed result: %v", err)
+		}
+		e.postCompletionComment(ctx, task, result, db.TaskStatusFailed, stats.totalTokens, durationMs, execErr)
+		return
+	}
+
+	// Commit and push work when the agent has a worktree.
+	if task.WorktreePath != "" {
+		if _, pushErr := e.commitTaskWork(ctx, task); pushErr != nil {
+			// Push failed — surface as FAILED so the task is not silently completed.
+			tlog.ErrorCtx(ctx, "push failed, marking task failed: %v", pushErr)
+			failResult := map[string]interface{}{"error": fmt.Sprintf("push failed: %v", pushErr)}
+			if err := e.client.SubmitTaskResult(ctx, task.ID, failResult, db.TaskStatusFailed, metrics); err != nil {
+				tlog.ErrorCtx(ctx, "failed to submit push-failure result: %v", err)
 			}
-			e.postCompletionComment(ctx, task, result, db.TaskStatusAwaitingReview, tokensUsed, durationMs, nil)
+			e.postCompletionComment(ctx, task, failResult, db.TaskStatusFailed, stats.totalTokens, durationMs, pushErr)
 			return
 		}
 	}
 
-	// No file changes produced (or no worktree) — mark completed directly.
-	if err := e.client.SubmitTaskResult(ctx, task.ID, result, status, metrics); err != nil {
-		tlog.ErrorCtx(ctx, "failed to submit result: %v", err)
+	// All non-reviewer tasks go to AWAITING_REVIEW regardless of whether files
+	// were changed. COMPLETED is only reached via explicit reviewer approval.
+	if err := e.client.SubmitForReview(ctx, task.ID, metrics); err != nil {
+		tlog.WarnCtx(ctx, "SubmitForReview failed: %v", err)
 	} else {
-		tlog.InfoCtx(ctx, "task done (status=%s tokens=%d duration=%dms)", status, tokensUsed, durationMs)
+		tlog.InfoCtx(ctx, "task submitted for review (tokens=%d duration=%dms)", stats.totalTokens, durationMs)
 	}
-	e.postCompletionComment(ctx, task, result, status, tokensUsed, durationMs, execErr)
+	e.postCompletionComment(ctx, task, result, db.TaskStatusAwaitingReview, stats.totalTokens, durationMs, nil)
 }
 
 // postCompletionComment posts a human-readable summary comment on the task.
@@ -165,10 +181,19 @@ func extractReviewFromResult(result map[string]interface{}) (reviewStatus, body 
 	return reviewStatus, body
 }
 
+// execStats carries token usage and cost data out of execute().
+type execStats struct {
+	totalTokens  int
+	inputTokens  int
+	outputTokens int
+	cost         float64
+	model        string
+}
+
 // execute performs the LLM+tool loop and returns the final result map, status,
-// and total token count. It does NOT write to the server.
+// token usage stats, and any error. It does NOT write to the server.
 func (e *Executor) execute(ctx context.Context, task *db.Task) (
-	result map[string]interface{}, status string, totalTokens int, err error,
+	result map[string]interface{}, status string, stats execStats, err error,
 ) {
 	tlog := e.log.ForTask(task.ID)
 
@@ -180,14 +205,15 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 		route, err = e.rtr.RouteByRole(task.Role)
 		if err != nil {
 			tlog.ErrorCtx(ctx, "routing failed (type=%s role=%s): %v", task.Type, task.Role, err)
-			return nil, db.TaskStatusFailed, 0, fmt.Errorf("route task (type=%s role=%s): %w", task.Type, task.Role, err)
+			return nil, db.TaskStatusFailed, stats, fmt.Errorf("route task (type=%s role=%s): %w", task.Type, task.Role, err)
 		}
 	}
 	if route.Provider == nil {
 		tlog.ErrorCtx(ctx, "routing returned nil provider for role %q", route.Role)
-		return nil, db.TaskStatusFailed, 0, fmt.Errorf("no provider for role %q", route.Role)
+		return nil, db.TaskStatusFailed, stats, fmt.Errorf("no provider for role %q", route.Role)
 	}
 	tlog.InfoCtx(ctx, "route resolved provider=%q model=%q role=%q", route.Provider.Name(), route.Model, route.Role)
+	stats.model = route.Model
 
 	// Build the initial system + user message.
 	systemMsg := e.buildSystemMessage(task, route)
@@ -279,9 +305,12 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 		resp, callErr := route.Provider.Chat(ctx, req)
 		if callErr != nil {
 			tlog.ErrorCtx(ctx, "LLM call failed (round=%d): %v", round, callErr)
-			return nil, db.TaskStatusFailed, totalTokens, fmt.Errorf("llm chat (round %d): %w", round, callErr)
+			return nil, db.TaskStatusFailed, stats, fmt.Errorf("llm chat (round %d): %w", round, callErr)
 		}
-		totalTokens += resp.TokensUsed
+		stats.totalTokens += resp.TokensUsed
+		stats.inputTokens += resp.InputTokens
+		stats.outputTokens += resp.OutputTokens
+		stats.cost += logging.CostForCallWithProvider(route.ProviderModels, nil, route.Model, resp.InputTokens, resp.OutputTokens)
 
 		// In text mode, parse tool calls out of the response content.
 		if route.TextToolCalls && len(resp.ToolCalls) == 0 {
@@ -317,10 +346,10 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 
 		// No tool calls — we're done.
 		if len(resp.ToolCalls) == 0 {
-			tlog.InfoCtx(ctx, "task complete after %d round(s), total_tokens=%d", round+1, totalTokens)
+			tlog.InfoCtx(ctx, "task complete after %d round(s), total_tokens=%d", round+1, stats.totalTokens)
 			return map[string]interface{}{
 				"output": resp.Content,
-			}, db.TaskStatusCompleted, totalTokens, nil
+			}, db.TaskStatusCompleted, stats, nil
 		}
 
 		// Execute each tool call and collect results.
@@ -391,7 +420,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 				tlog.WarnCtx(ctx, "aborting after %d consecutive rounds with all tool calls failing", consecutiveErrorRounds)
 				return map[string]interface{}{
 					"warning": fmt.Sprintf("aborted after %d consecutive all-error tool rounds", consecutiveErrorRounds),
-				}, db.TaskStatusFailed, totalTokens, fmt.Errorf("model stuck: %d consecutive rounds of failing tool calls", consecutiveErrorRounds)
+				}, db.TaskStatusFailed, stats, fmt.Errorf("model stuck: %d consecutive rounds of failing tool calls", consecutiveErrorRounds)
 			}
 		} else {
 			consecutiveErrorRounds = 0
@@ -404,12 +433,12 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			return map[string]interface{}{
 				"output":  messages[i].Content,
 				"warning": "max tool rounds exceeded",
-			}, db.TaskStatusCompleted, totalTokens, nil
+			}, db.TaskStatusCompleted, stats, nil
 		}
 	}
 	return map[string]interface{}{
 		"warning": "max tool rounds exceeded with no assistant output",
-	}, db.TaskStatusFailed, totalTokens, nil
+	}, db.TaskStatusFailed, stats, nil
 }
 
 // textToolCallRe extracts fenced code blocks (```json ... ``` or ``` ... ```)
@@ -502,9 +531,9 @@ func validateToolArgs(reg *tools.Registry, toolName string, args map[string]inte
 }
 
 // commitTaskWork stages, commits, and pushes any changes in the worktree.
-// Returns true when a new commit was pushed to the branch (i.e. real work was done).
-// Safe to call even when the worktree is clean — returns false without error.
-func (e *Executor) commitTaskWork(ctx context.Context, task *db.Task) bool {
+// Returns (true, nil) when a new commit was pushed, (false, nil) when the
+// worktree is clean, and (false, err) when the push itself failed.
+func (e *Executor) commitTaskWork(ctx context.Context, task *db.Task) (bool, error) {
 	commitMsg := fmt.Sprintf("Agent: task %s", task.ID)
 	if task.Payload != nil {
 		if title, ok := task.Payload["title"].(string); ok && title != "" {
@@ -516,11 +545,11 @@ func (e *Executor) commitTaskWork(ctx context.Context, task *db.Task) bool {
 	sha, err := CommitAndPush(task.WorktreePath, commitMsg, "Agent", "agent@system", "", "")
 	if err != nil {
 		tlog.WarnCtx(ctx, "CommitAndPush failed: %v", err)
-		return false
+		return false, err
 	}
 	if sha == "" || sha == task.BranchHeadSHA {
 		tlog.InfoCtx(ctx, "worktree clean — no new commit")
-		return false
+		return false, nil
 	}
 	branch := fmt.Sprintf("task/%s", task.ID)
 	tlog.InfoCtx(ctx, "pushed branch %q commit=%s", branch, sha[:12])
@@ -528,7 +557,7 @@ func (e *Executor) commitTaskWork(ctx context.Context, task *db.Task) bool {
 	if err := e.client.PostComment(ctx, task.ID, body, e.agentID); err != nil {
 		tlog.Warn("post push comment failed: %v", err)
 	}
-	return true
+	return true, nil
 }
 
 // buildSystemMessage assembles the system prompt for the task.

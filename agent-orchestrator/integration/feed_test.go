@@ -1,5 +1,3 @@
-//go:build integration
-
 package integration_test
 
 import (
@@ -76,21 +74,33 @@ func TestCommentsThreadUnderReview(t *testing.T) {
 		t.Error("threaded comments not in ascending created_at order")
 	}
 
-	// Assert: standalone comment.
+	// Assert: standalone comments (no review_id). This includes the one user-posted
+	// "standalone" comment plus any system comments posted by provisionWorkspace on
+	// claim — so we check for presence of the specific comment, not an exact count.
 	var standalone []db.TaskComment
 	apiJSON(t, "GET", srv.BaseURL, "/api/tasks/"+taskID+"/comments", nil, &standalone)
-	if len(standalone) != 1 {
-		t.Errorf("standalone comments: expected 1, got %d", len(standalone))
+
+	found := false
+	for _, c := range standalone {
+		if c.ReviewID != "" {
+			t.Errorf("standalone list contains comment with review_id %q", c.ReviewID)
+		}
+		if c.Body == "standalone" {
+			found = true
+		}
 	}
-	if len(standalone) == 1 && standalone[0].ReviewID != "" {
-		t.Errorf("standalone comment has review_id %q, want empty", standalone[0].ReviewID)
+	if !found {
+		t.Errorf("standalone comment with body %q not found; got %d standalone comments", "standalone", len(standalone))
 	}
 
-	// Total items across reviews + threaded + standalone = 4.
+	// Total: 1 review + 2 threaded comments (review-scoped) must be present.
+	// Standalone count varies due to system comments; we verified the user comment above.
 	var reviews []db.TaskReview
 	apiJSON(t, "GET", srv.BaseURL, "/api/tasks/"+taskID+"/reviews", nil, &reviews)
-	total := len(reviews) + len(threaded) + len(standalone)
-	if total != 4 {
-		t.Errorf("total feed items = %d, want 4 (1 review + 2 threaded + 1 standalone)", total)
+	if len(reviews) != 1 {
+		t.Errorf("reviews: expected 1, got %d", len(reviews))
+	}
+	if len(threaded) != 2 {
+		t.Errorf("threaded: expected 2, got %d", len(threaded))
 	}
 }

@@ -128,6 +128,20 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Auto-generate slug from name when the caller did not supply one.
+		// We do this after CreateProject so p.ID is available for uniqueness.
+		if p.Slug == "" {
+			base := slugify(p.Name)
+			if base == "" {
+				base = p.ID[:8]
+			}
+			slug := base
+			if existing, _ := s.db.GetProjectBySlug(r.Context(), base); existing != nil {
+				slug = base + "-" + p.ID[:8]
+			}
+			p.Slug = slug
+		}
+
 		// Initialise a bare git repo for this project.
 		repoPath := s.storage.RepoPath(p.ID)
 		if err := git.InitBare(repoPath); err != nil {
@@ -150,10 +164,12 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// Ensure main always has at least an empty root commit so the
-			// branch exists and ReadTree returns [] instead of 404.
-			if err := git.InitialCommit(repoPath, "main"); err != nil {
-				log.Printf("server: InitialCommit project %q: %v", p.ID, err)
+			// Seed main with a real commit so the HTTP server can serve
+			// it via upload-pack. CommitFile uses the high-level API and
+			// produces objects that are always packable and servable.
+			if _, err := git.CommitFile(repoPath, "main", ".gitkeep", nil,
+				"chore: initialise repository", "Agent Orchestrator", "noreply@agent-orchestrator"); err != nil {
+				log.Printf("server: CommitFile (init) project %q: %v", p.ID, err)
 			}
 
 			if err := s.db.UpdateProject(r.Context(), p); err != nil {
@@ -344,7 +360,13 @@ func (s *Server) handleProjectInitRepo(w http.ResponseWriter, r *http.Request, p
 		s.internalError(w, err)
 		return
 	}
-	if err := git.InitialCommit(repoPath, "main"); err != nil {
+	// CommitFile creates a real commit via the high-level API, ensuring all git
+	// objects are stored in a format the HTTP server can pack and serve.
+	// This also repairs existing projects whose initial commit was created with
+	// the old low-level SetSize(0) approach (which produced objects that could
+	// not be served via upload-pack).
+	if _, err := git.CommitFile(repoPath, "main", ".gitkeep", nil,
+		"chore: initialise repository", "Agent Orchestrator", "noreply@agent-orchestrator"); err != nil {
 		s.internalError(w, err)
 		return
 	}
@@ -682,13 +704,7 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		// Optionally record metrics.
 		if req.Metrics != nil {
-			_ = s.db.CreateMetric(r.Context(), &db.Metric{
-				TaskID:     id,
-				TokensUsed: req.Metrics.TokensUsed,
-				Cost:       req.Metrics.Cost,
-				DurationMs: req.Metrics.DurationMs,
-				Success:    req.Status == "completed",
-			})
+			s.recordMetric(r.Context(), id, "", req.Metrics, req.Status == db.TaskStatusCompleted)
 		}
 		t, _ := s.db.GetTask(r.Context(), id)
 		if t != nil {
@@ -761,8 +777,15 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
 			return
 		}
-		// If the post-receive hook hasn't fired yet (e.g. colocated push),
-		// transition manually.
+		// Optionally record metrics submitted by the agent.
+		var reviewReq struct {
+			Metrics *api.TaskMetrics `json:"metrics,omitempty"`
+		}
+		_ = s.decodeJSONOptional(r, &reviewReq)
+		if reviewReq.Metrics != nil {
+			s.recordMetric(r.Context(), id, t.AssignedAgentID, reviewReq.Metrics, true)
+		}
+		// If the post-receive hook hasn't fired yet, transition manually.
 		if t.Status == db.TaskStatusDeveloping {
 			_ = s.db.TransitionTaskState(r.Context(), id,
 				db.TaskStatusDeveloping, db.TaskStatusAwaitingReview,
@@ -773,6 +796,18 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			s.releaseTaskResources(t)
 		}
 		api.WriteJSON(w, http.StatusOK, t)
+
+	case "cost":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		cost, err := s.db.GetTaskCost(r.Context(), id)
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		api.WriteJSON(w, http.StatusOK, cost)
 
 	case "logs":
 		switch r.Method {
@@ -1736,4 +1771,76 @@ func splitPath(path, prefix string) []string {
 		return nil
 	}
 	return strings.Split(trimmed, "/")
+}
+
+// slugify converts a human-readable name into a URL-safe slug:
+// lowercase, alphanumeric and hyphens only, no leading/trailing/consecutive hyphens.
+func slugify(s string) string {
+	s = strings.ToLower(s)
+	var b strings.Builder
+	prevHyphen := true // suppress leading hyphens
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevHyphen = false
+		case (r == ' ' || r == '-' || r == '_') && !prevHyphen:
+			b.WriteRune('-')
+			prevHyphen = true
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
+}
+
+// decodeJSONOptional tries to decode the request body into v. Ignores EOF
+// (empty body) and decode errors — the caller should check populated fields.
+func (s *Server) decodeJSONOptional(r *http.Request, v interface{}) error {
+	if r.ContentLength == 0 {
+		return nil
+	}
+	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// recordMetric creates a metric row for a task, calculating cost from the
+// provider model list when a model name is present in the metrics.
+func (s *Server) recordMetric(ctx context.Context, taskID, agentID string, m *api.TaskMetrics, success bool) {
+	if m == nil {
+		return
+	}
+	cost := m.Cost
+	// If the agent submitted a model name, re-derive cost from provider pricing
+	// when it wasn't already calculated (or to verify it).
+	if m.Model != "" && m.Cost == 0 && (m.InputTokens > 0 || m.OutputTokens > 0) {
+		cost = s.costFromModel(ctx, m.Model, m.InputTokens, m.OutputTokens)
+	}
+	_ = s.db.CreateMetric(ctx, &db.Metric{
+		TaskID:       taskID,
+		AgentID:      agentID,
+		Model:        m.Model,
+		TokensUsed:   m.TokensUsed,
+		InputTokens:  m.InputTokens,
+		OutputTokens: m.OutputTokens,
+		Cost:         cost,
+		DurationMs:   m.DurationMs,
+		Success:      success,
+	})
+}
+
+// costFromModel looks up the provider that owns modelName and computes cost
+// using its per-model pricing. Returns 0 when no pricing is found.
+func (s *Server) costFromModel(ctx context.Context, modelName string, inputTokens, outputTokens int) float64 {
+	providers, err := s.db.ListProviders(ctx)
+	if err != nil {
+		return 0
+	}
+	for _, p := range providers {
+		for _, m := range p.Models {
+			if m.Name == modelName {
+				in := float64(inputTokens) / 1_000_000 * m.InputPerMillion
+				out := float64(outputTokens) / 1_000_000 * m.OutputPerMillion
+				return in + out
+			}
+		}
+	}
+	return 0
 }

@@ -32,6 +32,7 @@
     deleteTaskLogs,
     getAgent,
     listLogs,
+    getTaskCost,
   } from "../lib/api.js"
   import MarkdownEditor from "../components/MarkdownEditor.svelte"
   import FileTree from "../components/FileTree.svelte"
@@ -45,6 +46,8 @@
   let project = $state(null)
   let assignedAgent = $state(null)
   let loading = $state(true)
+  let taskCost = $state(null)
+  let costExpanded = $state(false)
   let editing = $state(false)
   let taskLogs    = $state([])
   let agentExecLogs = $state([])   // from /api/logs?task_id=
@@ -229,6 +232,7 @@
           (t2) => t2.id !== taskId,
         )
       }
+      taskCost = await getTaskCost(taskId).catch(() => null)
       loadLogs(taskId)
       loadCodePanel(t)
     } catch (e) {
@@ -620,6 +624,27 @@
               </div>
             {:else}
               <p class="text-sm text-gray-400 italic mb-4">No description.</p>
+            {/if}
+
+            <!-- Cost chip -->
+            {#if taskCost && (taskCost.total_tokens > 0 || taskCost.cost_usd > 0)}
+              <button
+                class="mb-3 inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded
+                       bg-surface-700 text-gray-400 hover:text-gray-200 hover:bg-surface-600 transition-colors"
+                onclick={() => costExpanded = !costExpanded}
+                title="Token usage and estimated cost"
+              >
+                💰 {taskCost.cost_usd > 0 ? '~$' + taskCost.cost_usd.toFixed(5) : ''}
+                · {(taskCost.total_tokens / 1000).toFixed(1)}k tokens
+                {costExpanded ? '▲' : '▼'}
+              </button>
+              {#if costExpanded}
+                <div class="mb-3 p-2 bg-surface-800 rounded border border-surface-600 text-xs text-gray-400 grid grid-cols-3 gap-2">
+                  <div><span class="text-gray-500">Input</span> {taskCost.input_tokens.toLocaleString()} tok</div>
+                  <div><span class="text-gray-500">Output</span> {taskCost.output_tokens.toLocaleString()} tok</div>
+                  <div><span class="text-gray-500">Rounds</span> {taskCost.rounds}</div>
+                </div>
+              {/if}
             {/if}
 
             <!-- Metadata -->

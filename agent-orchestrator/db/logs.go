@@ -108,6 +108,33 @@ func (d *Database) CreateMetric(ctx context.Context, m *Metric) error {
 	return err
 }
 
+// TaskCostSummary is the response payload for GET /api/tasks/{id}/cost.
+type TaskCostSummary struct {
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	TotalTokens  int     `json:"total_tokens"`
+	CostUSD      float64 `json:"cost_usd"`
+	Rounds       int     `json:"rounds"`
+}
+
+// GetTaskCost aggregates token usage and cost from the metrics table for a task.
+func (d *Database) GetTaskCost(ctx context.Context, taskID string) (*TaskCostSummary, error) {
+	row := d.db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(tokens_used), 0),
+			COALESCE(SUM(cost), 0.0),
+			COUNT(*)
+		FROM metrics
+		WHERE task_id = ?`, taskID)
+	var s TaskCostSummary
+	if err := row.Scan(&s.InputTokens, &s.OutputTokens, &s.TotalTokens, &s.CostUSD, &s.Rounds); err != nil {
+		return nil, fmt.Errorf("GetTaskCost %q: %w", taskID, err)
+	}
+	return &s, nil
+}
+
 // DeleteLogsByTask removes all log entries for a specific task.
 func (d *Database) DeleteLogsByTask(ctx context.Context, taskID string) (int64, error) {
 	res, err := d.db.ExecContext(ctx, `DELETE FROM logs WHERE task_id=?`, taskID)

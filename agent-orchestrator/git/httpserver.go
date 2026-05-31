@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -73,14 +74,14 @@ func (h *HTTPHandler) serveUploadPackInfoRefs(w http.ResponseWriter, r *http.Req
 	ep := endpointFor(slug)
 	sess, err := h.srv.NewUploadPackSession(ep, nil)
 	if err != nil {
-		httpGitError(w, err)
+		httpGitError(w, slug, err)
 		return
 	}
 	defer sess.Close()
 
 	ar, err := sess.AdvertisedReferencesContext(r.Context())
 	if err != nil {
-		httpGitError(w, err)
+		httpGitError(w, slug, err)
 		return
 	}
 
@@ -100,10 +101,18 @@ func (h *HTTPHandler) serveUploadPack(w http.ResponseWriter, r *http.Request, sl
 	ep := endpointFor(slug)
 	sess, err := h.srv.NewUploadPackSession(ep, nil)
 	if err != nil {
-		httpGitError(w, err)
+		httpGitError(w, slug, err)
 		return
 	}
 	defer sess.Close()
+
+	// Stateless smart-HTTP: each POST creates a fresh session. go-git's server
+	// requires AdvertisedReferences to be called first to initialise capabilities
+	// before UploadPack can be invoked. We call it here and discard the result.
+	if _, err := sess.AdvertisedReferencesContext(r.Context()); err != nil {
+		httpGitError(w, slug, err)
+		return
+	}
 
 	req := packp.NewUploadPackRequest()
 	if err := req.Decode(r.Body); err != nil {
@@ -113,7 +122,7 @@ func (h *HTTPHandler) serveUploadPack(w http.ResponseWriter, r *http.Request, sl
 
 	resp, err := sess.UploadPack(r.Context(), req)
 	if err != nil {
-		httpGitError(w, err)
+		httpGitError(w, slug, err)
 		return
 	}
 	defer resp.Close()
@@ -130,14 +139,14 @@ func (h *HTTPHandler) serveReceivePackInfoRefs(w http.ResponseWriter, r *http.Re
 	ep := endpointFor(slug)
 	sess, err := h.srv.NewReceivePackSession(ep, nil)
 	if err != nil {
-		httpGitError(w, err)
+		httpGitError(w, slug, err)
 		return
 	}
 	defer sess.Close()
 
 	ar, err := sess.AdvertisedReferencesContext(r.Context())
 	if err != nil {
-		httpGitError(w, err)
+		httpGitError(w, slug, err)
 		return
 	}
 
@@ -156,10 +165,16 @@ func (h *HTTPHandler) serveReceivePack(w http.ResponseWriter, r *http.Request, s
 	ep := endpointFor(slug)
 	sess, err := h.srv.NewReceivePackSession(ep, nil)
 	if err != nil {
-		httpGitError(w, err)
+		httpGitError(w, slug, err)
 		return
 	}
 	defer sess.Close()
+
+	// Stateless smart-HTTP: initialise session capabilities before ReceivePack.
+	if _, err := sess.AdvertisedReferencesContext(r.Context()); err != nil {
+		httpGitError(w, slug, err)
+		return
+	}
 
 	req := packp.NewReferenceUpdateRequest()
 	if err := req.Decode(r.Body); err != nil {
@@ -169,7 +184,7 @@ func (h *HTTPHandler) serveReceivePack(w http.ResponseWriter, r *http.Request, s
 
 	status, err := sess.ReceivePack(r.Context(), req)
 	if err != nil {
-		httpGitError(w, err)
+		httpGitError(w, slug, err)
 		return
 	}
 
@@ -200,11 +215,14 @@ func endpointFor(slug string) *transport.Endpoint {
 	return ep
 }
 
-func httpGitError(w http.ResponseWriter, err error) {
+// httpGitError writes an appropriate HTTP error for a git transport error.
+// slug is included in the server-side log to aid debugging.
+func httpGitError(w http.ResponseWriter, slug string, err error) {
 	if err == transport.ErrRepositoryNotFound {
 		http.Error(w, "repository not found", http.StatusNotFound)
 		return
 	}
+	log.Printf("git HTTP error slug=%q: %v", slug, err)
 	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 

@@ -25,10 +25,17 @@
     { value: 'ollama',            label: 'Ollama (local)' },
   ]
 
+  const emptyModel = () => ({
+    name: '', roles: '', input_per_million: '', output_per_million: '',
+    text_tool_calls: false, fold_system_into_user: false,
+    system_prefix: '', tool_allowlist: '',
+  })
+
   const emptyForm = () => ({
     name: '', type: 'openai_compatible', api_key: '',
     base_url: '', model_name: '', enabled: true, deployment: '', text_tool_calls: false, fold_system_into_user: false, system_prefix: '', tool_allowlist: '',
     roles: [],
+    models: [],  // per-model config rows
   })
   let form = $state(emptyForm())
 
@@ -102,6 +109,16 @@
       system_prefix:         p.config?.system_prefix ?? '',
       tool_allowlist:        (p.config?.tool_allowlist ?? []).join(', '),
       roles:      p.roles ?? [],
+      models:     (p.models ?? []).map(m => ({
+        name:               m.name,
+        roles:              (m.roles ?? []).join(', '),
+        input_per_million:  String(m.input_per_million ?? ''),
+        output_per_million: String(m.output_per_million ?? ''),
+        text_tool_calls:    m.text_tool_calls ?? false,
+        fold_system_into_user: m.fold_system_into_user ?? false,
+        system_prefix:      m.system_prefix ?? '',
+        tool_allowlist:     (m.tool_allowlist ?? []).join(', '),
+      })),
     }
     editingId = p.id
     showKey   = false
@@ -126,6 +143,18 @@
       },
     }
     if (form.api_key.trim()) body.api_key = form.api_key.trim()
+    body.models = form.models
+      .filter(m => m.name.trim())
+      .map(m => ({
+        name:               m.name.trim(),
+        roles:              m.roles.split(',').map(r => r.trim()).filter(Boolean),
+        input_per_million:  parseFloat(m.input_per_million) || 0,
+        output_per_million: parseFloat(m.output_per_million) || 0,
+        ...(m.text_tool_calls        ? { text_tool_calls: true }              : {}),
+        ...(m.fold_system_into_user  ? { fold_system_into_user: true }        : {}),
+        ...(m.system_prefix.trim()   ? { system_prefix: m.system_prefix.trim() } : {}),
+        ...(m.tool_allowlist.trim()  ? { tool_allowlist: m.tool_allowlist.split(',').map(s => s.trim()).filter(Boolean) } : {}),
+      }))
 
     try {
       if (editingId) {
@@ -387,6 +416,103 @@
         {/if}
       </div>
 
+      <!-- Models table: per-model role and pricing config -->
+      <div>
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-xs text-gray-500">
+            Models
+            <span class="text-gray-600 ml-1">(optional — assign roles and pricing per model)</span>
+          </label>
+          <button
+            type="button"
+            class="text-xs text-accent hover:text-accent-hover"
+            onclick={() => form.models = [...form.models, emptyModel()]}
+          >+ Add model</button>
+        </div>
+        {#if form.models.length > 0}
+          <div class="border border-surface-600 rounded overflow-hidden">
+            <table class="w-full text-xs">
+              <thead class="bg-surface-700 text-gray-500">
+                <tr>
+                  <th class="px-2 py-1 text-left font-medium">Model name</th>
+                  <th class="px-2 py-1 text-left font-medium">Roles</th>
+                  <th class="px-2 py-1 text-left font-medium">In $/M</th>
+                  <th class="px-2 py-1 text-left font-medium">Out $/M</th>
+                  <th class="px-2 py-1 text-left font-medium" title="Text tool calls">TTC</th>
+                  <th class="px-2 py-1 text-left font-medium" title="Fold system into user">FSU</th>
+                  <th class="px-2 py-1 text-left font-medium">Sys prefix</th>
+                  <th class="px-2 py-1 text-left font-medium">Tool allowlist</th>
+                  <th class="px-2 py-1"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each form.models as m, i}
+                  <tr class="border-t border-surface-700">
+                    <td class="px-2 py-1">
+                      <input
+                        class="w-28 bg-surface-700 rounded px-2 py-1 text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+                        placeholder="gemma3:4b"
+                        bind:value={m.name}
+                      />
+                    </td>
+                    <td class="px-2 py-1">
+                      <input
+                        class="w-28 bg-surface-700 rounded px-2 py-1 text-gray-200 focus:outline-none focus:ring-1 focus:ring-accent"
+                        placeholder="worker, reviewer"
+                        bind:value={m.roles}
+                      />
+                    </td>
+                    <td class="px-2 py-1">
+                      <input
+                        class="w-16 bg-surface-700 rounded px-2 py-1 text-gray-200 focus:outline-none focus:ring-1 focus:ring-accent"
+                        type="number" step="0.001" min="0"
+                        placeholder="0.05"
+                        bind:value={m.input_per_million}
+                      />
+                    </td>
+                    <td class="px-2 py-1">
+                      <input
+                        class="w-16 bg-surface-700 rounded px-2 py-1 text-gray-200 focus:outline-none focus:ring-1 focus:ring-accent"
+                        type="number" step="0.001" min="0"
+                        placeholder="0.10"
+                        bind:value={m.output_per_million}
+                      />
+                    </td>
+                    <td class="px-2 py-1 text-center">
+                      <input type="checkbox" bind:checked={m.text_tool_calls} class="accent-accent" title="Text tool calls (model outputs JSON blocks instead of native function calls)" />
+                    </td>
+                    <td class="px-2 py-1 text-center">
+                      <input type="checkbox" bind:checked={m.fold_system_into_user} class="accent-accent" title="Fold system prompt into first user message (for models without a system role)" />
+                    </td>
+                    <td class="px-2 py-1">
+                      <input
+                        class="w-20 bg-surface-700 rounded px-2 py-1 text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+                        placeholder="<|think|>"
+                        bind:value={m.system_prefix}
+                      />
+                    </td>
+                    <td class="px-2 py-1">
+                      <input
+                        class="w-36 bg-surface-700 rounded px-2 py-1 text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+                        placeholder="write_file, read_file"
+                        bind:value={m.tool_allowlist}
+                      />
+                    </td>
+                    <td class="px-2 py-1">
+                      <button
+                        type="button"
+                        class="text-red-400 hover:text-red-300"
+                        onclick={() => form.models = form.models.filter((_, j) => j !== i)}
+                      >✕</button>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+
       <div class="flex justify-end gap-2">
         <button
           type="button"
@@ -432,6 +558,30 @@
                 <div class="flex flex-wrap gap-1 mt-1">
                   {#each p.roles as role}
                     <span class="text-xs px-1.5 py-0.5 rounded bg-surface-700 text-blue-400">{role}</span>
+                  {/each}
+                </div>
+              {/if}
+              {#if p.models?.length > 0}
+                <div class="mt-2 flex flex-col gap-0.5">
+                  {#each p.models as m}
+                    <div class="text-xs text-gray-500 font-mono flex flex-wrap gap-x-2">
+                      <span class="text-gray-400">{m.name}</span>
+                      {#if m.roles?.length > 0}
+                        <span class="text-blue-500">{m.roles.join(', ')}</span>
+                      {/if}
+                      {#if m.input_per_million > 0 || m.output_per_million > 0}
+                        <span class="text-gray-600">${m.input_per_million}/${m.output_per_million}/M</span>
+                      {/if}
+                      {#if m.text_tool_calls}
+                        <span class="text-yellow-600" title="Text tool calls">TTC</span>
+                      {/if}
+                      {#if m.fold_system_into_user}
+                        <span class="text-yellow-600" title="Fold system into user">FSU</span>
+                      {/if}
+                      {#if m.system_prefix}
+                        <span class="text-gray-600">prefix:{m.system_prefix}</span>
+                      {/if}
+                    </div>
                   {/each}
                 </div>
               {/if}

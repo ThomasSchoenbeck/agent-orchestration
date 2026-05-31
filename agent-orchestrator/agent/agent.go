@@ -250,5 +250,22 @@ func (a *Agent) executeTask(ctx context.Context, task *db.Task) {
 		tlog.Warn("no executor configured — skipping task")
 		return
 	}
+
+	// Clone the project repo so the executor's file tools have a local workspace.
+	// All agents use the server's git HTTP endpoint regardless of topology.
+	if task.RepoURL != "" {
+		localPath := a.LocalWorkspacePath(task.ID)
+		branch := task.Branch
+		if branch == "" {
+			branch = fmt.Sprintf("task/%s", task.ID)
+		}
+		if err := CloneOrOpen(task.RepoURL, localPath, branch); err != nil {
+			tlog.ErrorCtx(ctx, "clone failed, task cannot proceed: %v", err)
+			return
+		}
+		task.WorktreePath = localPath
+		tlog.InfoCtx(ctx, "cloned %s branch %s → %s", task.RepoURL, branch, localPath)
+	}
+
 	a.executor.Run(ctx, task)
 }

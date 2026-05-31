@@ -51,9 +51,12 @@ type SubmitTaskResultRequest struct {
 }
 
 type TaskMetrics struct {
-	TokensUsed int     `json:"tokens_used"`
-	Cost       float64 `json:"cost"`
-	DurationMs int     `json:"duration_ms"`
+	TokensUsed   int     `json:"tokens_used"`
+	InputTokens  int     `json:"input_tokens,omitempty"`
+	OutputTokens int     `json:"output_tokens,omitempty"`
+	Cost         float64 `json:"cost,omitempty"`
+	DurationMs   int     `json:"duration_ms"`
+	Model        string  `json:"model,omitempty"`
 }
 
 // --- Agent request/response types ---

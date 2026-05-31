@@ -30,13 +30,17 @@ type Router struct {
 
 // cachedRole holds a DB-backed role definition and the resolved provider name.
 type cachedRole struct {
-	def                *db.RoleDefinition
-	providerName       string
-	defaultModel       string // provider's default model (fallback when ModelOverride is "")
-	textToolCalls      bool     // true when the provider can't do structured tool calling
-	foldSystemIntoUser bool     // true when the model has no system role (e.g. Gemma via llama.cpp)
-	systemPrefix       string   // prepended to the system prompt (e.g. "<|think|>" for Gemma)
-	toolAllowlist      []string // if non-empty, only these tools are sent to the LLM
+	def                  *db.RoleDefinition
+	providerName         string
+	defaultModel         string             // provider's default model (fallback when ModelOverride is "")
+	providerModels       []db.ProviderModel // per-model role and pricing config from the provider
+	// Provider-level behavioral defaults (from prov.Config).
+	textToolCalls        bool
+	foldSystemIntoUser   bool
+	systemPrefix         string
+	providerToolAllowlist []string
+	// Role-level allowlist (from RoleDefinition.AllowedTools); highest priority.
+	roleToolAllowlist    []string
 }
 
 // New creates a Router from the loaded config and provider registry.
@@ -54,13 +58,14 @@ func New(cfg *config.Config, registry *llm.Registry) *Router {
 // RouteResult carries everything needed to execute a chat call.
 type RouteResult struct {
 	Provider           llm.LLMProvider
-	Model              string // resolved model identifier sent to the provider
-	Role               string // resolved role
-	SystemPrompt       string // filled system prompt (may be empty)
-	TextToolCalls      bool     // when true, skip native tool calling and parse tool calls from text
-	FoldSystemIntoUser bool     // when true, prepend system content to the first user message
-	SystemPrefix       string   // prepended to the system prompt before it is sent
-	ToolAllowlist      []string // if non-empty, only these tools are sent to the LLM
+	Model              string           // resolved model identifier sent to the provider
+	Role               string           // resolved role
+	SystemPrompt       string           // filled system prompt (may be empty)
+	TextToolCalls      bool
+	FoldSystemIntoUser bool
+	SystemPrefix       string
+	ToolAllowlist      []string
+	ProviderModels     []db.ProviderModel // for cost calculation; may be empty
 }
 
 // LoadFromDB populates the in-memory role cache from the database.
@@ -96,6 +101,7 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 		if prov, ok := provByID[role.ProviderID]; ok {
 			cr.providerName = prov.Name
 			cr.defaultModel = prov.ModelName
+			cr.providerModels = prov.Models
 			if v, ok := prov.Config["text_tool_calls"]; ok {
 				cr.textToolCalls, _ = v.(bool)
 			}
@@ -105,24 +111,32 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 			if v, ok := prov.Config["system_prefix"]; ok {
 				cr.systemPrefix, _ = v.(string)
 			}
-			// Provider-level allowlist (fallback when role doesn't define its own).
+			// Provider-level allowlist stored separately so model-level can sit
+			// between it and the role-level override in priority.
 			if v, ok := prov.Config["tool_allowlist"]; ok {
 				if raw, ok := v.([]interface{}); ok {
 					for _, item := range raw {
 						if s, ok := item.(string); ok {
-							cr.toolAllowlist = append(cr.toolAllowlist, s)
+							cr.providerToolAllowlist = append(cr.providerToolAllowlist, s)
 						}
 					}
 				}
 			}
 		}
-		// Role-level allowlist overrides the provider-level one.
+		// Role-level allowlist (highest priority — stored separately).
 		if len(role.AllowedTools) > 0 {
-			cr.toolAllowlist = role.AllowedTools
+			cr.roleToolAllowlist = role.AllowedTools
 		}
 		r.rolesByName[role.Name] = cr
 		for _, tt := range role.TaskTypes {
 			r.rolesByTaskType[tt] = cr
+		}
+	}
+
+	// Register model-level role entries in the registry for each provider.
+	for _, prov := range providers {
+		if len(prov.Models) > 0 {
+			r.registry.SetModelRoles(prov.Name, prov.Models)
 		}
 	}
 
@@ -235,20 +249,73 @@ func (r *Router) routeFromCache(cr *cachedRole) (*RouteResult, error) {
 		return nil, fmt.Errorf("role %q: provider %q not in registry (is the provider enabled?): %w",
 			def.Name, cr.providerName, err)
 	}
+
+	// Resolution order:
+	// 1. Explicit ModelOverride on the role definition (highest priority).
+	// 2. First model in the provider's model list whose Roles contain this role.
+	// 3. Provider's top-level default model.
 	model := def.ModelOverride
+	if model == "" {
+		model = modelForRole(cr.providerModels, def.Name)
+	}
 	if model == "" {
 		model = cr.defaultModel
 	}
+
+	// Resolve behavioral settings with priority: role > model > provider.
+	textToolCalls := cr.textToolCalls
+	foldSystemIntoUser := cr.foldSystemIntoUser
+	systemPrefix := cr.systemPrefix
+	toolAllowlist := cr.providerToolAllowlist
+
+	// Model-level: override provider defaults for the matched model.
+	for _, m := range cr.providerModels {
+		if m.Name == model {
+			if m.TextToolCalls {
+				textToolCalls = true
+			}
+			if m.FoldSystemIntoUser {
+				foldSystemIntoUser = true
+			}
+			if m.SystemPrefix != "" {
+				systemPrefix = m.SystemPrefix
+			}
+			if len(m.ToolAllowlist) > 0 {
+				toolAllowlist = m.ToolAllowlist
+			}
+			break
+		}
+	}
+
+	// Role-level allowlist wins over everything.
+	if len(cr.roleToolAllowlist) > 0 {
+		toolAllowlist = cr.roleToolAllowlist
+	}
+
 	return &RouteResult{
 		Provider:           prov,
 		Model:              model,
 		Role:               def.Name,
 		SystemPrompt:       def.SystemPrompt,
-		TextToolCalls:      cr.textToolCalls,
-		FoldSystemIntoUser: cr.foldSystemIntoUser,
-		SystemPrefix:       cr.systemPrefix,
-		ToolAllowlist:      cr.toolAllowlist,
+		TextToolCalls:      textToolCalls,
+		FoldSystemIntoUser: foldSystemIntoUser,
+		SystemPrefix:       systemPrefix,
+		ToolAllowlist:      toolAllowlist,
+		ProviderModels:     cr.providerModels,
 	}, nil
+}
+
+// modelForRole returns the name of the first model in models whose Roles
+// list contains role, or "" if none match.
+func modelForRole(models []db.ProviderModel, role string) string {
+	for _, m := range models {
+		for _, r := range m.Roles {
+			if r == role {
+				return m.Name
+			}
+		}
+	}
+	return ""
 }
 
 // resolveModel looks up a model by name and returns its provider.

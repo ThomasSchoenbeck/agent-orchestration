@@ -26,14 +26,28 @@ type Config struct {
 	Storage       StorageConfig              `yaml:"storage"`
 }
 
+// ProviderModelConfig declares one model within a provider: its supported roles,
+// token pricing, and behavioral flags that override the provider-level defaults.
+type ProviderModelConfig struct {
+	Name               string   `yaml:"name"`
+	Roles              []string `yaml:"roles"`
+	InputPerMillion    float64  `yaml:"input_per_million"`
+	OutputPerMillion   float64  `yaml:"output_per_million"`
+	TextToolCalls      bool     `yaml:"text_tool_calls"`
+	FoldSystemIntoUser bool     `yaml:"fold_system_into_user"`
+	SystemPrefix       string   `yaml:"system_prefix"`
+	ToolAllowlist      []string `yaml:"tool_allowlist"`
+}
+
 // ProviderConfig defines a single LLM backend.
 type ProviderConfig struct {
-	Name       string `yaml:"name"`
-	Type       string `yaml:"type"`       // openai_compatible | anthropic | ollama | azure
-	BaseURL    string `yaml:"base_url"`
-	APIKey     string `yaml:"api_key"`
-	Model      string `yaml:"model"`
-	Deployment string `yaml:"deployment"` // Azure OpenAI deployment name
+	Name       string                `yaml:"name"`
+	Type       string                `yaml:"type"`       // openai_compatible | anthropic | ollama | azure
+	BaseURL    string                `yaml:"base_url"`
+	APIKey     string                `yaml:"api_key"`
+	Model      string                `yaml:"model"`
+	Deployment string                `yaml:"deployment"` // Azure OpenAI deployment name
+	Models     []ProviderModelConfig `yaml:"models"`     // per-model role and pricing config
 }
 
 // ModelConfig names a provider+model combination and assigns it roles.
@@ -52,9 +66,23 @@ type ContextRule struct {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port       int    `yaml:"port"`
-	Host       string `yaml:"host"`
-	TLSEnabled bool   `yaml:"tls_enabled"`
+	Port         int    `yaml:"port"`
+	Host         string `yaml:"host"`
+	ExternalHost string `yaml:"external_host"` // publicly-reachable address for agents (defaults to Host)
+	TLSEnabled   bool   `yaml:"tls_enabled"`
+}
+
+// PublicHost returns the host that agents should use when connecting to the
+// server's git endpoint. Uses ExternalHost when set; falls back to Host,
+// substituting "localhost" for the bind-all address "0.0.0.0".
+func (s ServerConfig) PublicHost() string {
+	if s.ExternalHost != "" {
+		return s.ExternalHost
+	}
+	if s.Host == "" || s.Host == "0.0.0.0" {
+		return "localhost"
+	}
+	return s.Host
 }
 
 // DatabaseConfig holds database settings.

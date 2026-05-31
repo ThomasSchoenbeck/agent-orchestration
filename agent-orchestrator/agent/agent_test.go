@@ -194,15 +194,13 @@ func TestServerClient_Heartbeat(t *testing.T) {
 	}
 }
 
-// taskOnceServer builds a mock server that serves the given task from
-// taskOnceServer serves tasks/next exactly once, then returns nil. It handles
-// register, heartbeat, task result, and comment endpoints.
-// Returns the server, a pointer to the tasks/next call counter, and a pointer
-// to the result submission counter.
-func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
+// taskOnceServer returns a mock server that serves the given task once from
+// tasks/next. The returned counters track: next calls, result submissions
+// (/result), and review submissions (/submit-for-review).
+func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int32, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	const agentID = "agent-poll-test"
-	var nextCalls, resultCalls atomic.Int32
+	var nextCalls, resultCalls, reviewCalls atomic.Int32
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/agents/register", func(w http.ResponseWriter, r *http.Request) {
@@ -227,8 +225,13 @@ func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int3
 	})
 	mux.HandleFunc("/api/tasks/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/result") {
-			resultCalls.Add(1)
+		if r.Method == http.MethodPost {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/result"):
+				resultCalls.Add(1)
+			case strings.HasSuffix(r.URL.Path, "/submit-for-review"):
+				reviewCalls.Add(1)
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 	})
@@ -238,11 +241,11 @@ func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int3
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv, &nextCalls, &resultCalls
+	return srv, &nextCalls, &resultCalls, &reviewCalls
 }
 
 // TestAgent_PollLoop_PicksUpTask verifies that when tasks/next returns a task,
-// the agent executes it and submits a result exactly once.
+// the agent executes it and submits for review exactly once.
 func TestAgent_PollLoop_PicksUpTask(t *testing.T) {
 	task := &db.Task{
 		ID:     "task-poll-001",
@@ -250,7 +253,7 @@ func TestAgent_PollLoop_PicksUpTask(t *testing.T) {
 		Role:   "worker",
 		Status: db.TaskStatusBacklog,
 	}
-	srv, _, resultCalls := taskOnceServer(t, task)
+	srv, _, _, reviewCalls := taskOnceServer(t, task)
 
 	cfg := testConfig()
 	cfg.Agents.TaskPollIntervalSec = 1
@@ -273,14 +276,14 @@ func TestAgent_PollLoop_PicksUpTask(t *testing.T) {
 	}
 	defer a.Stop()
 
-	// Wait for the task to be executed and result submitted.
+	// Successful worker tasks go to AWAITING_REVIEW, not COMPLETED directly.
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("timed out waiting for task result (got %d)", resultCalls.Load())
+			t.Fatalf("timed out waiting for submit-for-review (got %d)", reviewCalls.Load())
 		case <-time.After(100 * time.Millisecond):
-			if resultCalls.Load() >= 1 {
+			if reviewCalls.Load() >= 1 {
 				goto done
 			}
 		}
@@ -288,8 +291,8 @@ func TestAgent_PollLoop_PicksUpTask(t *testing.T) {
 done:
 	// tasks/next returns nil after the first call; confirm no second execution.
 	time.Sleep(2500 * time.Millisecond)
-	if resultCalls.Load() > 1 {
-		t.Errorf("expected exactly 1 result submission, got %d", resultCalls.Load())
+	if reviewCalls.Load() > 1 {
+		t.Errorf("expected exactly 1 review submission, got %d", reviewCalls.Load())
 	}
 }
 
@@ -368,7 +371,7 @@ func TestAgent_PollLoop_SkipsWhenProviderUnavailable(t *testing.T) {
 		Role:   "worker",
 		Status: db.TaskStatusBacklog,
 	}
-	srv, _, claimCalls := taskOnceServer(t, task)
+	srv, _, claimCalls, _ := taskOnceServer(t, task)
 
 	cfg := testConfig()
 	cfg.Agents.TaskPollIntervalSec = 1

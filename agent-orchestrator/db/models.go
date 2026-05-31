@@ -74,6 +74,9 @@ type Task struct {
 	LastPushAt      *time.Time             `json:"last_push_at,omitempty"`
 	WorktreePath    string                 `json:"worktree_path,omitempty"`
 	AssignedPort    int                    `json:"assigned_port,omitempty"`
+	// Agent-side only: populated from the claim response, never persisted to DB.
+	RepoURL         string                 `json:"repo_url,omitempty"`
+	Branch          string                 `json:"branch,omitempty"`
 	CreatedAt       time.Time              `json:"created_at"`
 	UpdatedAt       time.Time              `json:"updated_at"`
 	StartedAt       *time.Time             `json:"started_at,omitempty"`
@@ -143,6 +146,22 @@ type Agent struct {
 
 // --- Provider ---
 
+// ProviderModel describes one model offered by a provider: its supported roles,
+// token pricing, and behavioral flags that override the provider-level defaults.
+// Boolean fields use omitempty so that the zero value (false) is not stored —
+// model-level overrides only apply when the field is explicitly set to true.
+type ProviderModel struct {
+	Name               string   `json:"name"`
+	Roles              []string `json:"roles"`               // roles this model serves
+	InputPerMillion    float64  `json:"input_per_million"`   // USD per 1M input tokens
+	OutputPerMillion   float64  `json:"output_per_million"`  // USD per 1M output tokens
+	// Behavioral flags — override the provider-level Config when set.
+	TextToolCalls      bool     `json:"text_tool_calls,omitempty"`
+	FoldSystemIntoUser bool     `json:"fold_system_into_user,omitempty"`
+	SystemPrefix       string   `json:"system_prefix,omitempty"`
+	ToolAllowlist      []string `json:"tool_allowlist,omitempty"`
+}
+
 type Provider struct {
 	ID           string                 `json:"id"`
 	Name         string                 `json:"name"`
@@ -151,9 +170,10 @@ type Provider struct {
 	ModelName    string                 `json:"model_name"`
 	APIKey       string                 `json:"api_key,omitempty"`
 	Enabled      bool                   `json:"enabled"`
-	Roles        []string               `json:"roles"`        // roles this provider can serve
+	Roles        []string               `json:"roles"`        // roles this provider can serve (coarse fallback)
 	Capabilities []string               `json:"capabilities"`
 	Config       map[string]interface{} `json:"config"`
+	Models       []ProviderModel        `json:"models"`       // per-model role and pricing config
 	CreatedAt    time.Time              `json:"created_at"`
 	UpdatedAt    time.Time              `json:"updated_at"`
 }

@@ -185,6 +185,57 @@ func TestAgentCRUD(t *testing.T) {
 	}
 }
 
+// --- Provider CRUD with Models ---
+
+func TestProviderCRUD_WithModels(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	models := []db.ProviderModel{
+		{Name: "gemma3:4b", Roles: []string{"worker"}, InputPerMillion: 0.05, OutputPerMillion: 0.10},
+		{Name: "qwen2.5:14b", Roles: []string{"reviewer"}, InputPerMillion: 0.20, OutputPerMillion: 0.40},
+	}
+
+	p := &db.Provider{
+		Name:      "ollama-test",
+		Type:      "ollama",
+		BaseURL:   "http://localhost:11434",
+		ModelName: "gemma3:4b",
+		Enabled:   true,
+		Models:    models,
+	}
+	if err := d.CreateProvider(ctx, p); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+
+	got, err := d.GetProvider(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("GetProvider: %v", err)
+	}
+	if len(got.Models) != 2 {
+		t.Fatalf("expected 2 models, got %d: %+v", len(got.Models), got.Models)
+	}
+	if got.Models[0].Name != "gemma3:4b" {
+		t.Errorf("models[0].Name = %q, want gemma3:4b", got.Models[0].Name)
+	}
+	if got.Models[1].Roles[0] != "reviewer" {
+		t.Errorf("models[1].Roles[0] = %q, want reviewer", got.Models[1].Roles[0])
+	}
+	if got.Models[0].InputPerMillion != 0.05 {
+		t.Errorf("models[0].InputPerMillion = %f, want 0.05", got.Models[0].InputPerMillion)
+	}
+
+	// Update: change pricing on first model.
+	got.Models[0].InputPerMillion = 0.08
+	if err := d.UpdateProvider(ctx, got); err != nil {
+		t.Fatalf("UpdateProvider: %v", err)
+	}
+	updated, _ := d.GetProvider(ctx, p.ID)
+	if updated.Models[0].InputPerMillion != 0.08 {
+		t.Errorf("after update: models[0].InputPerMillion = %f, want 0.08", updated.Models[0].InputPerMillion)
+	}
+}
+
 // --- GetNextTask ---
 
 func TestGetNextTask(t *testing.T) {

@@ -42,6 +42,16 @@ func (d *Database) GetProjectBySlug(ctx context.Context, slug string) (*Project,
 	return p, err
 }
 
+// GetProjectBySlugOrID retrieves a project by slug first, then by ID.
+// Used by the git HTTP resolver so that existing projects without a slug
+// can still be served when the project ID is used as the URL segment.
+func (d *Database) GetProjectBySlugOrID(ctx context.Context, slugOrID string) (*Project, error) {
+	if p, err := d.GetProjectBySlug(ctx, slugOrID); err == nil {
+		return p, nil
+	}
+	return d.GetProject(ctx, slugOrID)
+}
+
 // CreateProject inserts a new project and returns it with its generated ID.
 func (d *Database) CreateProject(ctx context.Context, p *Project) error {
 	if p.ID == "" {

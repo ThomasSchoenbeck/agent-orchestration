@@ -299,3 +299,49 @@ func TestCostMetrics_ByProject(t *testing.T) {
 		t.Errorf("expected 2 tasks, got %d", pr.Tasks)
 	}
 }
+
+// TestGetTaskCost_MultipleRounds verifies GetTaskCost sums multiple metric
+// rows for the same task (one per LLM round).
+func TestGetTaskCost_MultipleRounds(t *testing.T) {
+	d, _ := openMetricsDB(t)
+	ctx := context.Background()
+	const taskID = "cost-task-1"
+
+	insertMetric(t, d, &db.Metric{TaskID: taskID, InputTokens: 1000, OutputTokens: 200, TokensUsed: 1200, Cost: 0.00012})
+	insertMetric(t, d, &db.Metric{TaskID: taskID, InputTokens: 800, OutputTokens: 150, TokensUsed: 950, Cost: 0.000095})
+	insertMetric(t, d, &db.Metric{TaskID: taskID, InputTokens: 600, OutputTokens: 100, TokensUsed: 700, Cost: 0.00007})
+
+	s, err := d.GetTaskCost(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTaskCost: %v", err)
+	}
+	if s.Rounds != 3 {
+		t.Errorf("rounds = %d, want 3", s.Rounds)
+	}
+	if s.InputTokens != 2400 {
+		t.Errorf("input_tokens = %d, want 2400", s.InputTokens)
+	}
+	if s.OutputTokens != 450 {
+		t.Errorf("output_tokens = %d, want 450", s.OutputTokens)
+	}
+	if s.TotalTokens != 2850 {
+		t.Errorf("total_tokens = %d, want 2850", s.TotalTokens)
+	}
+	wantCost := 0.00012 + 0.000095 + 0.00007
+	if s.CostUSD < wantCost-1e-9 || s.CostUSD > wantCost+1e-9 {
+		t.Errorf("cost_usd = %f, want %f", s.CostUSD, wantCost)
+	}
+}
+
+// TestGetTaskCost_NoMetrics verifies GetTaskCost returns zeros for a task with
+// no metrics rows.
+func TestGetTaskCost_NoMetrics(t *testing.T) {
+	d, _ := openMetricsDB(t)
+	s, err := d.GetTaskCost(context.Background(), "no-metrics-task")
+	if err != nil {
+		t.Fatalf("GetTaskCost: %v", err)
+	}
+	if s.Rounds != 0 || s.CostUSD != 0 || s.TotalTokens != 0 {
+		t.Errorf("expected all-zero summary for no metrics, got %+v", s)
+	}
+}

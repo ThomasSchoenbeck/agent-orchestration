@@ -116,6 +116,7 @@ export const deleteTaskLogs = (taskId) =>
 
 // ── Metrics ──────────────────────────────────────────────────────────────────
 export const getMetrics = () => get('/api/metrics')
+export const getTaskCost = (taskId) => get(`/api/tasks/${taskId}/cost`)
 
 // ── Meta (enumerations) ──────────────────────────────────────────────────────
 export const getTaskTypes = () => get('/api/meta/task-types')

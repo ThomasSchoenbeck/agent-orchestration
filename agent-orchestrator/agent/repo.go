@@ -6,9 +6,74 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 )
+
+// CloneOrOpen clones repoURL into localPath (if the directory does not yet
+// exist) and checks out branchName, creating it from HEAD if it doesn't exist
+// on the remote. If localPath already contains a git repo it is opened as-is
+// and the branch checkout is still attempted so retried tasks land on the
+// correct branch.
+//
+// When the remote repo has no commits yet (ErrEmptyRemoteRepository), the
+// function falls back to PlainInit + setting the remote, matching the
+// behaviour of the integration test helpers and allowing the agent to push
+// the first real commit.
+func CloneOrOpen(repoURL, localPath, branchName string) error {
+	repo, openErr := gogit.PlainOpen(localPath)
+	if openErr != nil {
+		// Directory absent or not a git repo — clone fresh.
+		var cloneErr error
+		repo, cloneErr = gogit.PlainClone(localPath, false, &gogit.CloneOptions{
+			URL: repoURL,
+		})
+		if cloneErr != nil {
+			if cloneErr != transport.ErrEmptyRemoteRepository {
+				return fmt.Errorf("CloneOrOpen clone %q → %q: %w", repoURL, localPath, cloneErr)
+			}
+			// Server repo has no commits yet — init locally and point origin at it.
+			var initErr error
+			repo, initErr = gogit.PlainInit(localPath, false)
+			if initErr != nil {
+				return fmt.Errorf("CloneOrOpen init %q: %w", localPath, initErr)
+			}
+			if _, initErr = repo.CreateRemote(&gogitconfig.RemoteConfig{
+				Name: "origin",
+				URLs: []string{repoURL},
+			}); initErr != nil {
+				return fmt.Errorf("CloneOrOpen set remote %q: %w", localPath, initErr)
+			}
+			// Skip the branch checkout — there is no HEAD to branch from.
+			return nil
+		}
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("CloneOrOpen worktree %q: %w", localPath, err)
+	}
+
+	branchRef := plumbing.NewBranchReferenceName(branchName)
+
+	// Try switching to the branch without creating (branch may already exist
+	// from a previous run of this task).
+	err = wt.Checkout(&gogit.CheckoutOptions{Branch: branchRef})
+	if err == nil {
+		return nil
+	}
+
+	// Branch doesn't exist locally — create it from current HEAD.
+	if err := wt.Checkout(&gogit.CheckoutOptions{
+		Branch: branchRef,
+		Create: true,
+	}); err != nil {
+		return fmt.Errorf("CloneOrOpen checkout branch %q: %w", branchName, err)
+	}
+	return nil
+}
 
 // CommitAndPush stages all changes in the worktree at worktreePath, creates a
 // commit with the given message and author identity, then pushes the current

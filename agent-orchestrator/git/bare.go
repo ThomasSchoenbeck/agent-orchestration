@@ -111,11 +111,16 @@ func InitialCommit(repoPath, branch string) error {
 		return nil // branch already exists
 	}
 
-	// Build an empty tree object.
-	enc := repo.Storer.NewEncodedObject()
-	enc.SetType(plumbing.TreeObject)
-	enc.SetSize(0)
-	treeHash, err := repo.Storer.SetEncodedObject(enc)
+	// Build an empty tree object using the Writer API so go-git's storer
+	// correctly computes the SHA and stores the object in a servable format.
+	treeEnc := repo.Storer.NewEncodedObject()
+	treeEnc.SetType(plumbing.TreeObject)
+	treeW, err := treeEnc.Writer()
+	if err != nil {
+		return fmt.Errorf("git.InitialCommit tree writer: %w", err)
+	}
+	_ = treeW.Close() // empty tree — no entries to write
+	treeHash, err := repo.Storer.SetEncodedObject(treeEnc)
 	if err != nil {
 		return fmt.Errorf("git.InitialCommit store tree: %w", err)
 	}

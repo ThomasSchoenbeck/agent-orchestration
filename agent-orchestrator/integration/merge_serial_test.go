@@ -1,5 +1,3 @@
-//go:build integration
-
 // IT-7.1: Two tasks touching shared.go both complete without error. Because
 // processTask runs synchronously within tick (acquire lock → merge → release
 // lock), the serialisation is implicit: the second task's merge sees the first

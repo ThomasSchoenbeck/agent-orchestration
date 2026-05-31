@@ -1,9 +1,12 @@
 package router_test
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 
 	"agent-orchestrator/config"
+	"agent-orchestrator/db"
 	"agent-orchestrator/llm"
 	"agent-orchestrator/router"
 )
@@ -262,4 +265,235 @@ func containsHelper(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// ── helpers for DB-backed router tests ───────────────────────────────────────
+
+func openRouterDB(t *testing.T) *db.Database {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "router_test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	return d
+}
+
+// setupProviderWithModels creates a provider + role definition in the DB.
+// models is the per-model config for the provider.
+// Returns a router loaded from that DB state.
+func setupProviderWithModels(
+	t *testing.T,
+	models []db.ProviderModel,
+	roleName string,
+) *router.Router {
+	t.Helper()
+	d := openRouterDB(t)
+	ctx := context.Background()
+
+	prov := &db.Provider{
+		Name:      "ollama",
+		Type:      "ollama",
+		BaseURL:   "http://localhost:11434",
+		ModelName: "gemma3:4b",
+		Enabled:   true,
+		Models:    models,
+	}
+	if err := d.CreateProvider(ctx, prov); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+
+	role := &db.RoleDefinition{
+		Name:       roleName,
+		Label:      roleName,
+		ProviderID: prov.ID,
+		TaskTypes:  []string{roleName},
+		Enabled:    true,
+	}
+	if err := d.CreateRoleDefinition(ctx, role); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
+	}
+
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{},
+		Models:    []config.ModelConfig{},
+		Roles:     map[string]string{},
+		Routing:   map[string]string{},
+	}
+	reg := llm.NewRegistry()
+	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
+
+	rtr := router.New(cfg, reg)
+	if err := rtr.LoadFromDB(d); err != nil {
+		t.Fatalf("LoadFromDB: %v", err)
+	}
+	return rtr
+}
+
+// TestRouterModelLevelTextToolCalls verifies that text_tool_calls set on a
+// model entry is returned by RouteByRole for that model's role, while another
+// role on the same provider that has no model-level override gets the
+// provider's default (false).
+func TestRouterModelLevelTextToolCalls(t *testing.T) {
+	d := openRouterDB(t)
+	ctx := context.Background()
+
+	models := []db.ProviderModel{
+		{Name: "gemma3:4b", Roles: []string{"worker"}, TextToolCalls: true, FoldSystemIntoUser: true, SystemPrefix: "<|think|>"},
+		{Name: "qwen2.5:14b", Roles: []string{"reviewer"}}, // no text_tool_calls
+	}
+	prov := &db.Provider{Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
+		ModelName: "gemma3:4b", Enabled: true, Models: models}
+	_ = d.CreateProvider(ctx, prov)
+
+	for _, roleDef := range []struct{ name, model string }{
+		{"worker", "gemma3:4b"},
+		{"reviewer", "qwen2.5:14b"},
+	} {
+		_ = d.CreateRoleDefinition(ctx, &db.RoleDefinition{
+			Name: roleDef.name, Label: roleDef.name,
+			ProviderID: prov.ID, TaskTypes: []string{roleDef.name}, Enabled: true,
+		})
+	}
+
+	cfg := &config.Config{Providers: []config.ProviderConfig{}, Models: []config.ModelConfig{},
+		Roles: map[string]string{}, Routing: map[string]string{}}
+	reg := llm.NewRegistry()
+	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
+	rtr := router.New(cfg, reg)
+	_ = rtr.LoadFromDB(d)
+
+	// Worker role → gemma3:4b model with text_tool_calls = true.
+	worker, err := rtr.RouteByRole("worker")
+	if err != nil {
+		t.Fatalf("RouteByRole(worker): %v", err)
+	}
+	if worker.Model != "gemma3:4b" {
+		t.Errorf("worker model = %q, want gemma3:4b", worker.Model)
+	}
+	if !worker.TextToolCalls {
+		t.Error("worker TextToolCalls should be true (model-level)")
+	}
+	if !worker.FoldSystemIntoUser {
+		t.Error("worker FoldSystemIntoUser should be true (model-level)")
+	}
+	if worker.SystemPrefix != "<|think|>" {
+		t.Errorf("worker SystemPrefix = %q, want <|think|>", worker.SystemPrefix)
+	}
+
+	// Reviewer role → qwen2.5:14b with no model-level flags → defaults to false.
+	reviewer, err := rtr.RouteByRole("reviewer")
+	if err != nil {
+		t.Fatalf("RouteByRole(reviewer): %v", err)
+	}
+	if reviewer.Model != "qwen2.5:14b" {
+		t.Errorf("reviewer model = %q, want qwen2.5:14b", reviewer.Model)
+	}
+	if reviewer.TextToolCalls {
+		t.Error("reviewer TextToolCalls should be false (no model-level override)")
+	}
+}
+
+// TestRouterModelLevelToolAllowlist verifies that a model-level ToolAllowlist
+// overrides the provider-level tool_allowlist but loses to a role-level
+// AllowedTools when one is set.
+func TestRouterModelLevelToolAllowlist(t *testing.T) {
+	d := openRouterDB(t)
+	ctx := context.Background()
+
+	models := []db.ProviderModel{
+		{Name: "gemma3:4b", Roles: []string{"worker"},
+			ToolAllowlist: []string{"write_file", "read_file"}},
+	}
+	prov := &db.Provider{
+		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
+		ModelName: "gemma3:4b", Enabled: true,
+		Config: map[string]interface{}{"tool_allowlist": []interface{}{"list_files"}}, // provider default
+		Models: models,
+	}
+	_ = d.CreateProvider(ctx, prov)
+
+	// Worker role: no AllowedTools → model-level should apply.
+	_ = d.CreateRoleDefinition(ctx, &db.RoleDefinition{
+		Name: "worker", Label: "Worker", ProviderID: prov.ID,
+		TaskTypes: []string{"worker"}, Enabled: true,
+	})
+	// Orchestrator role: has AllowedTools → role-level should win.
+	_ = d.CreateRoleDefinition(ctx, &db.RoleDefinition{
+		Name: "orchestrator", Label: "Orchestrator", ProviderID: prov.ID,
+		TaskTypes: []string{"orchestrator"}, Enabled: true,
+		AllowedTools: []string{"list_tasks", "create_work_package"},
+	})
+
+	cfg := &config.Config{Providers: []config.ProviderConfig{}, Models: []config.ModelConfig{},
+		Roles: map[string]string{}, Routing: map[string]string{}}
+	reg := llm.NewRegistry()
+	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
+	rtr := router.New(cfg, reg)
+	_ = rtr.LoadFromDB(d)
+
+	// Worker: model-level wins over provider-level.
+	worker, _ := rtr.RouteByRole("worker")
+	if len(worker.ToolAllowlist) != 2 || worker.ToolAllowlist[0] != "write_file" {
+		t.Errorf("worker ToolAllowlist = %v, want [write_file read_file]", worker.ToolAllowlist)
+	}
+
+	// Orchestrator: role-level wins over model-level (no model entry for orchestrator).
+	orch, _ := rtr.RouteByRole("orchestrator")
+	if len(orch.ToolAllowlist) != 2 || orch.ToolAllowlist[0] != "list_tasks" {
+		t.Errorf("orchestrator ToolAllowlist = %v, want [list_tasks create_work_package]", orch.ToolAllowlist)
+	}
+}
+
+// TestRouterProviderLevelFallback verifies that when a model is matched but
+// has no behavioral fields set, the provider-level Config values are used.
+func TestRouterProviderLevelFallback(t *testing.T) {
+	d := openRouterDB(t)
+	ctx := context.Background()
+
+	// Model has no behavioral fields — provider level should apply.
+	models := []db.ProviderModel{
+		{Name: "gemma3:4b", Roles: []string{"worker"}},
+	}
+	prov := &db.Provider{
+		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
+		ModelName: "gemma3:4b", Enabled: true,
+		Config: map[string]interface{}{
+			"text_tool_calls":       true,
+			"fold_system_into_user": true,
+			"system_prefix":         "<think>",
+			"tool_allowlist":        []interface{}{"read_file", "list_files"},
+		},
+		Models: models,
+	}
+	_ = d.CreateProvider(ctx, prov)
+	_ = d.CreateRoleDefinition(ctx, &db.RoleDefinition{
+		Name: "worker", Label: "Worker", ProviderID: prov.ID,
+		TaskTypes: []string{"worker"}, Enabled: true,
+	})
+
+	cfg := &config.Config{Providers: []config.ProviderConfig{}, Models: []config.ModelConfig{},
+		Roles: map[string]string{}, Routing: map[string]string{}}
+	reg := llm.NewRegistry()
+	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
+	rtr := router.New(cfg, reg)
+	_ = rtr.LoadFromDB(d)
+
+	result, err := rtr.RouteByRole("worker")
+	if err != nil {
+		t.Fatalf("RouteByRole: %v", err)
+	}
+	if !result.TextToolCalls {
+		t.Error("TextToolCalls should be true from provider-level config")
+	}
+	if !result.FoldSystemIntoUser {
+		t.Error("FoldSystemIntoUser should be true from provider-level config")
+	}
+	if result.SystemPrefix != "<think>" {
+		t.Errorf("SystemPrefix = %q, want <think>", result.SystemPrefix)
+	}
+	if len(result.ToolAllowlist) != 2 {
+		t.Errorf("ToolAllowlist = %v, want [read_file list_files]", result.ToolAllowlist)
+	}
 }

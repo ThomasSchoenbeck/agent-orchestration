@@ -57,11 +57,10 @@ func (c *ServerClient) GetNextTask(ctx context.Context, agentID string, roles []
 		rolesParam += r
 	}
 	url := fmt.Sprintf("/api/agents/%s/tasks/next?roles=%s", agentID, rolesParam)
-	// The server returns ClaimTaskResponse ({"task":{...},"worktree_path":"..."})
-	// because it atomically claims the task and provisions the worktree in one shot.
+	// The server returns ClaimTaskResponse with repo_url + branch so the agent
+	// can clone the project repo and begin work.
 	var resp struct {
 		Task         *db.Task `json:"task"`
-		WorktreePath string   `json:"worktree_path"`
 		RepoURL      string   `json:"repo_url"`
 		Branch       string   `json:"branch"`
 		AssignedPort int      `json:"assigned_port"`
@@ -72,10 +71,12 @@ func (c *ServerClient) GetNextTask(ctx context.Context, agentID string, roles []
 	if resp.Task == nil || resp.Task.ID == "" {
 		return nil, nil
 	}
-	// Apply workspace fields so the executor can find them without a separate
-	// ClaimTask call (which the pollLoop still makes for idempotency).
-	if resp.WorktreePath != "" {
-		resp.Task.WorktreePath = resp.WorktreePath
+	// Propagate workspace fields onto the task so executeTask can use them.
+	if resp.RepoURL != "" {
+		resp.Task.RepoURL = resp.RepoURL
+	}
+	if resp.Branch != "" {
+		resp.Task.Branch = resp.Branch
 	}
 	if resp.AssignedPort != 0 {
 		resp.Task.AssignedPort = resp.AssignedPort
@@ -99,10 +100,12 @@ func (c *ServerClient) ClaimTask(ctx context.Context, taskID, agentID string) (*
 	if resp.Task == nil {
 		return nil, fmt.Errorf("claim: server returned nil task")
 	}
-	// Apply workspace fields from outer response to the task struct so the
-	// executor can find them without needing a separate API call.
-	if resp.WorktreePath != "" {
-		resp.Task.WorktreePath = resp.WorktreePath
+	// Propagate workspace fields onto the task.
+	if resp.RepoURL != "" {
+		resp.Task.RepoURL = resp.RepoURL
+	}
+	if resp.Branch != "" {
+		resp.Task.Branch = resp.Branch
 	}
 	return resp.Task, nil
 }
@@ -114,9 +117,12 @@ func (c *ServerClient) SubmitTaskResult(ctx context.Context, taskID string, resu
 }
 
 // SubmitForReview notifies the server that the agent has pushed its branch and
-// the task should transition to AWAITING_REVIEW.
-func (c *ServerClient) SubmitForReview(ctx context.Context, taskID string) error {
-	return c.post(ctx, fmt.Sprintf("/api/tasks/%s/submit-for-review", taskID), struct{}{}, nil)
+// the task should transition to AWAITING_REVIEW. metrics may be nil.
+func (c *ServerClient) SubmitForReview(ctx context.Context, taskID string, metrics *api.TaskMetrics) error {
+	body := struct {
+		Metrics *api.TaskMetrics `json:"metrics,omitempty"`
+	}{Metrics: metrics}
+	return c.post(ctx, fmt.Sprintf("/api/tasks/%s/submit-for-review", taskID), body, nil)
 }
 
 // PostReview posts a code review on a task. status should be one of:

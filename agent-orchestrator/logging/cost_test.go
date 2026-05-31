@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"agent-orchestrator/config"
+	"agent-orchestrator/db"
 )
 
 func TestCostForCall_NilConfig(t *testing.T) {
@@ -103,5 +104,42 @@ func TestCostForCall_SmallTokenCount(t *testing.T) {
 	want := 0.000015 + 0.000030
 	if math.Abs(cost-want) > 1e-12 {
 		t.Errorf("expected cost %.8f, got %.8f", want, cost)
+	}
+}
+
+func TestCostForCallWithProvider_UsesProviderPricing(t *testing.T) {
+	models := []db.ProviderModel{
+		{Name: "gemma3:4b", InputPerMillion: 0.05, OutputPerMillion: 0.10},
+	}
+	// 2000 input = 2000/1M * 0.05 = 0.0001
+	// 1000 output = 1000/1M * 0.10 = 0.0001
+	want := 0.0001 + 0.0001
+	got := CostForCallWithProvider(models, nil, "gemma3:4b", 2000, 1000)
+	if math.Abs(got-want) > 1e-12 {
+		t.Errorf("cost = %.8f, want %.8f", got, want)
+	}
+}
+
+func TestCostForCallWithProvider_FallsBackToCfgPricing(t *testing.T) {
+	models := []db.ProviderModel{
+		{Name: "other-model", InputPerMillion: 99, OutputPerMillion: 99},
+	}
+	cfg := &config.Config{
+		Pricing: map[string]config.ModelPricing{
+			"gpt-4o": {InputPerMillion: 5.0, OutputPerMillion: 15.0},
+		},
+	}
+	// no provider pricing for "gpt-4o" → fall back to cfg
+	want := float64(1000)/1_000_000*5.0 + float64(500)/1_000_000*15.0
+	got := CostForCallWithProvider(models, cfg, "gpt-4o", 1000, 500)
+	if math.Abs(got-want) > 1e-9 {
+		t.Errorf("cost = %.8f, want %.8f", got, want)
+	}
+}
+
+func TestCostForCallWithProvider_ZeroWhenNoPricing(t *testing.T) {
+	got := CostForCallWithProvider(nil, nil, "unknown", 1000, 500)
+	if got != 0 {
+		t.Errorf("expected 0 with no pricing, got %f", got)
 	}
 }

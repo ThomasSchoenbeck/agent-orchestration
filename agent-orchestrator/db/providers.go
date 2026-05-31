@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -18,10 +19,11 @@ func (d *Database) CreateProvider(ctx context.Context, p *Provider) error {
 
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO providers
-		 (id, name, type, base_url, model_name, api_key, enabled, roles, capabilities, config, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, name, type, base_url, model_name, api_key, enabled, roles, capabilities, config, models, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Name, p.Type, p.BaseURL, p.ModelName, p.APIKey, p.Enabled,
-		marshalJSONArray(p.Roles), marshalJSONArray(p.Capabilities), marshalJSON(p.Config), p.CreatedAt, p.UpdatedAt,
+		marshalJSONArray(p.Roles), marshalJSONArray(p.Capabilities), marshalJSON(p.Config),
+		marshalJSONArray(p.Models), p.CreatedAt, p.UpdatedAt,
 	)
 	return err
 }
@@ -51,9 +53,10 @@ func (d *Database) UpdateProvider(ctx context.Context, p *Provider) error {
 	p.UpdatedAt = time.Now().UTC()
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE providers SET name=?, type=?, base_url=?, model_name=?, api_key=?,
-		 enabled=?, roles=?, capabilities=?, config=?, updated_at=? WHERE id=?`,
+		 enabled=?, roles=?, capabilities=?, config=?, models=?, updated_at=? WHERE id=?`,
 		p.Name, p.Type, p.BaseURL, p.ModelName, p.APIKey, p.Enabled,
-		marshalJSONArray(p.Roles), marshalJSONArray(p.Capabilities), marshalJSON(p.Config), p.UpdatedAt, p.ID,
+		marshalJSONArray(p.Roles), marshalJSONArray(p.Capabilities), marshalJSON(p.Config),
+		marshalJSONArray(p.Models), p.UpdatedAt, p.ID,
 	)
 	return err
 }
@@ -96,15 +99,15 @@ func (d *Database) SeedProviders(ctx context.Context, providers []*Provider) (in
 // ── SQL / scan helpers ────────────────────────────────────────────────────────
 
 const providerSelectSQL = `SELECT id, name, type, base_url, model_name, api_key,
-    enabled, roles, capabilities, config, created_at, updated_at FROM providers`
+    enabled, roles, capabilities, config, models, created_at, updated_at FROM providers`
 
 func scanProvider(row *sql.Row) (*Provider, error) {
 	var p Provider
 	var enabled int
-	var rolesJSON, capsJSON, cfgJSON, createdAt, updatedAt string
+	var rolesJSON, capsJSON, cfgJSON, modelsJSON, createdAt, updatedAt string
 	err := row.Scan(
 		&p.ID, &p.Name, &p.Type, &p.BaseURL, &p.ModelName, &p.APIKey,
-		&enabled, &rolesJSON, &capsJSON, &cfgJSON, &createdAt, &updatedAt,
+		&enabled, &rolesJSON, &capsJSON, &cfgJSON, &modelsJSON, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -113,6 +116,7 @@ func scanProvider(row *sql.Row) (*Provider, error) {
 	p.Roles = unmarshalJSONStringSlice(rolesJSON)
 	p.Capabilities = unmarshalJSONStringSlice(capsJSON)
 	p.Config = unmarshalJSONMap(cfgJSON)
+	p.Models = unmarshalProviderModels(modelsJSON)
 	p.CreatedAt = parseTime(createdAt)
 	p.UpdatedAt = parseTime(updatedAt)
 	return &p, nil
@@ -123,10 +127,10 @@ func scanProviders(rows *sql.Rows) ([]*Provider, error) {
 	for rows.Next() {
 		var p Provider
 		var enabled int
-		var rolesJSON, capsJSON, cfgJSON, createdAt, updatedAt string
+		var rolesJSON, capsJSON, cfgJSON, modelsJSON, createdAt, updatedAt string
 		if err := rows.Scan(
 			&p.ID, &p.Name, &p.Type, &p.BaseURL, &p.ModelName, &p.APIKey,
-			&enabled, &rolesJSON, &capsJSON, &cfgJSON, &createdAt, &updatedAt,
+			&enabled, &rolesJSON, &capsJSON, &cfgJSON, &modelsJSON, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -134,9 +138,22 @@ func scanProviders(rows *sql.Rows) ([]*Provider, error) {
 		p.Roles = unmarshalJSONStringSlice(rolesJSON)
 		p.Capabilities = unmarshalJSONStringSlice(capsJSON)
 		p.Config = unmarshalJSONMap(cfgJSON)
+		p.Models = unmarshalProviderModels(modelsJSON)
 		p.CreatedAt = parseTime(createdAt)
 		p.UpdatedAt = parseTime(updatedAt)
 		providers = append(providers, &p)
 	}
 	return providers, rows.Err()
+}
+
+// unmarshalProviderModels decodes the JSON models column into []ProviderModel.
+func unmarshalProviderModels(s string) []ProviderModel {
+	if s == "" || s == "null" {
+		return []ProviderModel{}
+	}
+	var models []ProviderModel
+	if err := json.Unmarshal([]byte(s), &models); err != nil || models == nil {
+		return []ProviderModel{}
+	}
+	return models
 }

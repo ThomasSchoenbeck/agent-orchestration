@@ -2,6 +2,7 @@ package logging
 
 import (
 	"agent-orchestrator/config"
+	"agent-orchestrator/db"
 )
 
 // CostForCall computes the USD cost of one LLM call.
@@ -15,9 +16,23 @@ func CostForCall(cfg *config.Config, model string, inputTokens, outputTokens int
 	if !ok {
 		return 0
 	}
-	inputCost := float64(inputTokens) / 1_000_000 * pricing.InputPerMillion
-	outputCost := float64(outputTokens) / 1_000_000 * pricing.OutputPerMillion
-	return inputCost + outputCost
+	return calcCost(inputTokens, outputTokens, pricing.InputPerMillion, pricing.OutputPerMillion)
+}
+
+// CostForCallWithProvider computes the USD cost using the provider's per-model
+// pricing first, falling back to cfg.Pricing when the provider has no pricing
+// for the given model name, and returning 0 when neither source has data.
+func CostForCallWithProvider(models []db.ProviderModel, cfg *config.Config, model string, inputTokens, outputTokens int) float64 {
+	for _, m := range models {
+		if m.Name == model && (m.InputPerMillion > 0 || m.OutputPerMillion > 0) {
+			return calcCost(inputTokens, outputTokens, m.InputPerMillion, m.OutputPerMillion)
+		}
+	}
+	return CostForCall(cfg, model, inputTokens, outputTokens)
+}
+
+func calcCost(inputTokens, outputTokens int, inputRate, outputRate float64) float64 {
+	return float64(inputTokens)/1_000_000*inputRate + float64(outputTokens)/1_000_000*outputRate
 }
 
 // TokenMetrics is the response payload for GET /api/metrics/tokens.
