@@ -384,7 +384,7 @@ func claimTargetState(queueState string) string {
 // TransitionTaskState atomically moves a task to a new state, recording the
 // transition in task_state_transitions.
 func (d *Database) TransitionTaskState(ctx context.Context, taskID, fromState, toState, actorAgentID, reason string) error {
-	return d.withImmediateTx(ctx, func(tx *sql.Tx) error {
+	err := d.withImmediateTx(ctx, func(tx *sql.Tx) error {
 		var current string
 		if err := tx.QueryRowContext(ctx, "SELECT status FROM tasks WHERE id=?", taskID).Scan(&current); err != nil {
 			if err == sql.ErrNoRows {
@@ -408,6 +408,16 @@ func (d *Database) TransitionTaskState(ctx context.Context, taskID, fromState, t
 		)
 		return err
 	})
+	// Mirror the transition into the task event log (after commit) so the status
+	// timeline captures review/merge transitions, not just claim/update events.
+	if err == nil {
+		desc := reason
+		if desc == "" {
+			desc = fmt.Sprintf("Status: %s → %s", fromState, toState)
+		}
+		d.logTaskEvent(ctx, taskID, "", actorAgentID, "task_transition", fromState, toState, desc)
+	}
+	return err
 }
 
 // DeleteTask removes a task by ID. Returns an error if not found.

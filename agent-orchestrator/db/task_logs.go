@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ type TaskLog struct {
 	TaskID      string    `json:"task_id"`
 	ProjectID   string    `json:"project_id,omitempty"`
 	AgentID     string    `json:"agent_id,omitempty"`
+	AgentName   string    `json:"agent_name,omitempty"` // resolved from metadata on read
 	EventType   string    `json:"event_type"`
 	OldStatus   string    `json:"old_status,omitempty"`
 	NewStatus   string    `json:"new_status,omitempty"`
@@ -228,6 +230,7 @@ func (d *Database) ListTaskLogs(ctx context.Context, f TaskLogFilters) ([]*TaskL
 			return nil, err
 		}
 		l.Timestamp = parseTime(ts)
+		l.AgentName = agentNameFromMetadata(l.Metadata)
 		logs = append(logs, &l)
 	}
 	return logs, rows.Err()
@@ -239,13 +242,66 @@ func (d *Database) logTaskEvent(ctx context.Context, taskID, projectID, agentID,
 	if d.LogDB == nil {
 		return
 	}
+	// Resolve the agent's display name and embed identity + branch in metadata so
+	// the event log and status timeline can render the actor without extra queries.
+	// Identity is stored in the existing metadata JSON column rather than a new
+	// column, so partitioned task_logs tables need no schema migration.
+	meta := map[string]interface{}{}
+	var agentName string
+	if agentID != "" {
+		agentName = d.agentDisplayName(ctx, agentID)
+		meta["agent_id"] = agentID
+		if agentName != "" {
+			meta["agent_name"] = agentName
+		}
+	}
+	if taskID != "" {
+		meta["branch"] = "task/" + taskID
+	}
+	metaJSON := "{}"
+	if len(meta) > 0 {
+		if b, err := json.Marshal(meta); err == nil {
+			metaJSON = string(b)
+		}
+	}
 	_ = d.CreateTaskLog(ctx, &TaskLog{
 		TaskID:      taskID,
 		ProjectID:   projectID,
 		AgentID:     agentID,
+		AgentName:   agentName,
 		EventType:   eventType,
 		OldStatus:   oldStatus,
 		NewStatus:   newStatus,
 		Description: desc,
+		Metadata:    metaJSON,
 	})
+}
+
+// agentDisplayName resolves an agent's name by ID, returning "" if the ID is
+// empty or does not correspond to a known agent (e.g. a user author ID).
+func (d *Database) agentDisplayName(ctx context.Context, agentID string) string {
+	if agentID == "" {
+		return ""
+	}
+	a, err := d.GetAgent(ctx, agentID)
+	if err != nil || a == nil {
+		return ""
+	}
+	return a.Name
+}
+
+// agentNameFromMetadata extracts the agent_name value stored in a task log's
+// metadata JSON, returning "" when absent or unparseable.
+func agentNameFromMetadata(metadata string) string {
+	if metadata == "" || metadata == "{}" {
+		return ""
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(metadata), &m); err != nil {
+		return ""
+	}
+	if v, ok := m["agent_name"].(string); ok {
+		return v
+	}
+	return ""
 }

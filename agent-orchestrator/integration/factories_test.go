@@ -137,6 +137,18 @@ func commitAndPush(t *testing.T, clonePath, relPath, content, branch string) str
 		t.Fatalf("commitAndPush Add: %v", err)
 	}
 
+	// If the file is already present with identical content — e.g. re-seeding the
+	// .gitkeep that project creation already committed to main — there is nothing
+	// to commit. Return the current HEAD so seeding is idempotent rather than
+	// failing with go-git's "cannot create empty commit" error.
+	if st, serr := wt.Status(); serr == nil && st.IsClean() {
+		head, herr := repo.Head()
+		if herr != nil {
+			t.Fatalf("commitAndPush: clean worktree and no HEAD: %v", herr)
+		}
+		return head.Hash().String()
+	}
+
 	hash, err := wt.Commit(fmt.Sprintf("test: add %s", relPath), &gogit.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Test Agent",

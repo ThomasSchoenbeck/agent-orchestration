@@ -96,8 +96,17 @@ func ReadTree(repoPath, ref, subpath string) ([]TreeNode, error) {
 		}
 	}
 
+	atRoot := subpath == "" || subpath == "/"
 	var nodes []TreeNode
 	for _, entry := range tree.Entries {
+		// Hide the .gitkeep placeholder seeded at the repo root on project
+		// creation (to give `main` a non-empty initial commit). It is an
+		// implementation artifact, not user content, so it must not appear in
+		// the file tree.
+		if atRoot && entry.Name == ".gitkeep" {
+			continue
+		}
+
 		entryPath := entry.Name
 		if subpath != "" && subpath != "/" {
 			entryPath = subpath + "/" + entry.Name

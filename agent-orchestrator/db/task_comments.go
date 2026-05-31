@@ -14,6 +14,7 @@ type TaskComment struct {
 	AuthorType string    `json:"author_type"` // user | agent
 	AuthorRole string    `json:"author_role,omitempty"`
 	AuthorID   string    `json:"author_id,omitempty"`
+	AuthorName string    `json:"author_name,omitempty"`
 	Body       string    `json:"body"`
 	CreatedAt  time.Time `json:"created_at"`
 }
@@ -22,7 +23,7 @@ type TaskComment struct {
 // If reviewID is non-empty, only returns comments for that review thread.
 func (d *Database) ListComments(ctx context.Context, taskID, reviewID string) ([]*TaskComment, error) {
 	query := `SELECT id, task_id, COALESCE(review_id,''), author_type,
-	                 author_role, author_id, body, created_at
+	                 author_role, author_id, COALESCE(author_name,''), body, created_at
 	          FROM task_comments WHERE task_id=?`
 	args := []interface{}{taskID}
 	if reviewID != "" {
@@ -42,7 +43,7 @@ func (d *Database) ListComments(ctx context.Context, taskID, reviewID string) ([
 	for rows.Next() {
 		c := &TaskComment{}
 		if err := rows.Scan(&c.ID, &c.TaskID, &c.ReviewID, &c.AuthorType,
-			&c.AuthorRole, &c.AuthorID, &c.Body, &c.CreatedAt); err != nil {
+			&c.AuthorRole, &c.AuthorID, &c.AuthorName, &c.Body, &c.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -59,14 +60,19 @@ func (d *Database) CreateComment(ctx context.Context, c *TaskComment) error {
 		c.ID = newID()
 	}
 	c.CreatedAt = time.Now().UTC()
+	// Resolve and store the author's display name at write time so the comments
+	// panel can label the commenter without a join on read.
+	if c.AuthorName == "" && c.AuthorType == "agent" {
+		c.AuthorName = d.agentDisplayName(ctx, c.AuthorID)
+	}
 	var reviewID interface{}
 	if c.ReviewID != "" {
 		reviewID = c.ReviewID
 	}
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO task_comments(id, task_id, review_id, author_type, author_role, author_id, body, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.ID, c.TaskID, reviewID, c.AuthorType, c.AuthorRole, c.AuthorID, c.Body, c.CreatedAt,
+		`INSERT INTO task_comments(id, task_id, review_id, author_type, author_role, author_id, author_name, body, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ID, c.TaskID, reviewID, c.AuthorType, c.AuthorRole, c.AuthorID, c.AuthorName, c.Body, c.CreatedAt,
 	)
 	if err != nil {
 		return err

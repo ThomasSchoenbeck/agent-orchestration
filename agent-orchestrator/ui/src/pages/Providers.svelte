@@ -342,6 +342,13 @@
         Enabled
       </label>
 
+      <div class="mt-1 pt-2 border-t border-surface-700">
+        <span class="text-xs text-gray-500 uppercase tracking-wide">
+          Default behaviour
+          <span class="text-gray-600 normal-case">(applied when a model row below does not override it)</span>
+        </span>
+      </div>
+
       <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
         <input type="checkbox" bind:checked={form.text_tool_calls} class="accent-accent" />
         <span>

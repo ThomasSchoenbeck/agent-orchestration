@@ -74,6 +74,38 @@
     events.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
     return events
   })
+
+  // Status history (Bug 10): a projection of status-change task-log events,
+  // each carrying agent identity (resolved in the DB layer) and the branch from
+  // metadata. Falls back to the state_transitions table when the log DB is off.
+  let timeline = $derived.by(() => {
+    const fromLogs = taskLogs
+      .filter((e) => e.old_status || e.new_status)
+      .map((e) => {
+        let branch = ""
+        try {
+          const m = typeof e.metadata === "string" ? JSON.parse(e.metadata) : (e.metadata || {})
+          branch = m?.branch || ""
+        } catch (_) {}
+        return {
+          id: e.id, ts: e.timestamp,
+          old_status: e.old_status, new_status: e.new_status,
+          agent_name: e.agent_name, agent_id: e.agent_id,
+          branch, description: e.description,
+        }
+      })
+    if (fromLogs.length > 0) {
+      return fromLogs.sort((a, b) => new Date(a.ts) - new Date(b.ts))
+    }
+    return transitions
+      .map((tr) => ({
+        id: tr.id, ts: tr.created_at,
+        old_status: tr.from_state, new_status: tr.to_state,
+        agent_name: "", agent_id: tr.actor_agent_id,
+        branch: "", description: tr.reason,
+      }))
+      .sort((a, b) => new Date(a.ts) - new Date(b.ts))
+  })
   let taskLinks = $state([])
   let projectReqs = $state([])
   let projectFeats = $state([])
@@ -901,8 +933,13 @@
                       ? 'text-purple-300'
                       : 'text-gray-300'}"
                   >
-                    {c.author_type === "agent" ? c.author_role || "agent" : "user"}
+                    {c.author_type === "agent"
+                      ? c.author_name || c.author_role || "agent"
+                      : c.author_name || "you"}
                   </span>
+                  {#if c.author_type === "agent" && c.author_name && c.author_role}
+                    <span class="text-[10px] text-gray-600">{c.author_role}</span>
+                  {/if}
                   <span class="text-[10px] text-gray-600 font-mono">
                     {new Date(c.created_at).toLocaleString([], {
                       month: "short",
@@ -982,43 +1019,42 @@
         </div>
       {/if}
 
-      <!-- ── State-transition timeline ──────────────────────────────── -->
-      {#if transitions.length > 0}
+      <!-- ── Status history timeline (Bug 10) ───────────────────────── -->
+      {#if timeline.length > 0}
         <div class="mt-6">
-          <h3 class="text-sm font-semibold text-gray-300 mb-3">State Timeline</h3>
+          <h3 class="text-sm font-semibold text-gray-300 mb-3">Status history</h3>
           <ol class="relative border-l border-surface-600 ml-3 flex flex-col gap-4">
-            {#each transitions as tr (tr.id)}
+            {#each timeline as ev (ev.id)}
               <li class="ml-4 text-xs">
                 <span
                   class="absolute -left-1.5 mt-1 w-3 h-3 rounded-full border border-surface-600
-                             {tr.to_state === 'COMPLETED'
+                             {ev.new_status === 'COMPLETED'
                     ? 'bg-green-600'
-                    : tr.to_state === 'FAILED'
+                    : ev.new_status === 'FAILED'
                       ? 'bg-red-600'
-                      : tr.to_state.startsWith('AWAITING')
+                      : ev.new_status?.startsWith('AWAITING')
                         ? 'bg-yellow-600'
                         : 'bg-accent'}"
                 >
                 </span>
                 <div class="flex items-center gap-2 flex-wrap">
-                  <span class="text-gray-500 font-mono">
-                    {new Date(tr.created_at).toLocaleString([], {
-                      month: "short",
-                      day: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </span>
+                  <span class="text-gray-500 font-mono">{formatTimestamp(ev.ts)}</span>
                   <span class="text-gray-400">
-                    {#if tr.from_state}<span class="text-gray-500">{tr.from_state}</span> →
+                    {#if ev.old_status}<span class="text-gray-500">{ev.old_status}</span> →
                     {/if}
-                    <span class="font-semibold text-gray-200">{tr.to_state}</span>
+                    <span class="font-semibold text-gray-200">{ev.new_status || ev.event_type}</span>
                   </span>
-                  {#if tr.reason}
-                    <span class="text-gray-600 italic">{tr.reason}</span>
+                  {#if ev.agent_name || ev.agent_id}
+                    <span class="text-gray-500">
+                      {ev.agent_name || "agent"}
+                      {#if ev.agent_id}<span class="text-gray-600 font-mono">({ev.agent_id.slice(0, 8)})</span>{/if}
+                    </span>
                   {/if}
-                  {#if tr.actor_agent_id}
-                    <span class="text-gray-600 font-mono">{tr.actor_agent_id.slice(0, 8)}</span>
+                  {#if ev.branch}
+                    <code class="text-[10px] font-mono px-1 rounded bg-surface-700 text-blue-300">{ev.branch}</code>
+                  {/if}
+                  {#if ev.description}
+                    <span class="text-gray-600 italic">{ev.description}</span>
                   {/if}
                 </div>
               </li>
@@ -1093,10 +1129,14 @@
               {@const label     = log.event_type ?? log.level ?? 'info'}
               {@const isError   = label.includes('fail') || label.includes('error')}
               {@const isLLM     = isAgent && (log.message?.startsWith('LLM') || log.message?.startsWith('tool call'))}
+              {@const actor     = log.agent_name || (log.agent_id ? log.agent_id.slice(0, 8) : '')}
               <div class="flex flex-col gap-0.5">
                 <div class="flex items-start gap-2 text-xs py-0.5">
                   <span class="shrink-0 text-gray-600 font-mono w-36 pt-px">
                     {formatTimestamp(log.timestamp)}
+                  </span>
+                  <span class="shrink-0 w-24 truncate text-gray-500 pt-px" title={log.agent_id ?? ''}>
+                    {actor || '—'}
                   </span>
                   <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium
                     {isError

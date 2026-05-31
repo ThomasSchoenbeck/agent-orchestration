@@ -425,6 +425,11 @@ func (d *Database) applyColumnMigrations() error {
 			name: "add_models_to_providers",
 			sql:  "ALTER TABLE providers ADD COLUMN models TEXT NOT NULL DEFAULT '[]'",
 		},
+		// Bug 8: persist comment author display name at write time
+		{
+			name: "add_author_name_to_task_comments",
+			sql:  "ALTER TABLE task_comments ADD COLUMN author_name TEXT NOT NULL DEFAULT ''",
+		},
 	}
 
 	for _, m := range migrations {
