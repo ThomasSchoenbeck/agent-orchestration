@@ -33,6 +33,9 @@
     getAgent,
     listLogs,
     getTaskCost,
+    listPRs,
+    approvePR,
+    rejectPR,
   } from "../lib/api.js"
   import MarkdownEditor from "../components/MarkdownEditor.svelte"
   import FileTree from "../components/FileTree.svelte"
@@ -121,6 +124,9 @@
   let postingComment = $state(false)
   let transitions = $state([])
   let reviews = $state([])
+  let pullRequests = $state([])
+  let prNotes = $state({}) // prId → decision note text
+  let prBusy = $state(false)
 
   // ── Code panel ────────────────────────────────────────────────────────────
   let taskBranch        = $state('')   // "task/<taskId>"
@@ -188,6 +194,11 @@
     FAILED: "bg-red-900 text-red-300",
   }
 
+  // Human-friendly status labels (Feature 2: MERGING is a merge review).
+  const statusLabels = {
+    MERGING: "MERGE REVIEW IN PROGRESS",
+  }
+
   const formatDate = formatTimestamp
 
   // ── Data loading ──────────────────────────────────────────────────────────
@@ -243,6 +254,7 @@
       task = t
       transitions = Array.isArray(transitionData) ? transitionData : []
       reviews = Array.isArray(reviewData) ? reviewData : []
+      pullRequests = await listPRs(taskId).catch(() => [])
       taskLinks = links ?? []
       deps = depList ?? []
       checklist = checklistData ?? []
@@ -271,6 +283,26 @@
       toasts.error("Failed to load task: " + e.message)
     } finally {
       loading = false
+    }
+  }
+
+  // ── Pull requests (Feature 2) ──────────────────────────────────────────────
+  async function decidePR(prId, verdict) {
+    prBusy = true
+    try {
+      const note = prNotes[prId] || ""
+      if (verdict === "approve") {
+        await approvePR(taskId, prId, note)
+        toasts.success("Pull request approved — merging")
+      } else {
+        await rejectPR(taskId, prId, note)
+        toasts.success("Pull request rejected — returned for revision")
+      }
+      await loadAll()
+    } catch (e) {
+      toasts.error("PR decision failed: " + e.message)
+    } finally {
+      prBusy = false
     }
   }
 
@@ -645,7 +677,7 @@
                 class="text-xs px-2 py-0.5 rounded-full
                 {statusColors[task.status] || 'bg-gray-700 text-gray-300'}"
               >
-                {task.status}
+                {statusLabels[task.status] ?? task.status}
               </span>
             </div>
 
@@ -1060,6 +1092,76 @@
               </li>
             {/each}
           </ol>
+        </div>
+      {/if}
+
+      <!-- ── Pull requests (Feature 2) ─────────────────────────────── -->
+      {#if pullRequests.length > 0}
+        <div class="mt-6">
+          <h3 class="text-sm font-semibold text-gray-300 mb-3">Pull Requests</h3>
+          <div class="flex flex-col gap-4">
+            {#each pullRequests as pr (pr.id)}
+              {@const decided = pr.status === "merged" || pr.status === "rejected"}
+              <div
+                class="rounded border p-3
+                {pr.status === 'merged'
+                  ? 'border-green-700 bg-green-950'
+                  : pr.status === 'rejected'
+                    ? 'border-rose-700 bg-rose-950'
+                    : 'border-cyan-700 bg-cyan-950'}"
+              >
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="text-sm font-medium text-gray-200">{pr.title || "Pull request"}</span>
+                  <span
+                    class="text-[10px] px-1.5 py-0.5 rounded font-medium uppercase tracking-wide
+                    {pr.status === 'merged'
+                      ? 'bg-green-900 text-green-300'
+                      : pr.status === 'rejected'
+                        ? 'bg-rose-900 text-rose-300'
+                        : 'bg-cyan-900 text-cyan-300'}"
+                  >{pr.status}</span>
+                  <span class="text-xs text-gray-500 font-mono ml-auto">{pr.branch} → {pr.base}</span>
+                </div>
+                {#if pr.author_name || pr.author_id}
+                  <div class="text-xs text-gray-500 mb-1">
+                    Opened by {pr.author_name || pr.author_id}
+                  </div>
+                {/if}
+                {#if pr.body}
+                  <div class="text-xs text-gray-300 whitespace-pre-wrap font-mono mb-2">{pr.body}</div>
+                {/if}
+                {#if pr.decision_body}
+                  <div class="text-xs text-gray-400 border-t border-surface-600 mt-2 pt-2">
+                    <span class="text-gray-500">Decision{pr.decider_id ? ` (${pr.decider_id})` : ""}:</span>
+                    <span class="whitespace-pre-wrap font-mono"> {pr.decision_body}</span>
+                  </div>
+                {/if}
+
+                {#if !decided}
+                  <div class="mt-3 flex flex-col gap-2">
+                    <textarea
+                      class="w-full text-xs bg-surface-900 border border-surface-600 rounded p-2 text-gray-200"
+                      rows="2"
+                      placeholder="Decision notes (optional)"
+                      bind:value={prNotes[pr.id]}
+                    ></textarea>
+                    <div class="flex gap-2">
+                      <button
+                        class="px-3 py-1 text-xs rounded bg-green-800 text-green-100 hover:bg-green-700 disabled:opacity-50"
+                        onclick={() => decidePR(pr.id, "approve")}
+                        disabled={prBusy}
+                      >Approve &amp; merge</button>
+                      <button
+                        class="px-3 py-1 text-xs rounded bg-rose-800 text-rose-100 hover:bg-rose-700 disabled:opacity-50"
+                        onclick={() => decidePR(pr.id, "reject")}
+                        disabled={prBusy}
+                      >Reject</button>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
         </div>
       {/if}
 

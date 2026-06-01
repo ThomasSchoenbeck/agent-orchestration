@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -264,6 +265,9 @@ func (a *Agent) executeTask(ctx context.Context, task *db.Task) {
 			return
 		}
 		task.WorktreePath = localPath
+		// Guarantee the local workspace is removed when the task finishes —
+		// success, failure, review, or merge — including on panic or early return.
+		defer os.RemoveAll(localPath)
 		tlog.InfoCtx(ctx, "cloned %s branch %s → %s", task.RepoURL, branch, localPath)
 	}
 

@@ -292,6 +292,27 @@ CREATE TABLE IF NOT EXISTS task_reviews (
 );
 CREATE INDEX IF NOT EXISTS idx_task_reviews_task ON task_reviews(task_id, created_at DESC);
 
+-- Pull requests (Feature 2): merge gate opened by reviewer, decided by deployer/human
+CREATE TABLE IF NOT EXISTS pull_requests (
+    id            TEXT PRIMARY KEY,
+    task_id       TEXT NOT NULL,
+    project_id    TEXT NOT NULL,
+    branch        TEXT NOT NULL DEFAULT '',
+    base          TEXT NOT NULL DEFAULT 'main',
+    title         TEXT NOT NULL DEFAULT '',
+    body          TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'open',
+    author_id     TEXT NOT NULL DEFAULT '',
+    author_name   TEXT NOT NULL DEFAULT '',
+    decider_id    TEXT NOT NULL DEFAULT '',
+    decision_body TEXT NOT NULL DEFAULT '',
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id)    REFERENCES tasks(id),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+CREATE INDEX IF NOT EXISTS idx_pull_requests_task ON pull_requests(task_id, created_at DESC);
+
 -- State migration audit log (one-shot migration from old vocabulary)
 CREATE TABLE IF NOT EXISTS state_migration_log (
     id         INTEGER PRIMARY KEY,

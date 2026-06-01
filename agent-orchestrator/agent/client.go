@@ -139,6 +139,29 @@ func (c *ServerClient) PostReview(ctx context.Context, taskID, status, body, bra
 	return c.post(ctx, fmt.Sprintf("/api/tasks/%s/reviews", taskID), req, nil)
 }
 
+// ListPRs returns the pull requests opened for a task.
+func (c *ServerClient) ListPRs(ctx context.Context, taskID string) ([]*db.PullRequest, error) {
+	var prs []*db.PullRequest
+	if err := c.get(ctx, fmt.Sprintf("/api/tasks/%s/pull-requests", taskID), &prs); err != nil {
+		return nil, err
+	}
+	return prs, nil
+}
+
+// SubmitPRDecision submits a deployer/merge-review decision on a pull request.
+// verdict must be "approve" (triggers the merge) or "reject" (returns the task
+// to revision). body carries the decision notes.
+func (c *ServerClient) SubmitPRDecision(ctx context.Context, taskID, prID, verdict, body, agentID string) error {
+	if verdict != "approve" && verdict != "reject" {
+		return fmt.Errorf("SubmitPRDecision: invalid verdict %q", verdict)
+	}
+	req := map[string]string{
+		"decider_id": agentID,
+		"body":       body,
+	}
+	return c.post(ctx, fmt.Sprintf("/api/tasks/%s/pull-requests/%s/%s", taskID, prID, verdict), req, nil)
+}
+
 // PostLog ships a log entry to the server.
 func (c *ServerClient) PostLog(ctx context.Context, entry db.LogEntry) error {
 	return c.post(ctx, "/api/logs", entry, nil)

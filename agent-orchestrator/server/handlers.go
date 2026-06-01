@@ -862,6 +862,9 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case "reviews":
 		s.handleTaskReviews(w, r, id, parts)
 
+	case "pull-requests":
+		s.handleTaskPullRequests(w, r, id, parts)
+
 	case "transitions":
 		// GET /api/tasks/{id}/transitions — state-transition history
 		if r.Method != http.MethodGet {

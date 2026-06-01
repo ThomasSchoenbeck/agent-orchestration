@@ -78,6 +78,11 @@ export const queueTask   = (id)  => post(`/api/tasks/${id}/queue`)
 export const unqueueTask = (id)  => post(`/api/tasks/${id}/unqueue`)
 export const listTaskLogs = (taskId) => get(`/api/tasks/${taskId}/logs`)
 
+// ── Pull requests (Feature 2) ─────────────────────────────────────────────────
+export const listPRs   = (taskId)             => get(`/api/tasks/${taskId}/pull-requests`)
+export const approvePR = (taskId, prId, body) => post(`/api/tasks/${taskId}/pull-requests/${prId}/approve`, { decider_id: 'human', body })
+export const rejectPR  = (taskId, prId, body) => post(`/api/tasks/${taskId}/pull-requests/${prId}/reject`,  { decider_id: 'human', body })
+
 // ── Agents ───────────────────────────────────────────────────────────────────
 export const listAgents  = () => get('/api/agents')
 export const getAgent      = (id) => get(`/api/agents/${id}`)

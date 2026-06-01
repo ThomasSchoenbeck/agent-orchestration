@@ -121,6 +121,28 @@ type ProjectFeature struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// --- Pull Request ---
+
+// PullRequest represents the merge gate for a task: the reviewer opens it on
+// approval, and a deployer (handles_merge) or a human decides it. Merge only
+// follows an explicit approval decision — PRs are never auto-approved.
+type PullRequest struct {
+	ID           string    `json:"id"`
+	TaskID       string    `json:"task_id"`
+	ProjectID    string    `json:"project_id"`
+	Branch       string    `json:"branch"`        // source: task/<id>
+	Base         string    `json:"base"`          // always "main"
+	Title        string    `json:"title"`
+	Body         string    `json:"body"`          // reviewer's approval summary
+	Status       string    `json:"status"`        // open | approved | rejected | merged
+	AuthorID     string    `json:"author_id"`     // reviewer agent that opened it
+	AuthorName   string    `json:"author_name"`
+	DeciderID    string    `json:"decider_id"`    // deployer agent or human that decided
+	DecisionBody string    `json:"decision_body"` // the merge reviewer's verdict notes
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 // TaskProjectLink links a task to a requirement or feature.
 type TaskProjectLink struct {
 	ID        string    `json:"id"`

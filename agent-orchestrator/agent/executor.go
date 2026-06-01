@@ -104,6 +104,16 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		return
 	}
 
+	// Merge-review tasks (claimed from AWAITING_MERGE, now in MERGING) submit a
+	// PR decision instead of a generic result. The approve/reject endpoint drives
+	// the task's final state, so we do not submit a result here.
+	if isMergeReviewTask(task) && execErr == nil {
+		e.submitMergeDecision(ctx, task, result)
+		tlog.InfoCtx(ctx, "merge-review task done (tokens=%d duration=%dms)", stats.totalTokens, durationMs)
+		e.postCompletionComment(ctx, task, result, db.TaskStatusMerging, stats.totalTokens, durationMs, nil)
+		return
+	}
+
 	// For non-reviewer tasks with execution errors: fail immediately.
 	if execErr != nil {
 		if err := e.client.SubmitTaskResult(ctx, task.ID, result, db.TaskStatusFailed, metrics); err != nil {
@@ -168,6 +178,48 @@ func (e *Executor) buildCompletionComment(task *db.Task, result map[string]inter
 // role=="reviewer" form is retained for backward compatibility.
 func isReviewTask(task *db.Task) bool {
 	return task.Status == db.TaskStatusReviewing || task.Role == "reviewer"
+}
+
+// isMergeReviewTask reports whether the executor is performing a merge review —
+// a task claimed from AWAITING_MERGE by a deployer (handles_merge), now in
+// MERGING.
+func isMergeReviewTask(task *db.Task) bool {
+	return task.Status == db.TaskStatusMerging
+}
+
+// submitMergeDecision turns the LLM verdict into an approve/reject decision on
+// the task's open pull request. Reuses the review verdict extraction: an
+// "approved" status approves (and triggers the merge); anything else rejects.
+func (e *Executor) submitMergeDecision(ctx context.Context, task *db.Task, result map[string]interface{}) {
+	tlog := e.log.ForTask(task.ID).ForProject(task.ProjectID)
+	verdict, body := extractReviewFromResult(result)
+
+	prs, err := e.client.ListPRs(ctx, task.ID)
+	if err != nil {
+		tlog.WarnCtx(ctx, "ListPRs failed: %v", err)
+		return
+	}
+	var pr *db.PullRequest
+	for _, p := range prs {
+		if p.Status == "open" {
+			pr = p
+			break
+		}
+	}
+	if pr == nil {
+		tlog.WarnCtx(ctx, "no open PR found for merge-review task")
+		return
+	}
+
+	decision := "approve"
+	if verdict != "approved" {
+		decision = "reject"
+	}
+	if err := e.client.SubmitPRDecision(ctx, task.ID, pr.ID, decision, body, e.agentID); err != nil {
+		tlog.WarnCtx(ctx, "SubmitPRDecision (%s) failed: %v", decision, err)
+		return
+	}
+	tlog.InfoCtx(ctx, "submitted merge decision %q on PR %s", decision, pr.ID)
 }
 
 // effectiveRole is the role whose configuration (model, prompt, tools) drives

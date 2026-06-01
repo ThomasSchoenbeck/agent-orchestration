@@ -158,15 +158,10 @@ func (s *Server) Start(ctx context.Context) error {
 		job.Run(ctx)
 	}()
 
-	// Background merge supervisor.
-	go func() {
-		intervalSec := s.cfg.Agents.MergeSupervisorIntervalSec
-		if intervalSec <= 0 {
-			intervalSec = 10
-		}
-		supervisor := workflow.NewMergeSupervisor(s.db, s.storage, intervalSec)
-		supervisor.Run(ctx)
-	}()
+	// Feature 2: merging is gated by an explicit approval decision on a pull
+	// request (deployer or human via the approve endpoint), not an autonomous
+	// background merger. The MergeSupervisor is intentionally not started here;
+	// it is retained only for the merge integration regression tests.
 
 	log.Printf("server: listening on http://%s", addr)
 	if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
