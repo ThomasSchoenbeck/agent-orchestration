@@ -156,20 +156,23 @@
   let reqBuf             = $state({})
   let featBuf            = $state({})
 
-  const REQ_STATUSES  = ['proposed', 'accepted', 'implemented', 'obsolete']
-  const FEAT_STATUSES = ['planned', 'in_progress', 'done', 'dropped']
+  const REQ_STATUSES  = ['proposed', 'accepted', 'satisfied', 'needs_review', 'implemented', 'obsolete']
+  const FEAT_STATUSES = ['planned', 'in_progress', 'done', 'needs_review', 'dropped']
 
   const REQ_STATUS_COLORS = {
-    proposed:    'bg-blue-900 text-blue-300',
-    accepted:    'bg-green-900 text-green-300',
-    implemented: 'bg-emerald-900 text-emerald-300',
-    obsolete:    'bg-gray-700 text-gray-400',
+    proposed:     'bg-blue-900 text-blue-300',
+    accepted:     'bg-green-900 text-green-300',
+    satisfied:    'bg-emerald-900 text-emerald-300',
+    needs_review: 'bg-amber-900 text-amber-300',
+    implemented:  'bg-emerald-900 text-emerald-300',
+    obsolete:     'bg-gray-700 text-gray-400',
   }
   const FEAT_STATUS_COLORS = {
-    planned:     'bg-blue-900 text-blue-300',
-    in_progress: 'bg-orange-900 text-orange-300',
-    done:        'bg-green-900 text-green-300',
-    dropped:     'bg-gray-700 text-gray-400',
+    planned:      'bg-blue-900 text-blue-300',
+    in_progress:  'bg-orange-900 text-orange-300',
+    done:         'bg-green-900 text-green-300',
+    needs_review: 'bg-amber-900 text-amber-300',
+    dropped:      'bg-gray-700 text-gray-400',
   }
 
   let filteredReqs  = $derived(
@@ -221,9 +224,11 @@
     MERGING:           'bg-indigo-900 text-indigo-300',
     COMPLETED:         'bg-green-900 text-green-300',
     FAILED:            'bg-red-900 text-red-300',
+    active:            'bg-teal-900 text-teal-300',
+    complete:          'bg-green-900 text-green-300',
   }
 
-  const projectStatusOptions = ['planned', 'in_progress', 'completed', 'failed']
+  const projectStatusOptions = ['active', 'planned', 'in_progress', 'complete', 'completed', 'failed']
 
   function taskTitle(t) {
     return t.payload?.title ?? t.type ?? t.id
@@ -330,6 +335,27 @@
     } catch (e) { toasts.error('Update failed: ' + e.message) }
   }
 
+  // ── Scope re-sync (Feature 5) ─────────────────────────────────────────────
+  let resyncing = $state(false)
+  async function requestScopeResync() {
+    resyncing = true
+    try {
+      // Enqueue a planner task that reconciles scope against the description.
+      await createTask({
+        project_id: projectId,
+        role:       'planner',
+        priority:   8,
+        payload:    { mode: 'sync', title: 'Re-sync project scope' },
+      })
+      toasts.success('Scope re-sync requested — a planner will reconcile it')
+      await loadTasks()
+    } catch (e) {
+      toasts.error('Could not request re-sync: ' + e.message)
+    } finally {
+      resyncing = false
+    }
+  }
+
   // ── Project editing ───────────────────────────────────────────────────────
   function startEdit() {
     editBuf = {
@@ -341,6 +367,8 @@
       remote_credentials_ref: project.remote_credentials_ref || '',
       coding_rules:          project.coding_rules || '',
       status:                project.status,
+      auto_queue:            !!project.auto_queue,
+      max_open_tasks:        project.max_open_tasks ?? 0,
     }
     editing = true
   }
@@ -356,12 +384,27 @@
         remote_credentials_ref: editBuf.remote_credentials_ref || undefined,
         coding_rules:          editBuf.coding_rules || undefined,
         status:                editBuf.status,
+        auto_queue:            editBuf.auto_queue,
+        max_open_tasks:        Number(editBuf.max_open_tasks) || 0,
       })
       project = updated
       editing = false
       toasts.success('Project saved')
     } catch (e) {
       toasts.error('Save failed: ' + e.message)
+    }
+  }
+
+  // Re-arm a completed project for exactly one beyond-scope improvement round.
+  async function reEnableAutoQueue() {
+    try {
+      const updated = await updateProject(projectId, {
+        auto_queue: true, status: 'active', plan_rounds: 0,
+      })
+      project = updated
+      toasts.success('Auto-queue re-enabled — one improvement round will run')
+    } catch (e) {
+      toasts.error('Could not re-enable auto-queue: ' + e.message)
     }
   }
 
@@ -512,6 +555,23 @@
             </select>
           </div>
 
+          <!-- Auto-queue (Feature 4) -->
+          <div class="flex items-center gap-4 flex-wrap">
+            <label class="flex items-center gap-2 text-sm text-gray-300">
+              <input type="checkbox" bind:checked={editBuf.auto_queue} />
+              Auto-queue (keep backlog full until complete)
+            </label>
+            <label class="flex items-center gap-2 text-xs text-gray-500">
+              Max open tasks
+              <input
+                type="number" min="0"
+                class="w-20 bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200"
+                bind:value={editBuf.max_open_tasks}
+              />
+              <span class="text-gray-600">(0 = unlimited)</span>
+            </label>
+          </div>
+
           <div>
             <label class="text-xs text-gray-500 mb-1 block">Description</label>
             <MarkdownEditor bind:value={editBuf.description} minHeight="140px" />
@@ -597,6 +657,17 @@
                 {statusColors[project.status] || 'bg-gray-700 text-gray-300'}">
                 {project.status}
               </span>
+              {#if project.auto_queue}
+                <span class="text-xs px-2 py-0.5 rounded-full bg-teal-900 text-teal-300" title="Backlog auto-replenishes until complete">
+                  auto-queue{project.plan_rounds ? ` · round ${project.plan_rounds}` : ''}
+                </span>
+              {/if}
+              {#if project.status === 'complete'}
+                <button
+                  class="text-xs px-2 py-0.5 rounded border border-teal-700 text-teal-300 hover:bg-teal-900"
+                  onclick={reEnableAutoQueue}
+                >Re-enable auto-queue</button>
+              {/if}
             </div>
 
             {#if project.description}
@@ -645,6 +716,20 @@
 
     <!-- ── Overview: requirements / features / tasks ────────────────────── -->
     {#if activeTab === 'overview'}
+
+    <!-- ── Scope-dirty banner (Feature 5) ────────────────────────────────── -->
+    {#if project?.scope_dirty}
+      <div class="mb-4 flex items-center justify-between gap-3 rounded border border-amber-700 bg-amber-950 px-3 py-2">
+        <span class="text-xs text-amber-200">
+          The description changed — requirements and features may be out of date.
+        </span>
+        <button
+          class="shrink-0 px-3 py-1 text-xs rounded bg-amber-800 text-amber-100 hover:bg-amber-700 disabled:opacity-50"
+          onclick={requestScopeResync}
+          disabled={resyncing}
+        >{resyncing ? 'Requesting…' : 'Re-sync scope'}</button>
+      </div>
+    {/if}
 
     <!-- ── Requirements ──────────────────────────────────────────────────── -->
     <div class="mb-4">

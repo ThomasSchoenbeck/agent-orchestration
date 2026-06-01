@@ -9,7 +9,8 @@ import (
 
 const projectSelectSQL = `
 	SELECT id, name, description, repo_path, git_url, slug, remote_url, remote_credentials_ref,
-	       coding_rules, status, config, server_repo_initialised_at, created_at, updated_at
+	       coding_rules, status, scope_dirty, auto_queue, max_open_tasks, plan_rounds,
+	       config, server_repo_initialised_at, created_at, updated_at
 	FROM projects`
 
 // ListProjects returns all projects ordered by created_at desc.
@@ -72,11 +73,13 @@ func (d *Database) CreateProject(ctx context.Context, p *Project) error {
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO projects
 		   (id, name, description, repo_path, git_url, slug, remote_url, remote_credentials_ref,
-		    coding_rules, status, config, server_repo_initialised_at, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    coding_rules, status, scope_dirty, auto_queue, max_open_tasks, plan_rounds,
+		    config, server_repo_initialised_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Name, p.Description, p.RepoPath, p.GitURL,
 		p.Slug, p.RemoteURL, p.RemoteCredentialsRef, p.CodingRules,
-		p.Status, marshalJSON(p.Config), initialisedAt,
+		p.Status, p.ScopeDirty, p.AutoQueue, p.MaxOpenTasks, p.PlanRounds,
+		marshalJSON(p.Config), initialisedAt,
 		p.CreatedAt, p.UpdatedAt,
 	)
 	return err
@@ -94,13 +97,57 @@ func (d *Database) UpdateProject(ctx context.Context, p *Project) error {
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE projects
 		 SET name=?, description=?, repo_path=?, git_url=?, slug=?, remote_url=?,
-		     remote_credentials_ref=?, coding_rules=?, status=?, config=?,
+		     remote_credentials_ref=?, coding_rules=?, status=?, scope_dirty=?,
+		     auto_queue=?, max_open_tasks=?, plan_rounds=?, config=?,
 		     server_repo_initialised_at=?, updated_at=?
 		 WHERE id=?`,
 		p.Name, p.Description, p.RepoPath, p.GitURL,
 		p.Slug, p.RemoteURL, p.RemoteCredentialsRef, p.CodingRules,
-		p.Status, marshalJSON(p.Config), initialisedAt,
+		p.Status, p.ScopeDirty, p.AutoQueue, p.MaxOpenTasks, p.PlanRounds,
+		marshalJSON(p.Config), initialisedAt,
 		p.UpdatedAt, p.ID,
+	)
+	return err
+}
+
+// SetScopeDirty sets (or clears) the scope_dirty flag on a project. Used when
+// the description changes (set) and when the planner re-syncs scope (clear).
+func (d *Database) SetScopeDirty(ctx context.Context, projectID string, dirty bool) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE projects SET scope_dirty=?, updated_at=? WHERE id=?`,
+		dirty, time.Now().UTC(), projectID,
+	)
+	return err
+}
+
+// ListAutoQueueProjects returns projects that are armed (auto_queue=1) and
+// active — the candidates the queue supervisor replenishes (Feature 4).
+func (d *Database) ListAutoQueueProjects(ctx context.Context) ([]*Project, error) {
+	rows, err := d.db.QueryContext(ctx,
+		projectSelectSQL+` WHERE auto_queue=1 AND status='active' ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanProjects(rows)
+}
+
+// CountOpenTasks returns the number of tasks for a project that are not in a
+// terminal state (anything other than COMPLETED/FAILED).
+func (d *Database) CountOpenTasks(ctx context.Context, projectID string) (int, error) {
+	var n int
+	err := d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE project_id=? AND status NOT IN (?, ?)`,
+		projectID, TaskStatusCompleted, TaskStatusFailed,
+	).Scan(&n)
+	return n, err
+}
+
+// IncrementPlanRounds bumps the project's plan_rounds counter by one.
+func (d *Database) IncrementPlanRounds(ctx context.Context, projectID string) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE projects SET plan_rounds = plan_rounds + 1, updated_at=? WHERE id=?`,
+		time.Now().UTC(), projectID,
 	)
 	return err
 }
@@ -117,15 +164,19 @@ func scanProject(row *sql.Row) (*Project, error) {
 	var p Project
 	var configJSON string
 	var createdAt, updatedAt string
+	var scopeDirty, autoQueue int
 	var initialisedAt sql.NullString
 	err := row.Scan(
 		&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.GitURL,
 		&p.Slug, &p.RemoteURL, &p.RemoteCredentialsRef, &p.CodingRules,
-		&p.Status, &configJSON, &initialisedAt, &createdAt, &updatedAt,
+		&p.Status, &scopeDirty, &autoQueue, &p.MaxOpenTasks, &p.PlanRounds,
+		&configJSON, &initialisedAt, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
+	p.ScopeDirty = scopeDirty != 0
+	p.AutoQueue = autoQueue != 0
 	p.Config = unmarshalJSONMap(configJSON)
 	p.CreatedAt = parseTime(createdAt)
 	p.UpdatedAt = parseTime(updatedAt)
@@ -141,14 +192,18 @@ func scanProjects(rows *sql.Rows) ([]*Project, error) {
 	for rows.Next() {
 		var p Project
 		var configJSON, createdAt, updatedAt string
+		var scopeDirty, autoQueue int
 		var initialisedAt sql.NullString
 		if err := rows.Scan(
 			&p.ID, &p.Name, &p.Description, &p.RepoPath, &p.GitURL,
 			&p.Slug, &p.RemoteURL, &p.RemoteCredentialsRef, &p.CodingRules,
-			&p.Status, &configJSON, &initialisedAt, &createdAt, &updatedAt,
+			&p.Status, &scopeDirty, &autoQueue, &p.MaxOpenTasks, &p.PlanRounds,
+			&configJSON, &initialisedAt, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, err
 		}
+		p.ScopeDirty = scopeDirty != 0
+		p.AutoQueue = autoQueue != 0
 		p.Config = unmarshalJSONMap(configJSON)
 		p.CreatedAt = parseTime(createdAt)
 		p.UpdatedAt = parseTime(updatedAt)

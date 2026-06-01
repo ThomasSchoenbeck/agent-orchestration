@@ -285,11 +285,16 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		if !s.decodeJSON(w, r, &req) {
 			return
 		}
+		oldDescription := p.Description
 		if req.Name != nil {
 			p.Name = *req.Name
 		}
 		if req.Description != nil {
 			p.Description = *req.Description
+			// Feature 5: a changed description may invalidate the derived scope.
+			if *req.Description != oldDescription {
+				p.ScopeDirty = true
+			}
 		}
 		if req.RepoPath != nil {
 			p.RepoPath = *req.RepoPath
@@ -311,6 +316,15 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Status != nil {
 			p.Status = *req.Status
+		}
+		if req.AutoQueue != nil {
+			p.AutoQueue = *req.AutoQueue
+		}
+		if req.MaxOpenTasks != nil {
+			p.MaxOpenTasks = *req.MaxOpenTasks
+		}
+		if req.PlanRounds != nil {
+			p.PlanRounds = *req.PlanRounds
 		}
 		if req.Config != nil {
 			p.Config = req.Config

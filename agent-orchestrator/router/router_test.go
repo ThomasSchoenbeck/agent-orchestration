@@ -154,6 +154,36 @@ func TestBuildContext_NoRule(t *testing.T) {
 	}
 }
 
+// TestContextInjection_ScopeOnlyForIncludedRoles verifies that the synthetic
+// scope entries reach a planner (no exclusion) but not a worker (scope types in
+// context_exclude).
+func TestContextInjection_ScopeOnlyForIncludedRoles(t *testing.T) {
+	cfg := testConfig()
+	r := router.New(cfg, llm.NewRegistry())
+
+	base := []router.ContextEntry{{Type: "summary", Content: "architecture notes"}}
+	entries := append(base, router.ScopeEntries("REQ: must auth", "FEAT: login page")...)
+
+	planner := &db.RoleDefinition{Name: "planner"} // no include/exclude → sees everything
+	worker := &db.RoleDefinition{
+		Name:           "worker",
+		ContextExclude: []string{router.ScopeTypeRequirements, router.ScopeTypeFeatures},
+	}
+
+	plannerCtx := r.BuildContextForRole(planner, entries)
+	if !contains(plannerCtx, "must auth") || !contains(plannerCtx, "login page") {
+		t.Errorf("planner context should contain scope; got:\n%s", plannerCtx)
+	}
+
+	workerCtx := r.BuildContextForRole(worker, entries)
+	if contains(workerCtx, "must auth") || contains(workerCtx, "login page") {
+		t.Errorf("worker context must not contain scope; got:\n%s", workerCtx)
+	}
+	if !contains(workerCtx, "architecture notes") {
+		t.Error("worker should still receive non-scope context")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr ||
 		len(s) > 0 && containsHelper(s, substr))

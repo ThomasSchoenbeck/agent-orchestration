@@ -25,6 +25,9 @@ type UpdateProjectRequest struct {
 	RemoteCredentialsRef *string                `json:"remote_credentials_ref,omitempty"`
 	CodingRules          *string                `json:"coding_rules,omitempty"`
 	Status               *string                `json:"status,omitempty"`
+	AutoQueue            *bool                  `json:"auto_queue,omitempty"`
+	MaxOpenTasks         *int                   `json:"max_open_tasks,omitempty"`
+	PlanRounds           *int                   `json:"plan_rounds,omitempty"`
 	Config               map[string]interface{} `json:"config,omitempty"`
 }
 

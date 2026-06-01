@@ -486,6 +486,24 @@ func (d *Database) applyColumnMigrations() error {
 			name: "add_review_role_to_tasks",
 			sql:  "ALTER TABLE tasks ADD COLUMN review_role TEXT NOT NULL DEFAULT ''",
 		},
+		// Feature 5: description-change marks scope as possibly stale
+		{
+			name: "add_scope_dirty_to_projects",
+			sql:  "ALTER TABLE projects ADD COLUMN scope_dirty INTEGER NOT NULL DEFAULT 0",
+		},
+		// Feature 4: bounded auto-queue project state
+		{
+			name: "add_auto_queue_to_projects",
+			sql:  "ALTER TABLE projects ADD COLUMN auto_queue INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			name: "add_max_open_tasks_to_projects",
+			sql:  "ALTER TABLE projects ADD COLUMN max_open_tasks INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			name: "add_plan_rounds_to_projects",
+			sql:  "ALTER TABLE projects ADD COLUMN plan_rounds INTEGER NOT NULL DEFAULT 0",
+		},
 	}
 
 	for _, m := range migrations {

@@ -33,6 +33,12 @@ func writeAgentContext(ctx context.Context, database *db.Database, task *db.Task
 		return err
 	}
 
+	// scope.md — project requirements/features, but only for roles whose context
+	// rules permit project-level scope (Feature 5). Best-effort.
+	if err := writeScopeContext(ctx, database, ctxDir, task); err != nil {
+		return err
+	}
+
 	// last_review.md + review_thread.md — only for revision tasks
 	if task.Status == db.TaskStatusDeveloping || task.Status == db.TaskStatusAwaitingRevision {
 		if err := writeReviewContext(ctx, database, ctxDir, task.ID); err != nil {
@@ -83,6 +89,76 @@ func writeProjectRulesMD(ctx context.Context, database *db.Database, ctxDir, pro
 		content += "\n## Coding Rules\n\n" + p.CodingRules + "\n"
 	}
 	return os.WriteFile(filepath.Join(ctxDir, "project_rules.md"), []byte(content), 0o644)
+}
+
+// writeScopeContext writes scope.md (project requirements + features) into the
+// agent context, but only when the task's role is permitted to see project-level
+// scope via its context_include / context_exclude rules. Implementation roles
+// (worker/reviewer/deployer) exclude the scope types and so get no scope.md.
+func writeScopeContext(ctx context.Context, database *db.Database, ctxDir string, task *db.Task) error {
+	if task.ProjectID == "" {
+		return nil
+	}
+	role, err := database.GetRoleDefinitionByName(ctx, task.Role)
+	if err != nil {
+		role = nil // unknown role → default allow
+	}
+	seesReqs := roleAllowsContextType(role, "project_requirements")
+	seesFeats := roleAllowsContextType(role, "project_features")
+	if !seesReqs && !seesFeats {
+		return nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Project Scope\n")
+	if seesReqs {
+		reqs, _ := database.ListRequirements(ctx, task.ProjectID)
+		sb.WriteString("\n## Requirements\n\n")
+		if len(reqs) == 0 {
+			sb.WriteString("_None defined yet._\n")
+		}
+		for _, r := range reqs {
+			sb.WriteString(fmt.Sprintf("- **%s** (%s)\n", r.Title, r.Status))
+			if r.Body != "" {
+				sb.WriteString("  " + r.Body + "\n")
+			}
+		}
+	}
+	if seesFeats {
+		feats, _ := database.ListFeatures(ctx, task.ProjectID)
+		sb.WriteString("\n## Features\n\n")
+		if len(feats) == 0 {
+			sb.WriteString("_None defined yet._\n")
+		}
+		for _, f := range feats {
+			sb.WriteString(fmt.Sprintf("- **%s** (%s)\n", f.Title, f.Status))
+			if f.Body != "" {
+				sb.WriteString("  " + f.Body + "\n")
+			}
+		}
+	}
+	return os.WriteFile(filepath.Join(ctxDir, "scope.md"), []byte(sb.String()), 0o644)
+}
+
+// roleAllowsContextType mirrors router.BuildWithRules filtering for a single
+// context type: included unless include-list excludes it or exclude-list lists it.
+func roleAllowsContextType(role *db.RoleDefinition, typ string) bool {
+	if role == nil {
+		return true
+	}
+	if len(role.ContextInclude) > 0 && !containsString(role.ContextInclude, typ) {
+		return false
+	}
+	return !containsString(role.ContextExclude, typ)
+}
+
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func writeReviewContext(ctx context.Context, database *db.Database, ctxDir, taskID string) error {

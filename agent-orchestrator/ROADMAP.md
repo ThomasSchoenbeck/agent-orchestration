@@ -8,7 +8,7 @@ Checkbox legend: `[x]` done (implemented + tests green) — **no need to re-read
 
 - [x] **Phase 0** — Bug 8, Bug 10, Bug 11
 - [x] **Phase 1** — Feature 3 (full) + Bug 9 B/C/D + full `Task.Type`/`task_types` removal
-- [ ] **Phase 2** — Feature 2 (PRs) → Feature 5 (scope) → Feature 4 (auto-queue)
+- [x] **Phase 2** — Feature 2 (PRs) → Feature 5 (scope) → Feature 4 (auto-queue)
 - [ ] **Phase 3** — Feature 6 (skills) → Feature 7 (lifecycle) → Feature 8 (managed agents)
 - [ ] **Phase 4** — `AGENTS.md` documentation
 
@@ -16,10 +16,10 @@ Per-spec status:
 
 | Spec | File | Status |
 |---|---|---|
-| Feature 2 (rev) | `feature-2-revised.md` | `[ ]` pending |
+| Feature 2 (rev) | `feature-2-revised.md` | `[x]` done |
 | Feature 3 (rev) | `feature-3-revised.md` | `[x]` done |
-| Feature 4 | `feature-4-auto-queue.md` | `[ ]` pending |
-| Feature 5 | `feature-5-scope-model.md` | `[ ]` pending |
+| Feature 4 | `feature-4-auto-queue.md` | `[x]` done |
+| Feature 5 | `feature-5-scope-model.md` | `[x]` done |
 | Feature 6 | `feature-6-skills-focus.md` | `[ ]` pending |
 | Feature 7 | `feature-7-agent-lifecycle.md` | `[ ]` pending |
 | Feature 8 | `feature-8-managed-agents.md` | `[ ]` pending |

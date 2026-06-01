@@ -163,6 +163,12 @@ func (s *Server) Start(ctx context.Context) error {
 	// background merger. The MergeSupervisor is intentionally not started here;
 	// it is retained only for the merge integration regression tests.
 
+	// Feature 4: bounded auto-queue. Replenishes armed/active projects' backlogs
+	// when they drain, and self-stops on completion / plan-round ceiling.
+	go func() {
+		workflow.NewQueueSupervisor(s.db, 0).Run(ctx)
+	}()
+
 	log.Printf("server: listening on http://%s", addr)
 	if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err

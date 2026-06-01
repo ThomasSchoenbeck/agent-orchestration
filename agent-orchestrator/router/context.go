@@ -74,6 +74,27 @@ func (b *ContextBuilder) BuildWithRules(entries []ContextEntry, include, exclude
 	return sb.String()
 }
 
+// Scope context entry types (Feature 5). A role receives these only if its
+// include/exclude rules permit them, so implementation roles stay focused on
+// their own task while planner-type roles see the whole-project scope.
+const (
+	ScopeTypeRequirements = "project_requirements"
+	ScopeTypeFeatures     = "project_features"
+)
+
+// ScopeEntries builds the synthetic context entries for a project's
+// requirements and features. Empty blocks are omitted.
+func ScopeEntries(requirements, features string) []ContextEntry {
+	var out []ContextEntry
+	if strings.TrimSpace(requirements) != "" {
+		out = append(out, ContextEntry{Type: ScopeTypeRequirements, Content: requirements})
+	}
+	if strings.TrimSpace(features) != "" {
+		out = append(out, ContextEntry{Type: ScopeTypeFeatures, Content: features})
+	}
+	return out
+}
+
 func containsStr(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {

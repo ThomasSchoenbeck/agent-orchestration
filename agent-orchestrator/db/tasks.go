@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -220,8 +221,13 @@ func (d *Database) GetNextTask(ctx context.Context, roles []string) (*Task, erro
 	var clauses []string
 	var args []interface{}
 
-	// Normal work: task.role matches one of the agent's roles.
-	clauses = append(clauses, "(status IN ('BACKLOG','AWAITING_REVISION') AND role IN ("+ph(len(roles))+"))")
+	// Normal work: task.role matches one of the agent's roles. A BACKLOG/
+	// AWAITING_REVISION task with any uncompleted dependency is withheld until
+	// its prerequisites are COMPLETED (Feature 4 dependency gating).
+	clauses = append(clauses, "(status IN ('BACKLOG','AWAITING_REVISION') AND role IN ("+ph(len(roles))+")"+
+		" AND NOT EXISTS (SELECT 1 FROM task_dependencies d"+
+		" JOIN tasks dep ON dep.id = d.depends_on_id"+
+		" WHERE d.task_id = tasks.id AND dep.status != 'COMPLETED'))")
 	for _, r := range roles {
 		args = append(args, r)
 	}
@@ -520,6 +526,14 @@ func (d *Database) TransitionTaskState(ctx context.Context, taskID, fromState, t
 			desc = fmt.Sprintf("Status: %s → %s", fromState, toState)
 		}
 		d.logTaskEvent(ctx, taskID, "", actorAgentID, "task_transition", fromState, toState, desc)
+
+		// Feature 5: completing a task may satisfy the requirements/features it
+		// is linked to. Recompute their derived status (best-effort).
+		if toState == TaskStatusCompleted {
+			if rerr := d.RecomputeLinkedScopeStatus(ctx, taskID); rerr != nil {
+				log.Printf("RecomputeLinkedScopeStatus task %q: %v", taskID, rerr)
+			}
+		}
 	}
 	return err
 }

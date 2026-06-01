@@ -17,6 +17,8 @@ func RegisterPlanTools(reg *Registry, database *db.Database) error {
 		planProjectTool(database),
 		createWorkPackageTool(database),
 		bootstrapProjectTool(database),
+		syncScopeTool(database),
+		completeProjectTool(database),
 	}
 	for _, d := range defs {
 		if err := reg.Register(d); err != nil {
@@ -195,6 +197,18 @@ func bootstrapProjectTool(database *db.Database) Definition {
 				return nil, fmt.Errorf("bootstrap_project: project not found: %w", err)
 			}
 
+			// First-time only: if scope already exists, do not duplicate it —
+			// the planner should use sync_scope to reconcile instead.
+			existingReqs, _ := database.ListRequirements(ctx, projectID)
+			existingFeats, _ := database.ListFeatures(ctx, projectID)
+			if len(existingReqs) > 0 || len(existingFeats) > 0 {
+				return map[string]interface{}{
+					"success": true,
+					"skipped": true,
+					"reason":  "project already has requirements/features; use sync_scope to reconcile after description changes",
+				}, nil
+			}
+
 			reqs, err := decodeScopeItems(strArgOpt(args, "requirements"))
 			if err != nil {
 				return nil, fmt.Errorf("bootstrap_project: %w", err)
@@ -237,6 +251,198 @@ func bootstrapProjectTool(database *db.Database) Definition {
 				"requirement_count": len(reqIDs),
 				"feature_count":     len(featIDs),
 			}, nil
+		},
+	}
+}
+
+// normalizeTitle lowercases and trims a scope item title for matching.
+func normalizeTitle(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// syncScopeTool reconciles a project's requirements/features against a planner-
+// supplied desired set (derived from the current description). It is
+// non-destructive: new intent is created, matched items are left untouched
+// (preserving IDs, status, and task links), and existing items no longer in the
+// desired set are flagged needs_review (never deleted). Clears scope_dirty.
+func syncScopeTool(database *db.Database) Definition {
+	return Definition{
+		Name: "sync_scope",
+		Description: "Reconcile a project's requirements and features with the current description. " +
+			"Non-destructive: creates new items, leaves matched items untouched, and flags items no longer " +
+			"covered by the description as needs_review (never deletes). Use after the description changes.",
+		Parameters: map[string]Param{
+			"project_id":   {Type: "string", Description: "ID of the project to reconcile"},
+			"requirements": {Type: "string", Description: `JSON array of the desired requirement objects: title (string), body (string)`},
+			"features":     {Type: "string", Description: `JSON array of the desired feature objects: title (string), body (string)`},
+		},
+		Required: []string{"project_id"},
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			projectID, err := strArg(args, "project_id")
+			if err != nil {
+				return nil, err
+			}
+			if _, err := database.GetProject(ctx, projectID); err != nil {
+				return nil, fmt.Errorf("sync_scope: project not found: %w", err)
+			}
+			desiredReqs, err := decodeScopeItems(strArgOpt(args, "requirements"))
+			if err != nil {
+				return nil, fmt.Errorf("sync_scope: %w", err)
+			}
+			desiredFeats, err := decodeScopeItems(strArgOpt(args, "features"))
+			if err != nil {
+				return nil, fmt.Errorf("sync_scope: %w", err)
+			}
+
+			var added, flagged []string
+			unchanged := 0
+
+			// --- requirements ---
+			existingReqs, _ := database.ListRequirements(ctx, projectID)
+			existingReqTitles := map[string]bool{}
+			for _, r := range existingReqs {
+				existingReqTitles[normalizeTitle(r.Title)] = true
+			}
+			desiredReqTitles := map[string]bool{}
+			for _, r := range desiredReqs {
+				desiredReqTitles[normalizeTitle(r.Title)] = true
+			}
+			for _, r := range existingReqs {
+				if desiredReqTitles[normalizeTitle(r.Title)] {
+					unchanged++
+					continue
+				}
+				if r.Status != db.ScopeStatusNeedsReview {
+					r.Status = db.ScopeStatusNeedsReview
+					_ = database.UpdateRequirement(ctx, r)
+				}
+				flagged = append(flagged, "requirement: "+r.Title)
+			}
+			for i, r := range desiredReqs {
+				if strings.TrimSpace(r.Title) == "" || existingReqTitles[normalizeTitle(r.Title)] {
+					continue
+				}
+				rec := &db.ProjectRequirement{ProjectID: projectID, Title: r.Title, Body: r.Body, Position: len(existingReqs) + i}
+				if err := database.CreateRequirement(ctx, rec); err != nil {
+					return nil, fmt.Errorf("sync_scope: create requirement %q: %w", r.Title, err)
+				}
+				added = append(added, "requirement: "+r.Title)
+			}
+
+			// --- features ---
+			existingFeats, _ := database.ListFeatures(ctx, projectID)
+			existingFeatTitles := map[string]bool{}
+			for _, f := range existingFeats {
+				existingFeatTitles[normalizeTitle(f.Title)] = true
+			}
+			desiredFeatTitles := map[string]bool{}
+			for _, f := range desiredFeats {
+				desiredFeatTitles[normalizeTitle(f.Title)] = true
+			}
+			for _, f := range existingFeats {
+				if desiredFeatTitles[normalizeTitle(f.Title)] {
+					unchanged++
+					continue
+				}
+				if f.Status != db.ScopeStatusNeedsReview {
+					f.Status = db.ScopeStatusNeedsReview
+					_ = database.UpdateFeature(ctx, f)
+				}
+				flagged = append(flagged, "feature: "+f.Title)
+			}
+			for i, f := range desiredFeats {
+				if strings.TrimSpace(f.Title) == "" || existingFeatTitles[normalizeTitle(f.Title)] {
+					continue
+				}
+				rec := &db.ProjectFeature{ProjectID: projectID, Title: f.Title, Body: f.Body, Position: len(existingFeats) + i}
+				if err := database.CreateFeature(ctx, rec); err != nil {
+					return nil, fmt.Errorf("sync_scope: create feature %q: %w", f.Title, err)
+				}
+				added = append(added, "feature: "+f.Title)
+			}
+
+			// Reconcile done: scope is fresh again.
+			_ = database.SetScopeDirty(ctx, projectID, false)
+
+			// Post the diff as a project-visible log for human review.
+			_ = database.CreateLog(ctx, &db.LogEntry{
+				ProjectID: projectID,
+				Level:     "info",
+				Message: fmt.Sprintf("Scope sync: %d added, %d unchanged, %d flagged for review",
+					len(added), unchanged, len(flagged)),
+				Metadata: map[string]interface{}{
+					"event":   "scope_synced",
+					"added":   added,
+					"flagged": flagged,
+				},
+			})
+
+			return map[string]interface{}{
+				"success":   true,
+				"added":     added,
+				"unchanged": unchanged,
+				"flagged":   flagged,
+			}, nil
+		},
+	}
+}
+
+// completeProjectTool marks a project complete and disarms auto-queue, but only
+// when its declared scope is satisfied: every feature done, every requirement
+// satisfied, and no tasks in a non-terminal state. Requires creates_tasks.
+func completeProjectTool(database *db.Database) Definition {
+	return Definition{
+		Name: "complete_project",
+		Description: "Mark a project complete and stop auto-queue. Succeeds only when every feature is done, " +
+			"every requirement is satisfied, and no tasks remain in a non-terminal state. " +
+			"Provide a short summary of what was accomplished.",
+		Parameters: map[string]Param{
+			"project_id": {Type: "string", Description: "ID of the project to complete"},
+			"summary":    {Type: "string", Description: "Short summary of what the project accomplished"},
+		},
+		Required: []string{"project_id"},
+		Handler: func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			if !contextHasCapability(ctx, "creates_tasks") {
+				return nil, fmt.Errorf("complete_project: requires the creates_tasks capability")
+			}
+			projectID, err := strArg(args, "project_id")
+			if err != nil {
+				return nil, err
+			}
+			p, err := database.GetProject(ctx, projectID)
+			if err != nil {
+				return nil, fmt.Errorf("complete_project: project not found: %w", err)
+			}
+			ok, reason, err := database.ProjectScopeSatisfied(ctx, projectID)
+			if err != nil {
+				return nil, fmt.Errorf("complete_project: %w", err)
+			}
+			if !ok {
+				return nil, fmt.Errorf("complete_project: scope not satisfied — %s", reason)
+			}
+
+			summary := strArgOpt(args, "summary")
+			p.Status = "complete"
+			p.AutoQueue = false // disarm: halts the auto-queue replenishment loop
+			if err := database.UpdateProject(ctx, p); err != nil {
+				return nil, fmt.Errorf("complete_project: %w", err)
+			}
+
+			if summary != "" {
+				_ = database.CreateContextEntry(ctx, &db.ContextEntry{
+					ProjectID: projectID,
+					Type:      "summary",
+					Content:   "Project completion: " + summary,
+				})
+			}
+			_ = database.CreateLog(ctx, &db.LogEntry{
+				ProjectID: projectID,
+				Level:     "info",
+				Message:   "Project marked complete; auto-queue disarmed",
+				Metadata:  map[string]interface{}{"event": "project_completed", "summary": summary},
+			})
+
+			return map[string]interface{}{"success": true, "status": "complete", "auto_queue": false}, nil
 		},
 	}
 }

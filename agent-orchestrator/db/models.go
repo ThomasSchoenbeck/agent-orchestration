@@ -17,7 +17,11 @@ type Project struct {
 	RemoteURL                string                 `json:"remote_url,omitempty"`       // upstream remote URL for mirroring
 	RemoteCredentialsRef     string                 `json:"remote_credentials_ref,omitempty"` // env-var / settings key for upstream auth
 	CodingRules              string                 `json:"coding_rules,omitempty"`     // freeform coding rules written to .agent_context/
-	Status                   string                 `json:"status"`
+	Status                   string                 `json:"status"`                     // active | complete (auto-queue) — legacy values still tolerated
+	ScopeDirty               bool                   `json:"scope_dirty"`                // description changed; requirements/features may be stale (Feature 5)
+	AutoQueue                bool                   `json:"auto_queue"`                 // armed: backlog auto-replenishes until complete (Feature 4)
+	MaxOpenTasks             int                    `json:"max_open_tasks"`             // 0 = unlimited; safety cap on open work
+	PlanRounds               int                    `json:"plan_rounds"`                // planning rounds used this activation (safety counter)
 	Config                   map[string]interface{} `json:"config"`
 	ServerRepoInitialisedAt  *time.Time             `json:"server_repo_initialised_at,omitempty"`
 	CreatedAt                time.Time              `json:"created_at"`
@@ -103,7 +107,7 @@ type ProjectRequirement struct {
 	ProjectID string    `json:"project_id"`
 	Title     string    `json:"title"`
 	Body      string    `json:"body"`      // markdown
-	Status    string    `json:"status"`    // proposed | accepted | implemented | obsolete
+	Status    string    `json:"status"`    // proposed | accepted | satisfied | needs_review (Feature 5)
 	Position  int       `json:"position"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -115,7 +119,7 @@ type ProjectFeature struct {
 	ProjectID string    `json:"project_id"`
 	Title     string    `json:"title"`
 	Body      string    `json:"body"`      // markdown
-	Status    string    `json:"status"`    // planned | in_progress | done | dropped
+	Status    string    `json:"status"`    // planned | in_progress | done | needs_review (Feature 5)
 	Position  int       `json:"position"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
