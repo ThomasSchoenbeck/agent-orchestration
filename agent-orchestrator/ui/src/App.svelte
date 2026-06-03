@@ -6,7 +6,9 @@
   import TaskDetail    from './pages/TaskDetail.svelte'
   import Agents        from './pages/Agents.svelte'
   import AgentDetail   from './pages/AgentDetail.svelte'
+  import AgentTemplates from './pages/AgentTemplates.svelte'
   import Roles         from './pages/Roles.svelte'
+  import Skills        from './pages/Skills.svelte'
   import Providers     from './pages/Providers.svelte'
   import Logs          from './pages/Logs.svelte'
   import Chat          from './pages/Chat.svelte'
@@ -16,7 +18,9 @@
     { id: 'projects',  label: 'Projects',  icon: '📁' },
     { id: 'tasks',     label: 'Tasks',     icon: '✅' },
     { id: 'agents',    label: 'Agents',    icon: '🤖' },
+    { id: 'managed',   label: 'Managed',   icon: '🛰️' },
     { id: 'roles',     label: 'Roles',     icon: '🎭' },
+    { id: 'skills',    label: 'Skills',    icon: '🧩' },
     { id: 'providers', label: 'Providers', icon: '🔌' },
     { id: 'logs',      label: 'Logs',      icon: '📋' },
     { id: 'chat',      label: 'Chat',      icon: '💬' },
@@ -66,8 +70,12 @@
       <AgentDetail agentId={$router.params[0]} />
     {:else if $router.page === 'agents'}
       <Agents />
+    {:else if $router.page === 'managed'}
+      <AgentTemplates />
     {:else if $router.page === 'roles'}
       <Roles />
+    {:else if $router.page === 'skills'}
+      <Skills />
     {:else if $router.page === 'providers'}
       <Providers />
     {:else if $router.page === 'logs'}

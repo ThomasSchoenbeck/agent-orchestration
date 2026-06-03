@@ -32,8 +32,8 @@ func NewServerClient(serverURL string) *ServerClient {
 
 // Register registers this agent and stores the returned agent ID.
 // mode should be "colocated" or "remote" (defaults to "remote" if empty).
-func (c *ServerClient) Register(ctx context.Context, name string, roles []string, mode string, caps map[string]interface{}) (string, error) {
-	body := api.RegisterAgentRequest{Name: name, Roles: roles, Mode: mode, Capabilities: caps}
+func (c *ServerClient) Register(ctx context.Context, name string, roles, skills []string, mode string, caps map[string]interface{}) (string, error) {
+	body := api.RegisterAgentRequest{Name: name, Roles: roles, Skills: skills, Mode: mode, Capabilities: caps}
 	var resp api.RegisterAgentResponse
 	if err := c.post(ctx, "/api/agents/register", body, &resp); err != nil {
 		return "", fmt.Errorf("register: %w", err)
@@ -42,9 +42,23 @@ func (c *ServerClient) Register(ctx context.Context, name string, roles []string
 	return resp.AgentID, nil
 }
 
-// Heartbeat sends a heartbeat for the given agent ID.
-func (c *ServerClient) Heartbeat(ctx context.Context, agentID string) error {
-	return c.post(ctx, fmt.Sprintf("/api/agents/%s/heartbeat", agentID), nil, nil)
+// ListSkills fetches all skill definitions from the server (Feature 6).
+func (c *ServerClient) ListSkills(ctx context.Context) ([]*db.SkillDefinition, error) {
+	var skills []*db.SkillDefinition
+	if err := c.get(ctx, "/api/skills", &skills); err != nil {
+		return nil, err
+	}
+	return skills, nil
+}
+
+// Heartbeat sends a heartbeat for the given agent ID and returns the server's
+// control response (desired state + live roles/skills). Feature 7.
+func (c *ServerClient) Heartbeat(ctx context.Context, agentID string) (*api.HeartbeatResponse, error) {
+	var resp api.HeartbeatResponse
+	if err := c.post(ctx, fmt.Sprintf("/api/agents/%s/heartbeat", agentID), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // GetNextTask fetches the next available task for the agent's roles.

@@ -37,6 +37,7 @@ type CreateTaskRequest struct {
 	ProjectID  string                 `json:"project_id"`
 	Role       string                 `json:"role"`
 	ReviewRole string                 `json:"review_role,omitempty"`
+	Focus      []string               `json:"focus,omitempty"` // optional required skills (Feature 6)
 	Priority   int                    `json:"priority"`
 	Payload    map[string]interface{} `json:"payload"`
 }
@@ -67,12 +68,27 @@ type TaskMetrics struct {
 type RegisterAgentRequest struct {
 	Name         string                 `json:"name"`
 	Roles        []string               `json:"roles"`
-	Mode         string                 `json:"mode,omitempty"` // colocated | remote (default: remote)
+	Skills       []string               `json:"skills,omitempty"` // specializations (Feature 6)
+	Mode         string                 `json:"mode,omitempty"`   // colocated | remote (default: remote)
 	Capabilities map[string]interface{} `json:"capabilities"`
 }
 
 type RegisterAgentResponse struct {
 	AgentID string `json:"agent_id"`
+}
+
+// HeartbeatResponse carries control + live config back to the agent (Feature 7).
+type HeartbeatResponse struct {
+	DesiredState string   `json:"desired_state"` // run | stop
+	Roles        []string `json:"roles"`
+	Skills       []string `json:"skills"`
+}
+
+// UpdateAgentRequest updates an agent's LIVE roles/skills only (Feature 7).
+// Start params are never modified through this endpoint.
+type UpdateAgentRequest struct {
+	Roles  *[]string `json:"roles,omitempty"`
+	Skills *[]string `json:"skills,omitempty"`
 }
 
 // ClaimTaskResponse is returned by the task-claim endpoint and carries

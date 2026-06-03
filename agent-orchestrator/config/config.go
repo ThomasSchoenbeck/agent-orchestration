@@ -102,6 +102,7 @@ type LogsDBConfig struct {
 type AgentDefinition struct {
 	Name    string   `yaml:"name"`
 	Roles   []string `yaml:"roles"`
+	Skills  []string `yaml:"skills"`  // specializations this agent provides (Feature 6)
 	Mode    string   `yaml:"mode"`    // "colocated" or "remote"; default "colocated"
 	Workdir string   `yaml:"workdir"` // overrides agents.workdir when set
 	Config  string   `yaml:"config"`  // overrides the main config path for this agent's LLM setup
@@ -118,6 +119,7 @@ type AgentConfig struct {
 	PortPoolStart                int               `yaml:"port_pool_start"`           // first port in agent test-port pool
 	PortPoolSize                 int               `yaml:"port_pool_size"`            // number of ports in pool
 	MergeSupervisorIntervalSec   int               `yaml:"merge_supervisor_interval_sec"`
+	MaxManagedAgents             int               `yaml:"max_managed_agents"` // cap on server-spawned agents (0 = unlimited)
 	Workdir                      string            `yaml:"workdir"`     // default workdir root; per-agent gets {workdir}/{name}
 	ServerURL                    string            `yaml:"server_url"`  // orchestrator URL for agent-mode connections
 	Definitions                  []AgentDefinition `yaml:"definitions"` // agent instances to launch via "agents" subcommand

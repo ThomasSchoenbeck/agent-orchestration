@@ -29,6 +29,36 @@ type Executor struct {
 	client   *ServerClient
 	agentID  string
 	log      *AgentLogger
+	// Feature 6: the agent's skill tags and the resolved skill definitions
+	// (fetched lazily from the server and cached) used to compose the persona.
+	skillNames     []string
+	skillDefs      []*db.SkillDefinition
+	skillsResolved bool
+}
+
+// resolveSkillDefs fetches the agent's skill definitions from the server once
+// and caches them. No-op when the agent has no skills.
+func (e *Executor) resolveSkillDefs(ctx context.Context) {
+	if e.skillsResolved || len(e.skillNames) == 0 || e.client == nil {
+		e.skillsResolved = true
+		return
+	}
+	all, err := e.client.ListSkills(ctx)
+	if err != nil {
+		e.log.Warn("could not fetch skill definitions: %v", err)
+		e.skillsResolved = true
+		return
+	}
+	want := make(map[string]bool, len(e.skillNames))
+	for _, n := range e.skillNames {
+		want[n] = true
+	}
+	for _, s := range all {
+		if s.Enabled && want[s.Name] {
+			e.skillDefs = append(e.skillDefs, s)
+		}
+	}
+	e.skillsResolved = true
 }
 
 // NewExecutor creates an Executor with the given router, tool registry, and
@@ -284,8 +314,17 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 	tlog.InfoCtx(ctx, "route resolved provider=%q model=%q role=%q", route.Provider.Name(), route.Model, route.Role)
 	stats.model = route.Model
 
-	// Build the initial system + user message.
+	// Feature 6: compose the agent's persona (role ⊕ skills).
+	e.resolveSkillDefs(ctx)
+
+	// Build the initial system + user message. Skill prompt fragments ("souls")
+	// are appended after the role prompt in stable order.
 	systemMsg := e.buildSystemMessage(task, route)
+	for _, sd := range e.skillDefs {
+		if frag := strings.TrimSpace(sd.PromptFragment); frag != "" {
+			systemMsg += "\n\n" + frag
+		}
+	}
 	if route.SystemPrefix != "" && systemMsg != "" {
 		systemMsg = route.SystemPrefix + "\n" + systemMsg
 	}
@@ -316,10 +355,13 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 		// Use the role's configured allowlist; fall back to built-in defaults for
 		// known roles so the platform works out of the box without any config.
 		// Clearing the field in the UI restores the defaults, not "all tools".
-		allowlist := route.ToolAllowlist
-		if len(allowlist) == 0 {
-			allowlist = defaultToolsForRole(route.Role)
+		// Feature 6: union in any tools the agent's skills add (role ⊕ skills).
+		baseTools := route.ToolAllowlist
+		if len(baseTools) == 0 {
+			baseTools = defaultToolsForRole(route.Role)
 		}
+		roleDef := &db.RoleDefinition{Name: route.Role, AllowedTools: baseTools}
+		allowlist := router.ResolveAgentPersona(roleDef, e.skillDefs).AllowedTools
 		if len(allowlist) > 0 {
 			allowed := make(map[string]bool, len(allowlist))
 			for _, name := range allowlist {

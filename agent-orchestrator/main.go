@@ -202,6 +202,13 @@ func runServer(args []string) error {
 		}
 	}
 
+	// Seed the starter skill set (Feature 6) on a fresh DB (idempotent by name).
+	if n, serr := database.SeedSkillDefinitions(startCtx, db.DefaultSkillDefinitions()); serr != nil {
+		log.Printf("warning: seed skill definitions: %v", serr)
+	} else if n > 0 {
+		log.Printf("seeded %d skill definition(s)", n)
+	}
+
 	// Seed default platform settings (debug_mode, autorefresh_ms).
 	if err := database.SeedDefaultPlatformSettings(startCtx); err != nil {
 		log.Printf("warning: seed platform settings: %v", err)
@@ -238,6 +245,7 @@ func runAgent(args []string) error {
 	configPath := fs.String("config", "", "optional path to config YAML (defaults applied if omitted)")
 	name := fs.String("name", "", "agent name (required)")
 	rolesStr := fs.String("roles", "", "comma-separated roles, e.g. worker,reviewer (required)")
+	skillsStr := fs.String("skills", "", "comma-separated skills, e.g. backend,go (optional)")
 	serverURL := fs.String("server", "http://localhost:8080", "orchestrator server URL")
 	workdir := fs.String("workdir", "", "local workspace root for agent code checkouts (default: .agent-work)")
 	mode := fs.String("mode", "colocated", `agent mode: "colocated" (server provisions worktrees) or "remote" (agent clones via git)`)
@@ -252,7 +260,7 @@ func runAgent(args []string) error {
 		return fmt.Errorf("--roles is required")
 	}
 
-	a, cleanup, cfg, err := buildAgent(*name, parseRoles(*rolesStr), *serverURL, *configPath, *workdir, *mode)
+	a, cleanup, cfg, err := buildAgent(*name, parseRoles(*rolesStr), parseRoles(*skillsStr), *serverURL, *configPath, *workdir, *mode)
 	if err != nil {
 		return err
 	}
@@ -278,7 +286,7 @@ func runAgent(args []string) error {
 // the LLM executor is not wired up (polling-only mode).
 // mode should be "colocated" or "remote"; defaults to "colocated" when empty.
 // The returned cleanup func must be called when the agent is done.
-func buildAgent(name string, roles []string, serverURL, configPath, workdir, mode string) (*agent.Agent, func(), *config.Config, error) {
+func buildAgent(name string, roles, skills []string, serverURL, configPath, workdir, mode string) (*agent.Agent, func(), *config.Config, error) {
 	var cfg *config.Config
 	if configPath != "" {
 		var err error
@@ -301,6 +309,9 @@ func buildAgent(name string, roles []string, serverURL, configPath, workdir, mod
 		mode = "colocated"
 	}
 	a.WithMode(mode)
+	if len(skills) > 0 {
+		a.WithSkills(skills)
+	}
 	if wd != "" {
 		a.WithWorkdir(wd)
 	}
@@ -431,7 +442,7 @@ func runAgents(args []string) error {
 		if defMode == "" {
 			defMode = "colocated"
 		}
-		a, cleanup, _, err := buildAgent(def.Name, def.Roles, serverURL, agentConfig, workdir, defMode)
+		a, cleanup, _, err := buildAgent(def.Name, def.Roles, def.Skills, serverURL, agentConfig, workdir, defMode)
 		if err != nil {
 			return fmt.Errorf("build agent %q: %w", def.Name, err)
 		}

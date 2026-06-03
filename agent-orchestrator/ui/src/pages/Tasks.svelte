@@ -15,6 +15,7 @@
     listRequirements,
     listFeatures,
     addTaskLink,
+    getSkillsMeta,
   } from "../lib/api.js"
   import { toasts, router } from "../lib/stores.js"
   import AssistantSidebar from "../components/AssistantSidebar.svelte"
@@ -55,6 +56,14 @@
     description: "",
     priority: 5,
   })
+  // Feature 6: optional focus tags, populated from enabled skills.
+  let availSkills = $state([])
+  let formFocus = $state(new Set())
+  function toggleFocus(name) {
+    const s = new Set(formFocus)
+    s.has(name) ? s.delete(name) : s.add(name)
+    formFocus = s
+  }
   let formAvailReqs = $state([])
   let formAvailFeats = $state([])
   let formLinkedReqs = $state(new Set())
@@ -315,6 +324,7 @@
         project_id: form.project_id,
         role: form.role.trim(),
         ...(form.review_role ? { review_role: form.review_role } : {}),
+        ...(formFocus.size ? { focus: [...formFocus] } : {}),
         priority: Number(form.priority),
         payload: { title: form.title.trim(), description: form.description.trim() },
       })
@@ -324,6 +334,7 @@
       if (ops.length) await Promise.all(ops)
       toasts.success("Task created")
       form = { project_id: "", role: "worker", review_role: "", title: "", description: "", priority: 5 }
+      formFocus = new Set()
       formLinkedReqs = new Set()
       formLinkedFeats = new Set()
       formAvailReqs = []
@@ -394,6 +405,8 @@
   let timer = null
   onMount(async () => {
     refreshAll()
+    // Fire-and-forget so it doesn't sit in the await chain before setInterval.
+    getSkillsMeta().then((s) => { availSkills = s || [] }).catch(() => {})
     let intervalMs = 5_000
     try {
       const all = await listSettings()
@@ -535,6 +548,22 @@
                 >{/each}
             </select>
           </div>
+          {#if availSkills.length > 0}
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-[10px] text-gray-500 uppercase tracking-wide">Focus (optional)</span>
+              {#each availSkills as sk}
+                <button
+                  type="button"
+                  class="text-[11px] px-2 py-0.5 rounded-full border transition-colors
+                    {formFocus.has(sk.value)
+                      ? 'bg-accent text-white border-transparent'
+                      : 'border-surface-500 text-gray-400 hover:bg-surface-700'}"
+                  title={sk.description}
+                  onclick={() => toggleFocus(sk.value)}
+                >{sk.label}</button>
+              {/each}
+            </div>
+          {/if}
           <textarea
             class="bg-surface-700 border border-surface-500 rounded px-2 py-1.5 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent resize-none"
             placeholder="Description"

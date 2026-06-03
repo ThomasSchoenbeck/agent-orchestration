@@ -292,6 +292,34 @@ CREATE TABLE IF NOT EXISTS task_reviews (
 );
 CREATE INDEX IF NOT EXISTS idx_task_reviews_task ON task_reviews(task_id, created_at DESC);
 
+-- Agent templates (Feature 8): server-managed co-located agent definitions
+CREATE TABLE IF NOT EXISTS agent_templates (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    roles      TEXT NOT NULL DEFAULT '[]',
+    skills     TEXT NOT NULL DEFAULT '[]',
+    replicas   INTEGER NOT NULL DEFAULT 1,
+    autostart  INTEGER NOT NULL DEFAULT 0,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Skill definitions (Feature 6): configurable specializations, orthogonal to roles
+CREATE TABLE IF NOT EXISTS skill_definitions (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE,
+    label           TEXT NOT NULL DEFAULT '',
+    description     TEXT NOT NULL DEFAULT '',
+    prompt_fragment TEXT NOT NULL DEFAULT '',
+    context_include TEXT NOT NULL DEFAULT '[]',
+    context_exclude TEXT NOT NULL DEFAULT '[]',
+    allowed_tools   TEXT NOT NULL DEFAULT '[]',
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Pull requests (Feature 2): merge gate opened by reviewer, decided by deployer/human
 CREATE TABLE IF NOT EXISTS pull_requests (
     id            TEXT PRIMARY KEY,
@@ -503,6 +531,33 @@ func (d *Database) applyColumnMigrations() error {
 		{
 			name: "add_plan_rounds_to_projects",
 			sql:  "ALTER TABLE projects ADD COLUMN plan_rounds INTEGER NOT NULL DEFAULT 0",
+		},
+		// Feature 6: agent skills + task focus
+		{
+			name: "add_skills_to_agents",
+			sql:  "ALTER TABLE agents ADD COLUMN skills TEXT NOT NULL DEFAULT '[]'",
+		},
+		{
+			name: "add_focus_to_tasks",
+			sql:  "ALTER TABLE tasks ADD COLUMN focus TEXT NOT NULL DEFAULT '[]'",
+		},
+		// Feature 7: agent start params + desired state
+		{
+			name: "add_start_roles_to_agents",
+			sql:  "ALTER TABLE agents ADD COLUMN start_roles TEXT NOT NULL DEFAULT '[]'",
+		},
+		{
+			name: "add_start_skills_to_agents",
+			sql:  "ALTER TABLE agents ADD COLUMN start_skills TEXT NOT NULL DEFAULT '[]'",
+		},
+		{
+			name: "add_desired_state_to_agents",
+			sql:  "ALTER TABLE agents ADD COLUMN desired_state TEXT NOT NULL DEFAULT 'run'",
+		},
+		// Feature 8: link managed instances back to their template
+		{
+			name: "add_template_id_to_agents",
+			sql:  "ALTER TABLE agents ADD COLUMN template_id TEXT NOT NULL DEFAULT ''",
 		},
 	}
 

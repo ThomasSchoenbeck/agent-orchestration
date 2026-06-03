@@ -50,3 +50,29 @@ func (s *Server) handleMetaTaskRoles(w http.ResponseWriter, r *http.Request) {
 	// Fallback to the built-in list when no role definitions exist yet.
 	api.WriteJSON(w, http.StatusOK, taskRoles)
 }
+
+// handleMetaSkills returns the live set of enabled skill definitions, used to
+// populate the task focus multiselect (Feature 6).
+func (s *Server) handleMetaSkills(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	defs, err := s.db.ListSkillDefinitions(r.Context())
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	items := make([]metaItem, 0, len(defs))
+	for _, d := range defs {
+		if !d.Enabled {
+			continue
+		}
+		label := d.Label
+		if label == "" {
+			label = d.Name
+		}
+		items = append(items, metaItem{Value: d.Name, Label: label, Description: d.Description})
+	}
+	api.WriteJSON(w, http.StatusOK, items)
+}

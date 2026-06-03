@@ -184,6 +184,84 @@ func TestContextInjection_ScopeOnlyForIncludedRoles(t *testing.T) {
 	}
 }
 
+// --- ResolveAgentPersona tests (Feature 6) ---
+
+func TestResolveAgentPersona_MergesPromptAndContext(t *testing.T) {
+	role := &db.RoleDefinition{
+		Name:           "worker",
+		SystemPrompt:   "You are a worker.",
+		ContextInclude: []string{"src/**"},
+	}
+	skills := []*db.SkillDefinition{
+		{Name: "backend", PromptFragment: "Backend focus.", ContextInclude: []string{"server/**"}},
+		{Name: "go", PromptFragment: "Go idioms.", ContextInclude: []string{"*.go"}},
+	}
+	p := router.ResolveAgentPersona(role, skills)
+
+	if !contains(p.SystemPrompt, "You are a worker.") ||
+		!contains(p.SystemPrompt, "Backend focus.") ||
+		!contains(p.SystemPrompt, "Go idioms.") {
+		t.Errorf("system prompt missing parts:\n%s", p.SystemPrompt)
+	}
+	for _, want := range []string{"src/**", "server/**", "*.go"} {
+		found := false
+		for _, c := range p.ContextInclude {
+			if c == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("context include missing %q (got %v)", want, p.ContextInclude)
+		}
+	}
+}
+
+func TestResolveAgentPersona_ToolsUnion(t *testing.T) {
+	role := &db.RoleDefinition{Name: "worker", AllowedTools: []string{"read_file", "write_file"}}
+	skills := []*db.SkillDefinition{
+		{Name: "infra", AllowedTools: []string{"run_command", "read_file"}}, // read_file dup
+	}
+	p := router.ResolveAgentPersona(role, skills)
+
+	want := map[string]bool{"read_file": false, "write_file": false, "run_command": false}
+	for _, tool := range p.AllowedTools {
+		if _, ok := want[tool]; ok {
+			want[tool] = true
+		}
+	}
+	for tool, seen := range want {
+		if !seen {
+			t.Errorf("tool %q missing from union %v", tool, p.AllowedTools)
+		}
+	}
+	// No duplicates.
+	counts := map[string]int{}
+	for _, tool := range p.AllowedTools {
+		counts[tool]++
+	}
+	if counts["read_file"] != 1 {
+		t.Errorf("read_file duplicated in tool union: %v", p.AllowedTools)
+	}
+}
+
+func TestResolveAgentPersona_SkillsAddNoCapabilities(t *testing.T) {
+	// Persona has no capability surface at all — capabilities come only from
+	// roles and are resolved separately. This test documents that invariant:
+	// merging skills must not introduce a capabilities field on the persona.
+	role := &db.RoleDefinition{Name: "reviewer", Capabilities: []string{"handles_review"}}
+	skills := []*db.SkillDefinition{{Name: "frontend", PromptFragment: "UI."}}
+	p := router.ResolveAgentPersona(role, skills)
+
+	// The persona carries prompt/context/tools but never capabilities; the role's
+	// capabilities are untouched and remain the sole authority source.
+	if len(role.Capabilities) != 1 || role.Capabilities[0] != "handles_review" {
+		t.Errorf("role capabilities should be unchanged, got %v", role.Capabilities)
+	}
+	if p.SystemPrompt == "" {
+		t.Error("expected a composed prompt")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr ||
 		len(s) > 0 && containsHelper(s, substr))

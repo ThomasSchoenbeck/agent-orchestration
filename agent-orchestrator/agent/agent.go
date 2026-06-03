@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"agent-orchestrator/api"
 	"agent-orchestrator/config"
 	"agent-orchestrator/db"
 	"agent-orchestrator/router"
@@ -18,7 +19,8 @@ type Agent struct {
 	id        string
 	name      string
 	roles     []string
-	mode      string // colocated | remote
+	skills    []string // specializations this agent provides (Feature 6)
+	mode      string   // colocated | remote
 	serverURL string
 	cfg       *config.Config
 	client    *ServerClient
@@ -47,6 +49,13 @@ func NewAgent(name string, roles []string, serverURL string, cfg *config.Config)
 // WithMode sets the agent's operating mode ("colocated" or "remote").
 func (a *Agent) WithMode(mode string) *Agent {
 	a.mode = mode
+	return a
+}
+
+// WithSkills sets the specialization tags this agent provides (Feature 6). They
+// are sent on registration and used to compose the agent's persona.
+func (a *Agent) WithSkills(skills []string) *Agent {
+	a.skills = skills
 	return a
 }
 
@@ -94,7 +103,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		"go_version": "1.22",
 	}
 
-	id, err := a.client.Register(ctx, a.name, a.roles, a.mode, caps)
+	id, err := a.client.Register(ctx, a.name, a.roles, a.skills, a.mode, caps)
 	if err != nil {
 		return fmt.Errorf("agent %q: registration failed: %w", a.name, err)
 	}
@@ -107,6 +116,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		a.executor.client  = a.client
 		a.executor.agentID = a.id
 		a.executor.log     = newLogger(id, a.client)
+		a.executor.skillNames = a.skills
 	}
 
 	go a.heartbeatLoop(ctx)
@@ -140,7 +150,7 @@ func (a *Agent) Deregister(ctx context.Context) {
 // goroutines. Used by heartbeatLoop to recover after consecutive failures.
 func (a *Agent) reconnect(ctx context.Context) error {
 	caps := map[string]interface{}{"go_version": "1.22"}
-	id, err := a.client.Register(ctx, a.name, a.roles, a.mode, caps)
+	id, err := a.client.Register(ctx, a.name, a.roles, a.skills, a.mode, caps)
 	if err != nil {
 		return err
 	}
@@ -168,7 +178,8 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		case <-a.done:
 			return
 		case <-ticker.C:
-			if err := a.client.Heartbeat(ctx, a.id); err != nil {
+			ctrl, err := a.client.Heartbeat(ctx, a.id)
+			if err != nil {
 				consecutiveFailures++
 				a.alog.Warn("heartbeat error (%d consecutive): %v", consecutiveFailures, err)
 				if consecutiveFailures >= 3 {
@@ -180,11 +191,52 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 						consecutiveFailures = 0
 					}
 				}
-			} else {
-				consecutiveFailures = 0
+				continue
+			}
+			consecutiveFailures = 0
+			// Feature 7: honor desired_state and recompose persona on live changes.
+			if a.applyControl(ctrl) {
+				a.alog.Info("received stop signal — going offline")
+				_ = a.client.SetOffline(context.Background(), a.id)
+				a.Stop()
+				return
 			}
 		}
 	}
+}
+
+// applyControl reacts to the server's heartbeat control response: it syncs the
+// agent's live roles/skills (recomposing the persona on a skill change) and
+// reports whether the agent has been told to stop. Only enriched (Feature 7)
+// responses — which always carry a desired_state — drive control; minimal
+// responses are ignored for backward compatibility.
+func (a *Agent) applyControl(ctrl *api.HeartbeatResponse) (stop bool) {
+	if ctrl == nil || ctrl.DesiredState == "" {
+		return false
+	}
+	if len(ctrl.Roles) > 0 {
+		a.roles = ctrl.Roles
+	}
+	if !strSlicesEqual(a.skills, ctrl.Skills) {
+		a.skills = ctrl.Skills
+		if a.executor != nil {
+			a.executor.skillNames = ctrl.Skills
+			a.executor.skillsResolved = false // force persona recompose on next task
+		}
+	}
+	return ctrl.DesiredState == "stop"
+}
+
+func strSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // pollLoop polls for tasks and executes them.

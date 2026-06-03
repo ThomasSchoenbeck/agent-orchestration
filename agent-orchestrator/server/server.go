@@ -46,6 +46,7 @@ type Server struct {
 	pollStatus map[string]*AgentPollStatus
 	storage    *storage.Paths
 	portPool   *workflow.PortPool
+	agentSup   *workflow.AgentSupervisor // Feature 8: server-managed co-located agents
 
 	// Cached debug-mode flag — re-read from DB at most once per 30 s.
 	debugMu        sync.RWMutex
@@ -87,11 +88,21 @@ func New(cfg *config.Config, database *db.Database, llmReg *llm.Registry) *Serve
 		storage:    stor,
 		portPool:   workflow.NewPortPool(poolStart, poolSize),
 	}
+	serverURL := fmt.Sprintf("http://localhost:%d", cfg.Server.Port)
+	s.agentSup = workflow.NewAgentSupervisor(database, serverURL, cfg.Agents.MaxManagedAgents)
 	s.ensureStorageDirs()
 	s.registerHandlers()
 	s.mux.Handle("/git/", s.newGitHTTPHandler())
 	s.registerStaticHandler() // must come after API routes so "/" is the catch-all
 	return s
+}
+
+// SetAgentLauncher overrides the managed-agent launcher (used in tests to avoid
+// spawning real OS processes). It also zeroes the supervisor's timings for
+// deterministic, fast tests.
+func (s *Server) SetAgentLauncher(l workflow.Launcher) {
+	s.agentSup.SetLauncher(l)
+	s.agentSup.SetTimings(0, 0)
 }
 
 // ensureStorageDirs creates the repos and worktrees subdirectories under the
@@ -167,6 +178,15 @@ func (s *Server) Start(ctx context.Context) error {
 	// when they drain, and self-stops on completion / plan-round ceiling.
 	go func() {
 		workflow.NewQueueSupervisor(s.db, 0).Run(ctx)
+	}()
+
+	// Feature 8: launch autostart managed-agent templates; stop them on shutdown.
+	s.agentSup.Boot(ctx)
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		s.agentSup.Shutdown(shutdownCtx)
 	}()
 
 	log.Printf("server: listening on http://%s", addr)

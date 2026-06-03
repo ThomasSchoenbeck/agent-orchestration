@@ -68,6 +68,7 @@ type Task struct {
 	ProjectID       string                 `json:"project_id"`
 	Role            string                 `json:"role"`   // worker | reviewer | planner | ...
 	ReviewRole      string                 `json:"review_role,omitempty"` // role that should handle this task's review step
+	Focus           []string               `json:"focus,omitempty"`       // optional required skills; empty = any (Feature 6)
 	Status          string                 `json:"status"` // BACKLOG | DEVELOPING | AWAITING_REVIEW | REVIEWING | AWAITING_REVISION | AWAITING_MERGE | MERGING | COMPLETED | FAILED
 	Priority        int                    `json:"priority"`
 	AssignedAgentID string                 `json:"assigned_agent_id,omitempty"`
@@ -165,9 +166,32 @@ type Agent struct {
 	Status        string                 `json:"status"` // online | offline | idle | busy
 	Mode          string                 `json:"mode"`   // colocated | remote
 	CurrentTaskID string                 `json:"current_task_id,omitempty"`
+	Skills        []string               `json:"skills"` // live specializations (Feature 6/7)
+	// Feature 7 lifecycle: durable start params (captured at each registration)
+	// vs live values (mutable at runtime via the UI); control via DesiredState.
+	StartRoles    []string               `json:"start_roles"`
+	StartSkills   []string               `json:"start_skills"`
+	DesiredState  string                 `json:"desired_state"`         // run | stop (default: run)
+	TemplateID    string                 `json:"template_id,omitempty"` // set when spawned from an AgentTemplate (Feature 8)
 	Capabilities  map[string]interface{} `json:"capabilities"`
 	RegisteredAt  time.Time              `json:"registered_at"`
 	LastHeartbeat time.Time              `json:"last_heartbeat"`
+}
+
+// --- Agent Template (Feature 8) ---
+
+// AgentTemplate is a reusable definition the server spawns co-located agent
+// instances from. Instances are ordinary agent rows linked back via TemplateID.
+type AgentTemplate struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`      // base name; instances get "-1", "-2" suffixes
+	Roles     []string  `json:"roles"`     // start roles for spawned agents
+	Skills    []string  `json:"skills"`    // start skills
+	Replicas  int       `json:"replicas"`  // desired number of running instances
+	Autostart bool      `json:"autostart"` // relaunch desired replicas when the server boots
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // --- Provider ---
@@ -220,6 +244,26 @@ type RoleDefinition struct {
 	AllowedTools   []string  `json:"allowed_tools"`    // if non-empty, only these tools are sent to the LLM
 	Temperature    float64   `json:"temperature"`
 	MaxTokens      int       `json:"max_tokens"`
+	Enabled        bool      `json:"enabled"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// --- Skill Definition (Feature 6) ---
+
+// SkillDefinition is a configurable specialization (stack/technology/persona)
+// orthogonal to roles. It carries a prompt fragment ("soul"), context rules,
+// and optional tools that an agent composes on top of its role(s). Skills carry
+// no capabilities — lifecycle authority lives only in roles.
+type SkillDefinition struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`  // slug: "backend", "react"
+	Label          string    `json:"label"`
+	Description    string    `json:"description"`
+	PromptFragment string    `json:"prompt_fragment"` // injected into the system prompt
+	ContextInclude []string  `json:"context_include"`
+	ContextExclude []string  `json:"context_exclude"`
+	AllowedTools   []string  `json:"allowed_tools"` // optional tools added to the role's set
 	Enabled        bool      `json:"enabled"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`

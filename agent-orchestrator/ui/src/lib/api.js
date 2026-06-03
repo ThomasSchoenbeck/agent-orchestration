@@ -23,10 +23,11 @@ async function request(method, path, body) {
   return res.json()
 }
 
-const get  = (path)        => request('GET',    path)
-const post = (path, body)  => request('POST',   path, body)
-const put  = (path, body)  => request('PUT',    path, body)
-const del  = (path)        => request('DELETE', path)
+const get   = (path)        => request('GET',    path)
+const post  = (path, body)  => request('POST',   path, body)
+const put   = (path, body)  => request('PUT',    path, body)
+const patch = (path, body)  => request('PATCH',  path, body)
+const del   = (path)        => request('DELETE', path)
 
 // ── Projects ────────────────────────────────────────────────────────────────
 export const listProjects   = ()       => get('/api/projects')
@@ -88,6 +89,19 @@ export const listAgents  = () => get('/api/agents')
 export const getAgent      = (id) => get(`/api/agents/${id}`)
 export const getAgentStats = (id) => get(`/api/agents/${id}/stats`)
 export const getAgentLogs  = (id) => get(`/api/agents/${id}/logs`)
+// Feature 7: live config + lifecycle control
+export const updateAgent = (id, d) => patch(`/api/agents/${id}`, d) // live roles/skills only
+export const stopAgent   = (id)    => post(`/api/agents/${id}/stop`)
+export const resetAgent  = (id)    => post(`/api/agents/${id}/reset`)
+
+// ── Managed agent templates (Feature 8) ────────────────────────────────────────
+export const listAgentTemplates  = ()       => get('/api/agent-templates')
+export const createAgentTemplate = (data)   => post('/api/agent-templates', data)
+export const updateAgentTemplate = (id, d)  => patch(`/api/agent-templates/${id}`, d)
+export const deleteAgentTemplate = (id)     => del(`/api/agent-templates/${id}`)
+export const scaleTemplate       = (id, n)  => post(`/api/agent-templates/${id}/scale`, { replicas: n })
+export const startTemplate       = (id)     => post(`/api/agent-templates/${id}/start`)
+export const stopTemplate        = (id)     => post(`/api/agent-templates/${id}/stop`)
 
 // ── Providers ────────────────────────────────────────────────────────────────
 export const listProviders   = ()        => get('/api/providers')
@@ -106,6 +120,15 @@ export const updateRole       = (id, d)   => put(`/api/roles/${id}`, d)
 export const deleteRole       = (id)      => del(`/api/roles/${id}`)
 export const seedRoles        = ()        => post('/api/roles/seed')
 export const previewRolePrompt = (id, vars) => post(`/api/roles/${id}/preview-prompt`, vars)
+
+// ── Skills (Feature 6) ─────────────────────────────────────────────────────────
+export const listSkills   = ()       => get('/api/skills')
+export const getSkill     = (id)     => get(`/api/skills/${id}`)
+export const createSkill  = (data)   => post('/api/skills', data)
+export const updateSkill  = (id, d)  => put(`/api/skills/${id}`, d)
+export const deleteSkill  = (id)     => del(`/api/skills/${id}`)
+export const seedSkills   = ()       => post('/api/skills/seed')
+export const getSkillsMeta = ()      => get('/api/meta/skills')
 
 // ── Logs ─────────────────────────────────────────────────────────────────────
 export const listLogs = (params = {}) => {

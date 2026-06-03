@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"agent-orchestrator/config"
+	"agent-orchestrator/db"
 )
 
 // ContextEntry is a single piece of stored context (summary, snippet, note, etc.).
@@ -93,6 +94,59 @@ func ScopeEntries(requirements, features string) []ContextEntry {
 		out = append(out, ContextEntry{Type: ScopeTypeFeatures, Content: features})
 	}
 	return out
+}
+
+// Persona is an agent's effective configuration after composing its role with
+// its assigned skills (Feature 6).
+type Persona struct {
+	SystemPrompt   string
+	ContextInclude []string
+	ContextExclude []string
+	AllowedTools   []string
+}
+
+// ResolveAgentPersona merges a role with its assigned skills:
+//   - SystemPrompt   = role.SystemPrompt then each skill's PromptFragment (stable order)
+//   - Context rules  = union of the role's and every skill's include/exclude
+//   - AllowedTools   = union of the role's and the skills' tools
+//
+// Capabilities are intentionally NOT part of the persona — lifecycle authority
+// comes only from roles, keeping the security model in the role layer.
+func ResolveAgentPersona(role *db.RoleDefinition, skills []*db.SkillDefinition) Persona {
+	var p Persona
+	var prompts []string
+
+	if role != nil {
+		if strings.TrimSpace(role.SystemPrompt) != "" {
+			prompts = append(prompts, role.SystemPrompt)
+		}
+		p.ContextInclude = appendUnique(p.ContextInclude, role.ContextInclude...)
+		p.ContextExclude = appendUnique(p.ContextExclude, role.ContextExclude...)
+		p.AllowedTools = appendUnique(p.AllowedTools, role.AllowedTools...)
+	}
+	for _, s := range skills {
+		if s == nil {
+			continue
+		}
+		if strings.TrimSpace(s.PromptFragment) != "" {
+			prompts = append(prompts, s.PromptFragment)
+		}
+		p.ContextInclude = appendUnique(p.ContextInclude, s.ContextInclude...)
+		p.ContextExclude = appendUnique(p.ContextExclude, s.ContextExclude...)
+		p.AllowedTools = appendUnique(p.AllowedTools, s.AllowedTools...)
+	}
+	p.SystemPrompt = strings.Join(prompts, "\n\n")
+	return p
+}
+
+// appendUnique appends items to dst, skipping any value already present.
+func appendUnique(dst []string, items ...string) []string {
+	for _, it := range items {
+		if !containsStr(dst, it) {
+			dst = append(dst, it)
+		}
+	}
+	return dst
 }
 
 func containsStr(slice []string, s string) bool {

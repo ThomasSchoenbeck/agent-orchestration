@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { listAgents, listRoles, listAgentLogs, deleteAgentLogs } from '../lib/api.js'
+  import { listAgents, listRoles, listAgentLogs, deleteAgentLogs,
+           updateAgent, stopAgent, resetAgent, getSkillsMeta } from '../lib/api.js'
   import { formatTimestamp } from '../lib/time.js'
   import { toasts, router } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
@@ -81,6 +82,37 @@
 
   function resolveRole(roleName) {
     return roles.find(r => r.name === roleName)
+  }
+
+  // ── Lifecycle controls (Feature 7) ──────────────────────────────────────────
+  let availSkills    = $state([])
+  let editingAgentId = $state('')
+  let editBuf        = $state({ roles: '', skills: '' })
+
+  const arrEq = (a = [], b = []) => a.length === b.length && a.every((x, i) => x === b[i])
+  const isOverridden = (a) => !arrEq(a.roles, a.start_roles) || !arrEq(a.skills, a.start_skills)
+  const splitCsv = (s) => (s || '').split(/[\s,]+/).map(x => x.trim()).filter(Boolean)
+
+  function startEditAgent(a) {
+    editingAgentId = a.id
+    editBuf = { roles: (a.roles || []).join(', '), skills: (a.skills || []).join(', ') }
+  }
+  async function saveAgentLive(a) {
+    try {
+      await updateAgent(a.id, { roles: splitCsv(editBuf.roles), skills: splitCsv(editBuf.skills) })
+      toasts.success('Live config updated (effective next poll)')
+      editingAgentId = ''
+      await loadAgents()
+    } catch (e) { toasts.error('Update failed: ' + e.message) }
+  }
+  async function doStop(a) {
+    if (!confirm(`Stop agent "${a.name}"? It will finish its current task and go offline.`)) return
+    try { await stopAgent(a.id); toasts.success('Stop requested'); await loadAgents() }
+    catch (e) { toasts.error('Stop failed: ' + e.message) }
+  }
+  async function doReset(a) {
+    try { await resetAgent(a.id); toasts.success('Live config reset to start params'); await loadAgents() }
+    catch (e) { toasts.error('Reset failed: ' + e.message) }
   }
 
   function selectAgent(id) {
@@ -179,6 +211,9 @@
   let timer = null
   onMount(() => {
     refreshAll()
+    // Load skills fire-and-forget so the refresh interval is registered
+    // synchronously (tests advance fake timers immediately after mount).
+    getSkillsMeta().then((s) => { availSkills = s || [] }).catch(() => {})
     timer = setInterval(refreshAll, 5_000)
   })
   onDestroy(() => clearInterval(timer))
@@ -225,12 +260,47 @@
                 onclick={(e) => { e.stopPropagation(); router.push('agents', a.id) }}
               >Detail →</button>
             </div>
-            <div class="flex flex-wrap gap-1">
+            <div class="flex flex-wrap gap-1 items-center">
               {#each (a.roles ?? []) as role}
                 {@const def = resolveRole(role)}
                 <span class="text-xs px-1.5 py-0.5 rounded-full {def ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}">{role}</span>
               {/each}
+              {#each (a.skills ?? []) as sk}
+                <span class="text-xs px-1.5 py-0.5 rounded-full bg-teal-900 text-teal-300">{sk}</span>
+              {/each}
+              {#if isOverridden(a)}
+                <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-900 text-amber-300"
+                  title="Live config differs from start params: roles [{(a.start_roles||[]).join(', ')}] skills [{(a.start_skills||[]).join(', ')}]">runtime override</span>
+              {/if}
+              {#if a.desired_state === 'stop'}
+                <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-900 text-rose-300">stopping</span>
+              {/if}
             </div>
+
+            <!-- Lifecycle controls (Feature 7) -->
+            <div class="flex items-center gap-2 mt-2" onclick={(e) => e.stopPropagation()}>
+              <button class="text-[11px] text-blue-400 hover:text-blue-300" onclick={() => startEditAgent(a)}>Edit live</button>
+              {#if isOverridden(a)}
+                <button class="text-[11px] text-amber-400 hover:text-amber-300" onclick={() => doReset(a)}>Reset to start</button>
+              {/if}
+              {#if a.status !== 'offline'}
+                <button class="text-[11px] text-rose-400 hover:text-rose-300" onclick={() => doStop(a)}>Stop</button>
+              {/if}
+            </div>
+
+            {#if editingAgentId === a.id}
+              <div class="mt-2 flex flex-col gap-2" onclick={(e) => e.stopPropagation()}>
+                <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs" placeholder="live roles (comma-separated)" bind:value={editBuf.roles} />
+                <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs" placeholder="live skills (comma-separated)" bind:value={editBuf.skills} />
+                {#if availSkills.length > 0}
+                  <span class="text-[10px] text-gray-500">skills: {availSkills.map(s => s.value).join(', ')}</span>
+                {/if}
+                <div class="flex gap-2">
+                  <button class="text-[11px] text-gray-400 hover:text-gray-200" onclick={() => editingAgentId = ''}>Cancel</button>
+                  <button class="text-[11px] px-2 py-0.5 rounded bg-accent text-white" onclick={() => saveAgentLive(a)}>Save</button>
+                </div>
+              </div>
+            {/if}
           </div>
         {/each}
       </div>

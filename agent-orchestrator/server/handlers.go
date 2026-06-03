@@ -31,6 +31,9 @@ func (s *Server) registerHandlers() {
 	s.mux.HandleFunc("/api/agents/register", s.handleAgentRegister)
 	s.mux.HandleFunc("/api/agents/", s.handleAgentDetail)
 
+	s.mux.HandleFunc("/api/agent-templates", s.handleAgentTemplates)
+	s.mux.HandleFunc("/api/agent-templates/", s.handleAgentTemplateDetail)
+
 	// Providers
 	s.mux.HandleFunc("/api/providers", s.handleProviders)
 	s.mux.HandleFunc("/api/providers/", s.handleProviderDetail)
@@ -38,6 +41,9 @@ func (s *Server) registerHandlers() {
 	// Roles
 	s.mux.HandleFunc("/api/roles", s.handleRoles)
 	s.mux.HandleFunc("/api/roles/", s.handleRoleDetail)
+
+	s.mux.HandleFunc("/api/skills", s.handleSkills)
+	s.mux.HandleFunc("/api/skills/", s.handleSkillDetail)
 
 	// Context
 	s.mux.HandleFunc("/api/context/save", s.handleContextSave)
@@ -62,6 +68,7 @@ func (s *Server) registerHandlers() {
 
 	// Meta (enumerations)
 	s.mux.HandleFunc("/api/meta/task-roles", s.handleMetaTaskRoles)
+	s.mux.HandleFunc("/api/meta/skills", s.handleMetaSkills)
 
 	// Metrics
 	s.mux.HandleFunc("/api/metrics", s.handleMetrics)
@@ -648,6 +655,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			ProjectID:  req.ProjectID,
 			Role:       req.Role,
 			ReviewRole: req.ReviewRole,
+			Focus:      req.Focus,
 			Priority:   req.Priority,
 			Payload:    req.Payload,
 		}
@@ -1005,8 +1013,15 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	// Check if agent with this name already exists; if so, update it.
 	existing, _ := s.db.GetAgentByName(r.Context(), req.Name)
 	if existing != nil {
-		existing.Roles = req.Roles
+		// Feature 7 reset rule: re-registration (process restart) recaptures the
+		// start params and resets live values to them, discarding any prior UI
+		// override or stop.
 		existing.Mode = mode
+		existing.StartRoles = req.Roles
+		existing.StartSkills = req.Skills
+		existing.Roles = req.Roles
+		existing.Skills = req.Skills
+		existing.DesiredState = "run"
 		existing.Capabilities = req.Capabilities
 		existing.Status = "online"
 		if err := s.db.UpdateAgent(r.Context(), existing); err != nil {
@@ -1028,6 +1043,7 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 		Name:         req.Name,
 		Roles:        req.Roles,
 		Mode:         mode,
+		Skills:       req.Skills,
 		Capabilities: req.Capabilities,
 		Status:       "online",
 	}
@@ -1101,7 +1117,51 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 				EventType: db.EventAgentHeartbeat,
 			})
 		}
-		api.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		// Feature 7: return control + live config so the agent honors stop and
+		// recomposes its persona when the UI changes its roles/skills.
+		resp := api.HeartbeatResponse{DesiredState: "run"}
+		if a, err := s.db.GetAgent(r.Context(), agentID); err == nil {
+			resp.DesiredState = a.DesiredState
+			if resp.DesiredState == "" {
+				resp.DesiredState = "run"
+			}
+			resp.Roles = a.Roles
+			resp.Skills = a.Skills
+		}
+		api.WriteJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// /api/agents/{id}/stop — set desired_state=stop (Feature 7).
+	if len(parts) == 2 && parts[1] == "stop" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		if err := s.db.SetAgentDesiredState(r.Context(), agentID, "stop"); err != nil {
+			s.internalError(w, err)
+			return
+		}
+		if a, err := s.db.GetAgent(r.Context(), agentID); err == nil {
+			a.Status = "stopping"
+			_ = s.db.UpdateAgent(r.Context(), a)
+		}
+		api.WriteJSON(w, http.StatusOK, map[string]string{"desired_state": "stop"})
+		return
+	}
+
+	// /api/agents/{id}/reset — live = start params (Feature 7).
+	if len(parts) == 2 && parts[1] == "reset" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		if err := s.db.ResetAgentToStart(r.Context(), agentID); err != nil {
+			s.internalError(w, err)
+			return
+		}
+		a, _ := s.db.GetAgent(r.Context(), agentID)
+		api.WriteJSON(w, http.StatusOK, a)
 		return
 	}
 
@@ -1111,25 +1171,16 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 			methodNotAllowed(w)
 			return
 		}
-		rolesParam := r.URL.Query().Get("roles")
-		var roles []string
-		if rolesParam != "" {
-			for _, role := range strings.Split(rolesParam, ",") {
-				role = strings.TrimSpace(role)
-				if role != "" {
-					roles = append(roles, role)
-				}
-			}
-		} else {
-			// Use the agent's own roles.
-			a, err := s.db.GetAgent(r.Context(), agentID)
-			if err != nil {
-				api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
-				return
-			}
-			roles = a.Roles
+		// Feature 7: routing reads the agent's LIVE roles + skills from its DB row
+		// (not the self-reported query param), so UI overrides take effect on the
+		// next poll. The roles query param is accepted but ignored.
+		agentRec, aerr := s.db.GetAgent(r.Context(), agentID)
+		if aerr != nil {
+			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, aerr.Error())
+			return
 		}
-		task, err := s.db.GetNextTask(r.Context(), roles)
+		roles := agentRec.Roles
+		task, err := s.db.GetNextTaskWithSkills(r.Context(), roles, agentRec.Skills)
 		if err != nil {
 			s.internalError(w, err)
 			return
@@ -1268,6 +1319,31 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		api.WriteJSON(w, http.StatusOK, a)
+
+	case http.MethodPatch:
+		// Feature 7: update LIVE roles/skills only; start params are untouched.
+		a, err := s.db.GetAgent(r.Context(), agentID)
+		if err != nil {
+			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+			return
+		}
+		var req api.UpdateAgentRequest
+		if !s.decodeJSON(w, r, &req) {
+			return
+		}
+		roles, skills := a.Roles, a.Skills
+		if req.Roles != nil {
+			roles = *req.Roles
+		}
+		if req.Skills != nil {
+			skills = *req.Skills
+		}
+		if err := s.db.UpdateAgentLiveConfig(r.Context(), agentID, roles, skills); err != nil {
+			s.internalError(w, err)
+			return
+		}
+		updated, _ := s.db.GetAgent(r.Context(), agentID)
+		api.WriteJSON(w, http.StatusOK, updated)
 
 	case http.MethodDelete:
 		if err := s.db.DeleteAgent(r.Context(), agentID); err != nil {

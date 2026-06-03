@@ -32,6 +32,7 @@ type gitTestServer struct {
 	BaseURL     string
 	StorageRoot string
 	DB          *db.Database
+	Srv         *server.Server
 }
 
 // newGitTestServer spins up a full server with a real TCP listener, a
@@ -76,6 +77,7 @@ func newGitTestServer(t *testing.T) *gitTestServer {
 		BaseURL:     ts.URL,
 		StorageRoot: storageRoot,
 		DB:          database,
+		Srv:         srv,
 	}
 }
 

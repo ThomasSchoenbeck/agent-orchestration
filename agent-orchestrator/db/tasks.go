@@ -28,9 +28,9 @@ func (d *Database) CreateTask(ctx context.Context, t *Task) error {
 
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO tasks
-		 (id, project_id, role, review_role, status, priority, assigned_agent_id, payload, attempts, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.ID, t.ProjectID, t.Role, t.ReviewRole, t.Status, t.Priority,
+		 (id, project_id, role, review_role, focus, status, priority, assigned_agent_id, payload, attempts, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.ProjectID, t.Role, t.ReviewRole, marshalJSONArray(t.Focus), t.Status, t.Priority,
 		nullableStr(t.AssignedAgentID), marshalJSON(t.Payload), t.Attempts,
 		t.CreatedAt, t.UpdatedAt,
 	)
@@ -111,12 +111,12 @@ func (d *Database) UpdateTask(ctx context.Context, t *Task) error {
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE tasks SET status=?, priority=?, assigned_agent_id=?, payload=?,
 		 result=?, attempts=?, branch_head_sha=?, worktree_path=?, assigned_port=?,
-		 review_role=?, updated_at=?, started_at=?, completed_at=?
+		 review_role=?, focus=?, updated_at=?, started_at=?, completed_at=?
 		 WHERE id=?`,
 		t.Status, t.Priority, nullableStr(t.AssignedAgentID),
 		marshalJSON(t.Payload), nullableJSON(t.Result), t.Attempts,
 		t.BranchHeadSHA, t.WorktreePath, nullableInt(t.AssignedPort),
-		t.ReviewRole, t.UpdatedAt, nullableTime(t.StartedAt), nullableTime(t.CompletedAt),
+		t.ReviewRole, marshalJSONArray(t.Focus), t.UpdatedAt, nullableTime(t.StartedAt), nullableTime(t.CompletedAt),
 		t.ID,
 	)
 	if err == nil {
@@ -204,6 +204,13 @@ func (d *Database) SubmitTaskResult(ctx context.Context, taskID string, result m
 //	                             carries the handles_review capability
 //	AWAITING_MERGE             : any of the agent's roles carries handles_merge
 func (d *Database) GetNextTask(ctx context.Context, roles []string) (*Task, error) {
+	return d.GetNextTaskWithSkills(ctx, roles, nil)
+}
+
+// GetNextTaskWithSkills is GetNextTask with Feature 6 focus filtering: a task
+// whose focus is non-empty is only offered when every focus tag is among the
+// agent's skills (focus ⊆ skills). Empty focus is unrestricted.
+func (d *Database) GetNextTaskWithSkills(ctx context.Context, roles, skills []string) (*Task, error) {
 	if len(roles) == 0 {
 		return nil, nil
 	}
@@ -245,17 +252,45 @@ func (d *Database) GetNextTask(ctx context.Context, roles []string) (*Task, erro
 		clauses = append(clauses, "(status='AWAITING_MERGE')")
 	}
 
+	// Fetch a small ordered candidate set; focus filtering happens in Go since
+	// it is a subset test over a JSON array. The first focus-eligible candidate
+	// in priority order is returned.
 	query := taskSelectSQL +
 		" WHERE (assigned_agent_id IS NULL OR assigned_agent_id='') AND (" +
 		strings.Join(clauses, " OR ") +
-		") ORDER BY priority DESC, created_at ASC LIMIT 1"
+		") ORDER BY priority DESC, created_at ASC LIMIT 50"
 
-	row := d.db.QueryRowContext(ctx, query, args...)
-	t, err := scanTask(row)
-	if err == sql.ErrNoRows {
-		return nil, nil // no tasks available
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
 	}
-	return t, err
+	defer rows.Close()
+	candidates, err := scanTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	skillSet := make(map[string]bool, len(skills))
+	for _, s := range skills {
+		skillSet[s] = true
+	}
+	for _, t := range candidates {
+		if focusSatisfied(t.Focus, skillSet) {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
+
+// focusSatisfied reports whether every focus tag is present in skillSet. An
+// empty focus is always satisfied (unrestricted).
+func focusSatisfied(focus []string, skillSet map[string]bool) bool {
+	for _, f := range focus {
+		if !skillSet[f] {
+			return false
+		}
+	}
+	return true
 }
 
 // capabilityRoles inspects the given role names and returns the subset that
@@ -346,7 +381,7 @@ const taskSelectSQL = `SELECT id, project_id, role, status, priority,
     COALESCE(worktree_path,''), COALESCE(assigned_port,0),
     created_at, updated_at,
     COALESCE(started_at,''), COALESCE(completed_at,''),
-    COALESCE(review_role,'')
+    COALESCE(review_role,''), COALESCE(focus,'[]')
     FROM tasks`
 
 func scanTask(row *sql.Row) (*Task, error) {
@@ -356,6 +391,7 @@ func scanTask(row *sql.Row) (*Task, error) {
 	var assignedPort int
 	var createdAt, updatedAt, startedAt, completedAt string
 
+	var focusJSON string
 	err := row.Scan(
 		&t.ID, &t.ProjectID, &t.Role, &t.Status, &t.Priority,
 		&assignedID, &payloadJSON, &resultJSON,
@@ -363,11 +399,12 @@ func scanTask(row *sql.Row) (*Task, error) {
 		&branchSHA, &lastPushAt,
 		&worktreePath, &assignedPort,
 		&createdAt, &updatedAt, &startedAt, &completedAt,
-		&t.ReviewRole,
+		&t.ReviewRole, &focusJSON,
 	)
 	if err != nil {
 		return nil, err
 	}
+	t.Focus = unmarshalJSONStringSlice(focusJSON)
 	t.AssignedAgentID = assignedID
 	t.Payload = unmarshalJSONMap(payloadJSON)
 	if resultJSON != "{}" && resultJSON != "" {
@@ -404,6 +441,7 @@ func scanTasks(rows *sql.Rows) ([]*Task, error) {
 		var branchSHA, lastPushAt, worktreePath string
 		var assignedPort int
 		var createdAt, updatedAt, startedAt, completedAt string
+		var focusJSON string
 
 		if err := rows.Scan(
 			&t.ID, &t.ProjectID, &t.Role, &t.Status, &t.Priority,
@@ -412,10 +450,11 @@ func scanTasks(rows *sql.Rows) ([]*Task, error) {
 			&branchSHA, &lastPushAt,
 			&worktreePath, &assignedPort,
 			&createdAt, &updatedAt, &startedAt, &completedAt,
-			&t.ReviewRole,
+			&t.ReviewRole, &focusJSON,
 		); err != nil {
 			return nil, err
 		}
+		t.Focus = unmarshalJSONStringSlice(focusJSON)
 		t.AssignedAgentID = assignedID
 		t.Payload = unmarshalJSONMap(payloadJSON)
 		if resultJSON != "{}" && resultJSON != "" {
