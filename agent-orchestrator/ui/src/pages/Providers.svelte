@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import {
     listProviders, createProvider, updateProvider, deleteProvider,
-    testProvider, seedProviders, getMetrics, listRoles,
+    testProvider, seedProviders, getMetrics, getMetricsCosts, listRoles,
   } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
@@ -11,6 +11,7 @@
   let providers   = $state([])
   let roles       = $state([])
   let metrics     = $state(null)
+  let costs       = $state(null)
   let loading     = $state(false)
   let showForm    = $state(false)
   let editingId   = $state(null)   // null = create, string = update
@@ -74,12 +75,14 @@
   async function load() {
     loading = true
     try {
-      const [pr, mr] = await Promise.all([
+      const [pr, mr, cr] = await Promise.all([
         listProviders().catch(() => []),
         getMetrics().catch(() => null),
+        getMetricsCosts().catch(() => null),
       ])
       providers = Array.isArray(pr) ? pr : (pr?.providers ?? [])
       metrics   = mr
+      costs     = cr
     } catch (e) {
       toasts.error('Failed to load: ' + e.message)
     } finally {
@@ -640,6 +643,35 @@
         </div>
       {/each}
     </div>
+  {/if}
+
+  <!-- Cost (Bug 13: providers page now surfaces actual accumulated cost) -->
+  {#if costs}
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Cost</h2>
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 mb-4">
+      <div class="p-3 bg-surface-800 rounded border border-surface-600">
+        <div class="text-xs text-gray-500 mb-1">Total cost (actual usage)</div>
+        <div class="text-lg font-semibold text-gray-100">~${(costs.total_cost ?? 0).toFixed(4)}</div>
+      </div>
+    </div>
+    {#if costs.by_agent?.length}
+      <div class="mb-4 overflow-x-auto">
+        <table class="w-full text-xs text-left text-gray-300">
+          <thead class="text-gray-500">
+            <tr><th class="pr-4 pb-1 font-medium">Agent</th><th class="pr-4 pb-1 font-medium">Cost</th><th class="pr-4 pb-1 font-medium">Tasks</th></tr>
+          </thead>
+          <tbody>
+            {#each costs.by_agent as a}
+              <tr class="border-t border-surface-700">
+                <td class="pr-4 py-1 font-mono">{a.agent_id}</td>
+                <td class="pr-4 py-1">~${(a.cost ?? 0).toFixed(4)}</td>
+                <td class="pr-4 py-1">{a.tasks}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
   {/if}
 
   <!-- Metrics -->

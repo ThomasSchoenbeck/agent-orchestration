@@ -366,6 +366,40 @@ func buildAgent(name string, roles, skills []string, serverURL, configPath, work
 				_ = tools.RegisterContextTools(toolReg, database)
 				_ = tools.RegisterCommentTools(toolReg, database)
 				a.WithExecutor(rtr, toolReg)
+
+				// Refresh providers + router from the DB on each heartbeat so the
+				// agent picks up providers/roles added or changed after startup
+				// (otherwise it never learns about a newly added provider).
+				a.WithReload(func() {
+					provs, perr := database.ListProviders(context.Background())
+					if perr != nil {
+						log.Printf("agent %q: provider reload failed: %v", name, perr)
+						return
+					}
+					seen := make(map[string]bool, len(provs))
+					for _, p := range provs {
+						if !p.Enabled {
+							continue
+						}
+						prov, perr2 := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config)
+						if perr2 != nil {
+							continue
+						}
+						llmReg.Set(p.Name, prov)
+						if len(p.Roles) > 0 {
+							llmReg.SetRoles(p.Name, p.ModelName, p.Roles)
+						}
+						seen[p.Name] = true
+					}
+					// Drop providers that were removed or disabled in the DB.
+					for _, existing := range llmReg.List() {
+						if !seen[existing] {
+							llmReg.Remove(existing)
+						}
+					}
+					rtr.ReloadFromDB(database)
+				})
+
 				log.Printf("agent %q: executor wired (LLM providers: %d)", name, len(llmReg.List()))
 				// Validate each role resolves to a provider so misconfiguration is
 				// visible at startup rather than silently failing on the first task.

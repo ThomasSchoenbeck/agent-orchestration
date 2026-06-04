@@ -15,11 +15,12 @@ vi.mock('../lib/api.js', () => ({
   testProvider:   vi.fn(),
   seedProviders:  vi.fn(),
   getMetrics:     vi.fn(),
+  getMetricsCosts: vi.fn(),
   listRoles:      vi.fn(),
 }))
 
 import {
-  listProviders, createProvider, updateProvider, listRoles, getMetrics,
+  listProviders, createProvider, updateProvider, listRoles, getMetrics, getMetricsCosts,
 } from '../lib/api.js'
 
 const ROLES = [
@@ -40,6 +41,21 @@ beforeEach(() => {
   createProvider.mockResolvedValue({ id: 'p2', ...PROVIDER, name: 'new-provider' })
   updateProvider.mockResolvedValue({ ...PROVIDER })
   getMetrics.mockResolvedValue(null)
+  getMetricsCosts.mockResolvedValue(null)
+})
+
+describe('Providers — cost (Bug 13)', () => {
+  it('renders total cost from /api/metrics/costs', async () => {
+    getMetricsCosts.mockResolvedValue({
+      total_cost: 0.1234,
+      by_agent: [{ agent_id: 'a1', cost: 0.1, tasks: 3 }],
+    })
+    render(Providers)
+    await waitFor(() =>
+      expect(screen.getByText('Total cost (actual usage)')).toBeInTheDocument()
+    )
+    expect(screen.getByText('~$0.1234')).toBeInTheDocument()
+  })
 })
 
 // ── Rendering ─────────────────────────────────────────────────────────────────

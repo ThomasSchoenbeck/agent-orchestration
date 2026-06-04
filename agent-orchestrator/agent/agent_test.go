@@ -88,6 +88,37 @@ func TestAgent_StartAndHeartbeat(t *testing.T) {
 	}
 }
 
+// TestAgent_ReloadInvokedOnHeartbeat verifies the reload hook (used to refresh
+// providers/router from the DB) fires on each heartbeat tick.
+func TestAgent_ReloadInvokedOnHeartbeat(t *testing.T) {
+	srv, _ := mockServer(t)
+	cfg := testConfig()
+	cfg.Agents.HeartbeatIntervalSec = 1
+
+	var reloads atomic.Int32
+	a := agent.NewAgent("test-agent", []string{"worker"}, srv.URL, cfg).
+		WithReload(func() { reloads.Add(1) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer a.Stop()
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("reload not invoked on heartbeat (got %d)", reloads.Load())
+		case <-time.After(200 * time.Millisecond):
+			if reloads.Load() >= 1 {
+				return // success
+			}
+		}
+	}
+}
+
 func TestAgent_IDAssignedAfterStart(t *testing.T) {
 	srv, _ := mockServer(t)
 	cfg := testConfig()

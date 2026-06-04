@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
+import { tick } from 'svelte'
 
 // Mock marked and DOMPurify (used inside the component)
 vi.mock('marked', () => ({
@@ -77,5 +78,22 @@ describe('MarkdownEditor — single pane', () => {
   it('has a single contenteditable area', () => {
     render(MarkdownEditor)
     expect(document.querySelectorAll('[contenteditable]').length).toBe(1)
+  })
+})
+
+describe('MarkdownEditor — external reset', () => {
+  it('clears the editor when value is reset to empty while focused (Enter-to-send)', async () => {
+    const { rerender } = render(MarkdownEditor, { props: { value: 'hello', readonly: false } })
+    const el = document.querySelector('[contenteditable]')
+    await tick()
+    expect(el.innerHTML).not.toBe('')
+
+    // Enter-to-send keeps the editor focused, then the parent sets value = ''.
+    el.dispatchEvent(new FocusEvent('focus'))
+    await tick()
+    await rerender({ value: '', readonly: false })
+    await tick()
+
+    expect(el.innerHTML).toBe('')
   })
 })

@@ -52,12 +52,14 @@ type WSMessage struct {
 	Data       interface{} `json:"data,omitempty"`
 }
 
-// WSUsage carries token and timing stats on assistant replies.
+// WSUsage carries token, timing, and cost stats on assistant replies.
 type WSUsage struct {
-	TokensUsed   int `json:"tokens_used"`
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	DurationMs   int `json:"duration_ms"`
+	TokensUsed   int     `json:"tokens_used"`
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	DurationMs   int     `json:"duration_ms"`
+	Model        string  `json:"model,omitempty"`
+	CostUSD      float64 `json:"cost_usd"`
 }
 
 // handleWSChat handles GET /ws/chat — upgrades to WebSocket, then runs a
@@ -143,6 +145,8 @@ func (s *Server) handleWSChat(w http.ResponseWriter, r *http.Request) {
 							InputTokens:  resp.InputTokens,
 							OutputTokens: resp.OutputTokens,
 							DurationMs:   resp.DurationMs,
+							Model:        model,
+							CostUSD:      s.costFromModel(r.Context(), model, resp.InputTokens, resp.OutputTokens),
 						},
 					})
 				} else {
@@ -164,6 +168,8 @@ func (s *Server) handleWSChat(w http.ResponseWriter, r *http.Request) {
 							InputTokens:  resp.InputTokens,
 							OutputTokens: resp.OutputTokens,
 							DurationMs:   resp.DurationMs,
+							Model:        model,
+							CostUSD:      s.costFromModel(r.Context(), model, resp.InputTokens, resp.OutputTokens),
 						},
 					})
 				}

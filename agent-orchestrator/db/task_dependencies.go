@@ -23,7 +23,7 @@ func (d *Database) ListDependencies(ctx context.Context, taskID string) ([]*Task
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT td.depends_on_id, td.created_at,
 		       t.status,
-		       COALESCE(json_extract(t.payload, '$.title'), t.type, t.id)
+		       COALESCE(json_extract(t.payload, '$.title'), t.id)
 		FROM task_dependencies td
 		JOIN tasks t ON t.id = td.depends_on_id
 		WHERE td.task_id = ?
@@ -73,7 +73,7 @@ func (d *Database) AddDependency(ctx context.Context, taskID, dependsOnID string
 	dep := &TaskDependency{TaskID: taskID, DependsOnID: dependsOnID}
 	_ = d.db.QueryRowContext(ctx,
 		`SELECT td.created_at, t.status,
-		        COALESCE(json_extract(t.payload, '$.title'), t.type, t.id)
+		        COALESCE(json_extract(t.payload, '$.title'), t.id)
 		 FROM task_dependencies td JOIN tasks t ON t.id = td.depends_on_id
 		 WHERE td.task_id=? AND td.depends_on_id=?`, taskID, dependsOnID,
 	).Scan(&dep.CreatedAt, &dep.DependsOnStatus, &dep.DependsOnTitle)

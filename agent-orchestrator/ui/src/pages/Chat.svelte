@@ -151,7 +151,7 @@
       const resp = await getConversation(id, 50)
       activeConvID = id
       activeConv = resp.conversation
-      messages = Array.isArray(resp.messages) ? resp.messages : []
+      messages = Array.isArray(resp.messages) ? resp.messages.map(withUsage) : []
       if (activeConv?.provider_id) {
         selectedProvider = activeConv.provider_id
       }
@@ -159,6 +159,34 @@
     } catch (e) {
       toasts.error('Failed to load conversation: ' + e.message)
     }
+  }
+
+  // Persisted assistant messages carry token fields at the top level; lift them
+  // into a `usage` object so the same badge renders for reloaded history.
+  function withUsage(m) {
+    if (m.role === 'assistant' && !m.usage &&
+        (m.tokens_used || m.input_tokens || m.output_tokens)) {
+      return { ...m, usage: {
+        tokens_used:  m.tokens_used,
+        input_tokens: m.input_tokens,
+        output_tokens: m.output_tokens,
+        duration_ms:  m.duration_ms,
+      } }
+    }
+    return m
+  }
+
+  // Estimated USD cost for a usage record. Live replies already carry an exact
+  // cost_usd from the server; for reloaded history we estimate from the
+  // conversation provider's per-million pricing.
+  function estimateCost(u) {
+    if (!u) return 0
+    if (u.cost_usd) return u.cost_usd
+    const p = providers.find(p => p.id === (activeConv?.provider_id || selectedProvider))
+    const m = (p?.models || []).find(m => m.input_per_million || m.output_per_million)
+    if (!m) return 0
+    return (u.input_tokens || 0) / 1e6 * (m.input_per_million || 0)
+         + (u.output_tokens || 0) / 1e6 * (m.output_per_million || 0)
   }
 
   async function startRename(id, title) {
@@ -446,10 +474,14 @@
                   {/if}
                 </div>
                 {#if m.usage && m.role === 'assistant'}
+                  {@const cost = estimateCost(m.usage)}
                   <div class="text-[10px] text-gray-600 mt-0.5 px-1 flex gap-2">
                     <span>{m.usage.tokens_used} tok</span>
                     {#if m.usage.input_tokens || m.usage.output_tokens}
-                      <span>{m.usage.input_tokens}↑ {m.usage.output_tokens}↓</span>
+                      <span title="context/input ↑ · output ↓">{m.usage.input_tokens}↑ {m.usage.output_tokens}↓</span>
+                    {/if}
+                    {#if cost > 0}
+                      <span title="estimated cost">~${cost.toFixed(4)}</span>
                     {/if}
                     {#if m.usage.duration_ms}
                       <span>{m.usage.duration_ms} ms</span>

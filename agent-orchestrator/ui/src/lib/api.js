@@ -144,6 +144,7 @@ export const deleteTaskLogs = (taskId) =>
 
 // ── Metrics ──────────────────────────────────────────────────────────────────
 export const getMetrics = () => get('/api/metrics')
+export const getMetricsCosts = () => get('/api/metrics/costs')
 export const getTaskCost = (taskId) => get(`/api/tasks/${taskId}/cost`)
 
 // ── Meta (enumerations) ──────────────────────────────────────────────────────

@@ -189,6 +189,20 @@ describe('Chat — receiving messages', () => {
     )
   })
 
+  it('shows token usage and estimated cost on an assistant reply (Bug 2 + 3)', async () => {
+    render(Chat)
+    await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))
+    getSocket().simulateOpen()
+    await waitFor(() => screen.getByText('Connected'))
+    getSocket().simulateMessage({
+      role: 'assistant', content: 'Costed reply',
+      usage: { tokens_used: 100, input_tokens: 60, output_tokens: 40, cost_usd: 0.0012 },
+    })
+    await waitFor(() => expect(screen.getByText('Costed reply')).toBeInTheDocument())
+    expect(screen.getByText('100 tok')).toBeInTheDocument()
+    expect(screen.getByText('~$0.0012')).toBeInTheDocument()
+  })
+
   it('displays assistant message from plain-string response', async () => {
     render(Chat)
     await waitFor(() => screen.getByRole('textbox', { name: /Message/i }))

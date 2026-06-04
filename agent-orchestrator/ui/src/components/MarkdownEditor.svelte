@@ -105,8 +105,15 @@
   })
 
   // Propagate external value changes into the editor (e.g. form reset).
+  // While focused we skip syncing to avoid cursor jumps during typing, but an
+  // external reset to empty (e.g. the chat clearing the box after Enter-to-send,
+  // which keeps focus) must still clear the editor.
   $effect(() => {
-    if (!isFocused) setEditorContent(value)
+    if (!isFocused) {
+      setEditorContent(value)
+    } else if (value === '') {
+      setEditorContent('')
+    }
   })
 
   // ── Sync: editor → value ───────────────────────────────────────────────────

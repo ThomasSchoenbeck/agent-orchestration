@@ -63,14 +63,17 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ## 5. Planning Changes
 - When asked to plan changes, write all new tasks into a markdown file containing the current date.
 - define task progress markers for ever task: Format: `[x]` = done · `[ ]` = pending · `[~]` = in progress
+- keep a short list of all task in the top with dublicated progress marker for better human readable
 - outline what to do in each task
 - list which files are required to be touched
-- unit test for every new feature or big change is a must
+- write unit test for every new feature or big change
 - testcoverage for backend and frontend should be at least 80%
 
 ## 6. Implementing Changes
 - mark the corresponding item from the task list regarding the current status
 - focus on the provided files per task and only explore the codebase when necessary
+- you are running on windows, you cannot install any software in your sandbox, so don't even try
+- you can only verify by looking at the code or asking me to run tests for you
 
 
 <!-- code-review-graph MCP tools -->

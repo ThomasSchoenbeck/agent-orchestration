@@ -5,6 +5,7 @@
   import { formatTimestamp } from '../lib/time.js'
   import { toasts, router } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
+  import AgentTemplatesPanel from '../components/AgentTemplatesPanel.svelte'
 
   // ── Agent list state ───────────────────────────────────────────────────────
   let agents         = $state([])
@@ -17,6 +18,35 @@
     offline: 'bg-gray-500',
     busy:    'bg-yellow-400',
     idle:    'bg-blue-400',
+  }
+
+  // ── Resizable top region (agents + templates) ───────────────────────────────
+  const TOP_MIN = 140
+  function loadTopHeight() {
+    try {
+      const v = Number(localStorage.getItem('agentsTopHeight'))
+      if (v >= TOP_MIN) return v
+    } catch { /* ignore */ }
+    return 288
+  }
+  let topHeight = $state(loadTopHeight())
+  let resizeStartY = 0
+  let resizeStartH = 0
+  function startResize(e) {
+    e.preventDefault()
+    resizeStartY = e.clientY
+    resizeStartH = topHeight
+    window.addEventListener('mousemove', onResize)
+    window.addEventListener('mouseup', stopResize)
+  }
+  function onResize(e) {
+    const max = Math.max(TOP_MIN, window.innerHeight - 160)
+    topHeight = Math.min(max, Math.max(TOP_MIN, resizeStartH + (e.clientY - resizeStartY)))
+  }
+  function stopResize() {
+    window.removeEventListener('mousemove', onResize)
+    window.removeEventListener('mouseup', stopResize)
+    try { localStorage.setItem('agentsTopHeight', String(topHeight)) } catch { /* ignore */ }
   }
 
   // ── Log panel state ────────────────────────────────────────────────────────
@@ -216,13 +246,20 @@
     getSkillsMeta().then((s) => { availSkills = s || [] }).catch(() => {})
     timer = setInterval(refreshAll, 5_000)
   })
-  onDestroy(() => clearInterval(timer))
+  onDestroy(() => {
+    clearInterval(timer)
+    window.removeEventListener('mousemove', onResize)
+    window.removeEventListener('mouseup', stopResize)
+  })
 </script>
 
 <div class="flex flex-col h-full overflow-hidden">
 
-  <!-- ── Agent list (top, scrollable) ──────────────────────────────────────── -->
-  <div class="shrink-0 max-h-72 overflow-y-auto border-b border-surface-600">
+  <!-- ── Top: agents (left) + templates (right) ────────────────────────────── -->
+  <div class="shrink-0 flex border-b border-surface-600" style="height: {topHeight}px" data-testid="agents-top">
+
+  <!-- Agents column -->
+  <div class="flex-1 overflow-y-auto border-r border-surface-600 min-w-0">
     <div class="flex items-center justify-between px-6 py-3 sticky top-0 bg-surface-900 z-10">
       <h1 class="text-lg font-semibold text-gray-100">Agents</h1>
       <div class="flex items-center gap-2">
@@ -272,7 +309,7 @@
                 <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-900 text-amber-300"
                   title="Live config differs from start params: roles [{(a.start_roles||[]).join(', ')}] skills [{(a.start_skills||[]).join(', ')}]">runtime override</span>
               {/if}
-              {#if a.desired_state === 'stop'}
+              {#if a.desired_state === 'stop' && a.status !== 'offline'}
                 <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-900 text-rose-300">stopping</span>
               {/if}
             </div>
@@ -306,6 +343,21 @@
       </div>
     {/if}
   </div>
+  <!-- Templates column (Bug 8: managed templates merged into the Agents page) -->
+  <div class="w-96 shrink-0 overflow-y-auto">
+    <AgentTemplatesPanel {agents} />
+  </div>
+  </div>
+
+  <!-- Resizable divider (Bug 4): drag to grow/shrink the agents+templates region -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    class="shrink-0 h-1.5 cursor-row-resize bg-surface-700 hover:bg-accent transition-colors"
+    role="separator"
+    aria-orientation="horizontal"
+    aria-label="Resize agents panel"
+    onmousedown={startResize}
+  ></div>
 
   <!-- ── Log panel header ───────────────────────────────────────────────────── -->
   <div class="shrink-0 px-6 py-2 bg-surface-800 border-b border-surface-600 flex items-center justify-between">

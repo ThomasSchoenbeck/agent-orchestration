@@ -156,23 +156,39 @@ func (r *Router) RouteByRole(role string) (*RouteResult, error) {
 	r.mu.RUnlock()
 
 	if ok {
-		return r.routeFromCache(cr)
+		if res, err := r.routeFromCache(cr); err == nil {
+			return res, nil
+		}
+		// The DB role definition exists but could not resolve a provider
+		// (e.g. no ProviderID assigned to the role). Fall through to the
+		// fallbacks below — a provider may still declare support for this
+		// role via its roles/model list.
 	}
 
 	// Config fallback.
-	modelName, ok := r.cfg.Roles[role]
-	if ok {
-		return r.resolveModel(role, modelName)
+	if modelName, hasCfg := r.cfg.Roles[role]; hasCfg {
+		if res, err := r.resolveModel(role, modelName); err == nil {
+			return res, nil
+		}
 	}
 
 	// Provider role-preference fallback: find any registered provider that
-	// declares support for this role via its roles list.
+	// declares support for this role via its provider-level or per-model roles.
 	if prov, model, err := r.registry.GetForRole(role); err == nil {
-		return &RouteResult{
+		res := &RouteResult{
 			Provider: prov,
 			Model:    model,
 			Role:     role,
-		}, nil
+		}
+		// Preserve the role definition's persona and tool allowlist when one
+		// exists, even though it carried no provider binding.
+		if ok && cr.def != nil {
+			res.SystemPrompt = cr.def.SystemPrompt
+			if len(cr.def.AllowedTools) > 0 {
+				res.ToolAllowlist = cr.def.AllowedTools
+			}
+		}
+		return res, nil
 	}
 
 	return nil, fmt.Errorf("no provider available for role %q (no DB definition, config mapping, or provider preference)", role)

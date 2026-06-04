@@ -24,7 +24,12 @@ func Open(path string) (*Database, error) {
 		return nil, fmt.Errorf("failed to create db directory: %w", err)
 	}
 
-	sqlDB, err := sql.Open("sqlite", path+"?_journal=WAL&_timeout=5000&_fk=true")
+	// NOTE: the modernc.org/sqlite driver only honours `_pragma=...` DSN
+	// directives — the mattn-style `_journal`/`_timeout`/`_fk` params are
+	// silently ignored. Setting busy_timeout here makes it active from the
+	// very first statement (including migrations), so concurrent opens wait
+	// for the lock instead of failing immediately with SQLITE_BUSY.
+	sqlDB, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite: %w", err)
 	}
@@ -32,8 +37,12 @@ func Open(path string) (*Database, error) {
 	// SQLite works best with a single writer connection.
 	sqlDB.SetMaxOpenConns(1)
 
-	// Explicit WAL tuning pragmas (supplement the connection-string params).
+	// Explicit WAL tuning pragmas. journal_mode and busy_timeout are also set
+	// via the DSN above; re-asserting them here keeps the settings verifiable
+	// and matches OpenLogDB.
 	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA busy_timeout=5000",
 		"PRAGMA synchronous=NORMAL",
 		"PRAGMA cache_size=-32000",
 	} {

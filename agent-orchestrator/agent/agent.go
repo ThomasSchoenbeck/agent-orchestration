@@ -28,6 +28,7 @@ type Agent struct {
 	done      chan struct{}
 	workdir   string // local root for agent code checkouts (remote mode)
 	alog      *AgentLogger
+	reloadFn  func() // optional: reload providers/router from DB on each heartbeat
 }
 
 // NewAgent creates a new agent (not yet registered). rtr and toolReg are
@@ -86,6 +87,14 @@ func (a *Agent) WithExecutor(rtr *router.Router, toolReg *tools.Registry) *Agent
 		rtr:   rtr,
 		tools: toolReg,
 	}
+	return a
+}
+
+// WithReload registers a function that refreshes the agent's LLM provider
+// registry and router from the database. It is invoked on each heartbeat tick
+// so the agent picks up providers/roles added or changed after startup.
+func (a *Agent) WithReload(fn func()) *Agent {
+	a.reloadFn = fn
 	return a
 }
 
@@ -178,6 +187,9 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		case <-a.done:
 			return
 		case <-ticker.C:
+			if a.reloadFn != nil {
+				a.reloadFn()
+			}
 			ctrl, err := a.client.Heartbeat(ctx, a.id)
 			if err != nil {
 				consecutiveFailures++

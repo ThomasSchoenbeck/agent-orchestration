@@ -6,7 +6,6 @@
   import TaskDetail    from './pages/TaskDetail.svelte'
   import Agents        from './pages/Agents.svelte'
   import AgentDetail   from './pages/AgentDetail.svelte'
-  import AgentTemplates from './pages/AgentTemplates.svelte'
   import Roles         from './pages/Roles.svelte'
   import Skills        from './pages/Skills.svelte'
   import Providers     from './pages/Providers.svelte'
@@ -18,7 +17,6 @@
     { id: 'projects',  label: 'Projects',  icon: '📁' },
     { id: 'tasks',     label: 'Tasks',     icon: '✅' },
     { id: 'agents',    label: 'Agents',    icon: '🤖' },
-    { id: 'managed',   label: 'Managed',   icon: '🛰️' },
     { id: 'roles',     label: 'Roles',     icon: '🎭' },
     { id: 'skills',    label: 'Skills',    icon: '🧩' },
     { id: 'providers', label: 'Providers', icon: '🔌' },
@@ -38,16 +36,16 @@
     <ul class="flex-1 py-2 list-none m-0 p-0">
       {#each pages as p}
         <li>
-          <button
-            class="w-full text-left px-4 py-2 flex items-center gap-3 text-sm transition-colors
+          <a
+            href="#/{p.id}"
+            class="w-full text-left px-4 py-2 flex items-center gap-3 text-sm no-underline transition-colors
               {$router.page === p.id
                 ? 'bg-surface-700 text-accent font-medium'
                 : 'text-gray-400 hover:bg-surface-700 hover:text-gray-200'}"
-            onclick={() => router.go(p.id)}
           >
             <span class="text-base leading-none">{p.icon}</span>
             {p.label}
-          </button>
+          </a>
         </li>
       {/each}
     </ul>
@@ -70,8 +68,6 @@
       <AgentDetail agentId={$router.params[0]} />
     {:else if $router.page === 'agents'}
       <Agents />
-    {:else if $router.page === 'managed'}
-      <AgentTemplates />
     {:else if $router.page === 'roles'}
       <Roles />
     {:else if $router.page === 'skills'}

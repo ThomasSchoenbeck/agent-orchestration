@@ -107,6 +107,67 @@ func TestRouteByRole_ProviderRolePreferenceFallback(t *testing.T) {
 	}
 }
 
+// TestRouteByRole_RoleDefWithoutProviderFallsBackToProviderModels reproduces
+// the reported bug: a provider declares all roles across multiple models, but
+// the matching role definition has no ProviderID assigned. Previously the
+// enabled-but-unbound role definition short-circuited RouteByRole with an
+// error, so the agent never reached the provider-declared-role fallback and
+// reported "no provider available". The agent must still find a match.
+func TestRouteByRole_RoleDefWithoutProviderFallsBackToProviderModels(t *testing.T) {
+	d := openRouterDB(t)
+	ctx := context.Background()
+
+	// Provider with multiple models, each declaring ALL roles.
+	models := []db.ProviderModel{
+		{Name: "gemma-a", Roles: []string{"orchestrator", "reviewer", "worker"}},
+		{Name: "gemma-b", Roles: []string{"orchestrator", "reviewer", "worker"}},
+		{Name: "gemma-c", Roles: []string{"orchestrator", "reviewer", "worker"}},
+	}
+	prov := &db.Provider{
+		Name:    "llama.cpp",
+		Type:    "openai_compatible",
+		BaseURL: "http://localhost:7777/v1",
+		Enabled: true,
+		Roles:   []string{"orchestrator", "reviewer", "worker"},
+		Models:  models,
+	}
+	if err := d.CreateProvider(ctx, prov); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+
+	// Enabled role definition with NO ProviderID — this is what regressed.
+	if err := d.CreateRoleDefinition(ctx, &db.RoleDefinition{
+		Name: "orchestrator", Label: "Orchestrator", Enabled: true,
+	}); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
+	}
+
+	cfg := &config.Config{Providers: []config.ProviderConfig{}, Models: []config.ModelConfig{},
+		Roles: map[string]string{}}
+	reg := llm.NewRegistry()
+	reg.Set("llama.cpp", llm.NewOpenAIProvider("llama.cpp", "http://localhost:7777/v1", "", ""))
+	reg.SetRoles("llama.cpp", "", prov.Roles) // mirror startup provider-role registration
+
+	rtr := router.New(cfg, reg)
+	if err := rtr.LoadFromDB(d); err != nil {
+		t.Fatalf("LoadFromDB: %v", err)
+	}
+
+	res, err := rtr.RouteByRole("orchestrator")
+	if err != nil {
+		t.Fatalf("RouteByRole(orchestrator) should fall back to provider-declared role, got: %v", err)
+	}
+	if res.Provider == nil {
+		t.Fatal("expected non-nil provider")
+	}
+	if res.Model == "" {
+		t.Error("expected a non-empty model from the provider's model-role binding")
+	}
+	if res.Role != "orchestrator" {
+		t.Errorf("role = %q, want orchestrator", res.Role)
+	}
+}
+
 // --- ContextBuilder tests ---
 
 func TestBuildContext_FiltersByInclude(t *testing.T) {

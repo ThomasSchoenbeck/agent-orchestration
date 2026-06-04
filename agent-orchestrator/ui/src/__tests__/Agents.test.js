@@ -5,6 +5,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
+import { tick } from 'svelte'
 import Agents from '../pages/Agents.svelte'
 
 const AGENTS = [
@@ -32,11 +33,12 @@ const AGENT_LOGS = [
 ]
 
 // Stub fetch: dispatch by URL prefix.
-function stubFetch(agents = AGENTS, roles = ROLES, logs = AGENT_LOGS) {
+function stubFetch(agents = AGENTS, roles = ROLES, logs = AGENT_LOGS, templates = []) {
   vi.stubGlobal('fetch', vi.fn((url) => {
     let data = agents
-    if (url.includes('/api/roles'))       data = roles
+    if (url.includes('/api/agent-templates')) data = templates
     else if (url.includes('/api/agent-logs')) data = logs
+    else if (url.includes('/api/roles'))      data = roles
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) })
   }))
 }
@@ -44,6 +46,7 @@ function stubFetch(agents = AGENTS, roles = ROLES, logs = AGENT_LOGS) {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.useRealTimers()
+  try { localStorage.clear() } catch { /* ignore */ }
 })
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
@@ -249,5 +252,100 @@ describe('Agents — timeline buckets', () => {
       expect(screen.getByText('1 hr')).toBeInTheDocument()
       expect(screen.getByText('1 day')).toBeInTheDocument()
     })
+  })
+})
+
+// ── Templates panel (Bug 7 + 8: Managed page merged into Agents) ──────────────
+describe('Agents — templates panel', () => {
+  const TPL = [
+    { id: 't1', name: 'reviewer-pool', roles: ['reviewer'], skills: [], replicas: 2, autostart: false, enabled: true },
+  ]
+
+  it('renders the Templates panel with template names', async () => {
+    stubFetch(AGENTS, ROLES, AGENT_LOGS, TPL)
+    render(Agents)
+    await waitFor(() => {
+      expect(screen.getByText('Templates')).toBeInTheDocument()
+      expect(screen.getByText('reviewer-pool')).toBeInTheDocument()
+    })
+  })
+
+  it('opens an edit form pre-filled with current values when Edit is clicked', async () => {
+    stubFetch(AGENTS, ROLES, AGENT_LOGS, TPL)
+    const user = userEvent.setup()
+    render(Agents)
+    await waitFor(() => expect(screen.getByText('reviewer-pool')).toBeInTheDocument())
+
+    await user.click(screen.getByText('Edit'))
+    expect(screen.getByDisplayValue('reviewer-pool')).toBeInTheDocument() // name
+    expect(screen.getByDisplayValue('reviewer')).toBeInTheDocument()      // roles csv
+  })
+
+  it('PATCHes the template on Save', async () => {
+    stubFetch(AGENTS, ROLES, AGENT_LOGS, TPL)
+    const user = userEvent.setup()
+    render(Agents)
+    await waitFor(() => expect(screen.getByText('reviewer-pool')).toBeInTheDocument())
+
+    await user.click(screen.getByText('Edit'))
+    const name = screen.getByDisplayValue('reviewer-pool')
+    await user.clear(name)
+    await user.type(name, 'reviewer-team')
+    await user.click(screen.getByText('Save'))
+
+    await waitFor(() => {
+      const patched = fetch.mock.calls.find(
+        ([url, opts]) => url.includes('/api/agent-templates/t1') && opts?.method === 'PATCH'
+      )
+      expect(patched).toBeTruthy()
+    })
+  })
+})
+
+// ── Stopping badge (Bug: stale "stopping" on not-running agents) ───────────────
+describe('Agents — stopping badge', () => {
+  it('hides the "stopping" badge for an offline agent left with desired_state=stop', async () => {
+    stubFetch([
+      { id: 'a1', name: 'stopped-agent', roles: ['worker'], status: 'offline', desired_state: 'stop' },
+    ])
+    render(Agents)
+    await waitFor(() => expect(screen.getByText('stopped-agent')).toBeInTheDocument())
+    expect(screen.queryByText('stopping')).toBeNull()
+  })
+
+  it('shows the "stopping" badge for a running agent asked to stop', async () => {
+    stubFetch([
+      { id: 'a1', name: 'draining-agent', roles: ['worker'], status: 'online', desired_state: 'stop' },
+    ])
+    render(Agents)
+    await waitFor(() => expect(screen.getByText('draining-agent')).toBeInTheDocument())
+    expect(screen.getByText('stopping')).toBeInTheDocument()
+  })
+})
+
+// ── Resizable top region (Bug 4) ──────────────────────────────────────────────
+describe('Agents — resizable top region', () => {
+  it('renders a resize divider', () => {
+    stubFetch()
+    const { container } = render(Agents)
+    expect(
+      container.querySelector('[role="separator"][aria-label="Resize agents panel"]')
+    ).toBeInTheDocument()
+  })
+
+  it('grows the agents region when the divider is dragged down', async () => {
+    localStorage.clear()
+    stubFetch()
+    const { container } = render(Agents)
+    const sep = container.querySelector('[role="separator"]')
+    const top = container.querySelector('[data-testid="agents-top"]')
+    expect(top.getAttribute('style')).toContain('height: 288px')
+
+    sep.dispatchEvent(new MouseEvent('mousedown', { clientY: 300, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mousemove', { clientY: 400, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+    await tick()
+
+    expect(top.getAttribute('style')).toContain('height: 388px')
   })
 })
