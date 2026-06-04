@@ -2,14 +2,20 @@
   import { onMount } from 'svelte'
   import {
     listRoles, createRole, updateRole, deleteRole, seedRoles, previewRolePrompt,
+    getMetaTools,
   } from '../lib/api.js'
   import { listProviders } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
+  import MultiSelect from '../components/MultiSelect.svelte'
+
+  // Capability flags the server actually acts on (router/authorization).
+  const KNOWN_CAPABILITIES = ['handles_review', 'handles_merge', 'handles_deploy']
 
   // ── State ─────────────────────────────────────────────────────────────────
   let roles     = $state([])
   let providers = $state([])
+  let availTools = $state([])
   let loading   = $state(false)
   let showForm  = $state(false)
   let editingId = $state(null)  // null = create mode
@@ -24,8 +30,8 @@
     system_prompt:   '',
     context_include: '',  // space-separated tags
     context_exclude: '',
-    capabilities:    '',
-    allowed_tools:   '',
+    capabilities:    [],
+    allowed_tools:   [],
     temperature:     0.7,
     max_tokens:      4096,
     enabled:         true,
@@ -53,6 +59,13 @@
     return providers.some(p => Array.isArray(p.roles) && p.roles.includes(name))
   })
 
+  // Capability suggestions: the code-recognized flags plus any already in use.
+  let capabilityOptions = $derived.by(() => {
+    const set = new Set(KNOWN_CAPABILITIES)
+    for (const r of roles) for (const c of (r.capabilities ?? [])) set.add(c)
+    return [...set]
+  })
+
   // ── Constants ─────────────────────────────────────────────────────────────
   const SYSTEM_PROMPT_PLACEHOLDER = 'You are a {{.role}} agent…  (Go text/template syntax supported)'
   const PREVIEW_VARS_PLACEHOLDER = 'Variables JSON, e.g. {"role":"worker"}'
@@ -75,12 +88,14 @@
   async function load() {
     loading = true
     try {
-      const [rs, ps] = await Promise.all([
+      const [rs, ps, ts] = await Promise.all([
         listRoles().catch(() => []),
         listProviders().catch(() => []),
+        getMetaTools().catch(() => []),
       ])
-      roles     = Array.isArray(rs) ? rs : []
-      providers = Array.isArray(ps) ? ps : (ps?.providers ?? [])
+      roles      = Array.isArray(rs) ? rs : []
+      providers  = Array.isArray(ps) ? ps : (ps?.providers ?? [])
+      availTools = Array.isArray(ts) ? ts : []
     } catch (e) {
       toasts.error('Failed to load: ' + e.message)
     } finally {
@@ -107,8 +122,8 @@
       system_prompt:   r.system_prompt ?? '',
       context_include: joinTags(r.context_include),
       context_exclude: joinTags(r.context_exclude),
-      capabilities:    joinTags(r.capabilities),
-      allowed_tools:   joinTags(r.allowed_tools),
+      capabilities:    Array.isArray(r.capabilities) ? [...r.capabilities] : [],
+      allowed_tools:   Array.isArray(r.allowed_tools) ? [...r.allowed_tools] : [],
       temperature:     r.temperature ?? 0.7,
       max_tokens:      r.max_tokens ?? 4096,
       enabled:         r.enabled,
@@ -130,8 +145,8 @@
       system_prompt:   form.system_prompt,
       context_include: splitTags(form.context_include),
       context_exclude: splitTags(form.context_exclude),
-      capabilities:    splitTags(form.capabilities),
-      allowed_tools:   splitTags(form.allowed_tools),
+      capabilities:    form.capabilities,
+      allowed_tools:   form.allowed_tools,
       temperature:     parseFloat(form.temperature) || 0.7,
       max_tokens:      parseInt(form.max_tokens, 10) || 4096,
       enabled:         form.enabled,
@@ -239,14 +254,16 @@
       <!-- General -->
       <div class="grid grid-cols-2 gap-3">
         <div>
-          <label class="text-xs text-gray-500 mb-1 block">Name * (slug)</label>
+          <label class="text-xs text-gray-500 mb-1 block">
+            Name * (slug)
+            {#if editingId}<span class="text-gray-600 ml-1">renaming updates all references</span>{/if}
+          </label>
           <input
             class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
                    text-gray-200 font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
             placeholder="e.g. worker"
             bind:value={form.name}
             required
-            readonly={!!editingId}
           />
         </div>
         <div>
@@ -328,27 +345,17 @@
         <p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Routing</p>
         <div>
           <label class="text-xs text-gray-500 mb-1 block">
-            Capabilities (space or comma-separated)
-            <span class="text-gray-600 ml-1">known: handles_review, creates_tasks, handles_merge, handles_deploy</span>
+            Capabilities
+            <span class="text-gray-600 ml-1">search or type; Enter/Tab/Space to add</span>
           </label>
-          <input
-            class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
-                   text-gray-200 font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
-            placeholder="e.g. handles_review"
-            bind:value={form.capabilities}
-          />
+          <MultiSelect bind:value={form.capabilities} options={capabilityOptions} placeholder="e.g. handles_review" />
         </div>
         <div>
           <label class="text-xs text-gray-500 mb-1 block">
             Tool allowlist
-            <span class="text-gray-600 ml-1">(space or comma-separated — leave empty to send all tools)</span>
+            <span class="text-gray-600 ml-1">(leave empty to send all tools)</span>
           </label>
-          <input
-            class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
-                   text-gray-200 font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
-            placeholder="e.g. write_file read_file list_files apply_diff run_tests"
-            bind:value={form.allowed_tools}
-          />
+          <MultiSelect bind:value={form.allowed_tools} options={availTools} placeholder="e.g. write_file" />
         </div>
       </div>
 

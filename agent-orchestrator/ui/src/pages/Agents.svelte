@@ -6,6 +6,7 @@
   import { toasts, router } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
   import AgentTemplatesPanel from '../components/AgentTemplatesPanel.svelte'
+  import MultiSelect from '../components/MultiSelect.svelte'
 
   // ── Agent list state ───────────────────────────────────────────────────────
   let agents         = $state([])
@@ -117,19 +118,18 @@
   // ── Lifecycle controls (Feature 7) ──────────────────────────────────────────
   let availSkills    = $state([])
   let editingAgentId = $state('')
-  let editBuf        = $state({ roles: '', skills: '' })
+  let editBuf        = $state({ roles: [], skills: [] })
 
   const arrEq = (a = [], b = []) => a.length === b.length && a.every((x, i) => x === b[i])
   const isOverridden = (a) => !arrEq(a.roles, a.start_roles) || !arrEq(a.skills, a.start_skills)
-  const splitCsv = (s) => (s || '').split(/[\s,]+/).map(x => x.trim()).filter(Boolean)
 
   function startEditAgent(a) {
     editingAgentId = a.id
-    editBuf = { roles: (a.roles || []).join(', '), skills: (a.skills || []).join(', ') }
+    editBuf = { roles: [...(a.roles || [])], skills: [...(a.skills || [])] }
   }
   async function saveAgentLive(a) {
     try {
-      await updateAgent(a.id, { roles: splitCsv(editBuf.roles), skills: splitCsv(editBuf.skills) })
+      await updateAgent(a.id, { roles: editBuf.roles, skills: editBuf.skills })
       toasts.success('Live config updated (effective next poll)')
       editingAgentId = ''
       await loadAgents()
@@ -327,11 +327,8 @@
 
             {#if editingAgentId === a.id}
               <div class="mt-2 flex flex-col gap-2" onclick={(e) => e.stopPropagation()}>
-                <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs" placeholder="live roles (comma-separated)" bind:value={editBuf.roles} />
-                <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-xs" placeholder="live skills (comma-separated)" bind:value={editBuf.skills} />
-                {#if availSkills.length > 0}
-                  <span class="text-[10px] text-gray-500">skills: {availSkills.map(s => s.value).join(', ')}</span>
-                {/if}
+                <MultiSelect bind:value={editBuf.roles} options={roles} placeholder="live roles" />
+                <MultiSelect bind:value={editBuf.skills} options={availSkills} placeholder="live skills" />
                 <div class="flex gap-2">
                   <button class="text-[11px] text-gray-400 hover:text-gray-200" onclick={() => editingAgentId = ''}>Cancel</button>
                   <button class="text-[11px] px-2 py-0.5 rounded bg-accent text-white" onclick={() => saveAgentLive(a)}>Save</button>

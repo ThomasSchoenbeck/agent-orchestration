@@ -36,9 +36,10 @@ const AGENT_LOGS = [
 function stubFetch(agents = AGENTS, roles = ROLES, logs = AGENT_LOGS, templates = []) {
   vi.stubGlobal('fetch', vi.fn((url) => {
     let data = agents
-    if (url.includes('/api/agent-templates')) data = templates
-    else if (url.includes('/api/agent-logs')) data = logs
-    else if (url.includes('/api/roles'))      data = roles
+    if (url.includes('/api/meta/'))                data = []
+    else if (url.includes('/api/agent-templates')) data = templates
+    else if (url.includes('/api/agent-logs'))      data = logs
+    else if (url.includes('/api/roles'))           data = roles
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) })
   }))
 }
@@ -277,8 +278,8 @@ describe('Agents — templates panel', () => {
     await waitFor(() => expect(screen.getByText('reviewer-pool')).toBeInTheDocument())
 
     await user.click(screen.getByText('Edit'))
-    expect(screen.getByDisplayValue('reviewer-pool')).toBeInTheDocument() // name
-    expect(screen.getByDisplayValue('reviewer')).toBeInTheDocument()      // roles csv
+    expect(screen.getByDisplayValue('reviewer-pool')).toBeInTheDocument()        // name input
+    expect(screen.getByRole('button', { name: 'Remove reviewer' })).toBeInTheDocument() // roles chip
   })
 
   it('PATCHes the template on Save', async () => {

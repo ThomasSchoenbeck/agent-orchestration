@@ -3,13 +3,16 @@
   import { toasts } from '../lib/stores.js'
   import {
     listAgentTemplates, createAgentTemplate, updateAgentTemplate, deleteAgentTemplate,
-    scaleTemplate, startTemplate, stopTemplate,
+    scaleTemplate, startTemplate, stopTemplate, getTaskRoles, getSkillsMeta,
   } from '../lib/api.js'
+  import MultiSelect from './MultiSelect.svelte'
 
   // Agents are owned by the parent (Agents page) which already polls them.
   let { agents = [] } = $props()
 
   let templates  = $state([])
+  let availRoles = $state([])
+  let availSkills = $state([])
   let loading    = $state(true)
   let creating   = $state(false)
   let buf        = $state(emptyBuf())
@@ -17,9 +20,8 @@
   let editBuf    = $state(emptyBuf())
 
   function emptyBuf() {
-    return { name: '', roles: 'worker', skills: '', replicas: 1, autostart: false }
+    return { name: '', roles: ['worker'], skills: [], replicas: 1, autostart: false }
   }
-  const splitCsv = (s) => (s || '').split(/[\s,]+/).map(x => x.trim()).filter(Boolean)
 
   async function load() {
     try {
@@ -30,7 +32,12 @@
       loading = false
     }
   }
-  onMount(load)
+  async function loadMeta() {
+    const [r, s] = await Promise.all([getTaskRoles().catch(() => []), getSkillsMeta().catch(() => [])])
+    availRoles = Array.isArray(r) ? r : []
+    availSkills = Array.isArray(s) ? s : []
+  }
+  onMount(() => { load(); loadMeta() })
   let timer = setInterval(load, 5_000)
   onDestroy(() => clearInterval(timer))
 
@@ -43,8 +50,8 @@
     try {
       await createAgentTemplate({
         name: buf.name.trim(),
-        roles: splitCsv(buf.roles),
-        skills: splitCsv(buf.skills),
+        roles: buf.roles,
+        skills: buf.skills,
         replicas: Number(buf.replicas) || 1,
         autostart: buf.autostart,
       })
@@ -59,8 +66,8 @@
     editingId = t.id
     editBuf = {
       name: t.name,
-      roles: (t.roles ?? []).join(', '),
-      skills: (t.skills ?? []).join(', '),
+      roles: Array.isArray(t.roles) ? [...t.roles] : [],
+      skills: Array.isArray(t.skills) ? [...t.skills] : [],
       replicas: t.replicas ?? 1,
       autostart: !!t.autostart,
     }
@@ -73,8 +80,8 @@
       await updateAgentTemplate(t.id, {
         ...t,
         name: editBuf.name.trim(),
-        roles: splitCsv(editBuf.roles),
-        skills: splitCsv(editBuf.skills),
+        roles: editBuf.roles,
+        skills: editBuf.skills,
         replicas: Number(editBuf.replicas) || 0,
         autostart: editBuf.autostart,
       })
@@ -116,8 +123,8 @@
   {#if creating}
     <div class="mb-4 p-3 bg-surface-800 rounded border border-surface-600 flex flex-col gap-2">
       <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm" placeholder="Template name" bind:value={buf.name} />
-      <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm" placeholder="roles (comma-separated)" bind:value={buf.roles} />
-      <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm" placeholder="skills (comma-separated)" bind:value={buf.skills} />
+      <MultiSelect bind:value={buf.roles} options={availRoles} placeholder="roles" />
+      <MultiSelect bind:value={buf.skills} options={availSkills} placeholder="skills" />
       <div class="flex items-center gap-3 flex-wrap">
         <label class="flex items-center gap-2 text-xs text-gray-400">Replicas
           <input type="number" min="0" class="w-16 bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm" bind:value={buf.replicas} />
@@ -144,8 +151,8 @@
             <!-- Edit form (Bug 7: templates were not editable) -->
             <div class="flex flex-col gap-2">
               <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm" placeholder="Template name" bind:value={editBuf.name} />
-              <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm" placeholder="roles (comma-separated)" bind:value={editBuf.roles} />
-              <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm" placeholder="skills (comma-separated)" bind:value={editBuf.skills} />
+              <MultiSelect bind:value={editBuf.roles} options={availRoles} placeholder="roles" />
+              <MultiSelect bind:value={editBuf.skills} options={availSkills} placeholder="skills" />
               <div class="flex items-center gap-3 flex-wrap">
                 <label class="flex items-center gap-2 text-xs text-gray-400">Replicas
                   <input type="number" min="0" class="w-16 bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm" bind:value={editBuf.replicas} />

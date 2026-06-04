@@ -122,13 +122,26 @@ func (s *Server) handleRoleDetail(w http.ResponseWriter, r *http.Request) {
 			api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
 			return
 		}
+		oldName := rd.Name
 		if !s.decodeJSON(w, r, rd) {
 			return
 		}
 		rd.ID = id
+		if rd.Name == "" {
+			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, "name is required")
+			return
+		}
 		if err := s.db.UpdateRoleDefinition(r.Context(), rd); err != nil {
 			s.internalError(w, err)
 			return
+		}
+		// Renaming a role: cascade the new name to every reference so providers,
+		// agents, templates, and tasks keep pointing at this role.
+		if rd.Name != oldName {
+			if err := s.db.RenameRoleReferences(r.Context(), oldName, rd.Name); err != nil {
+				s.internalError(w, err)
+				return
+			}
 		}
 		s.router.ReloadFromDB(s.db)
 		api.WriteJSON(w, http.StatusOK, rd)

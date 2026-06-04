@@ -74,6 +74,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - focus on the provided files per task and only explore the codebase when necessary
 - you are running on windows, you cannot install any software in your sandbox, so don't even try
 - you can only verify by looking at the code or asking me to run tests for you
+- use id's as primary keys or references in tables instead of names
 
 
 <!-- code-review-graph MCP tools -->

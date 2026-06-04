@@ -1,9 +1,11 @@
 <script>
   import { onMount } from 'svelte'
   import { toasts } from '../lib/stores.js'
-  import { listSkills, createSkill, updateSkill, deleteSkill, seedSkills } from '../lib/api.js'
+  import { listSkills, createSkill, updateSkill, deleteSkill, seedSkills, getMetaTools } from '../lib/api.js'
+  import MultiSelect from '../components/MultiSelect.svelte'
 
   let skills = $state([])
+  let availTools = $state([])
   let loading = $state(true)
   let editing = $state(null) // skill id being edited, or 'new'
   let buf = $state(emptyBuf())
@@ -11,7 +13,7 @@
   function emptyBuf() {
     return {
       name: '', label: '', description: '', prompt_fragment: '',
-      context_include: '', context_exclude: '', allowed_tools: '', enabled: true,
+      context_include: '', context_exclude: '', allowed_tools: [], enabled: true,
     }
   }
   const joinTags  = (a) => (Array.isArray(a) ? a.join(' ') : '')
@@ -19,7 +21,11 @@
 
   async function load() {
     loading = true
-    try { skills = await listSkills() || [] }
+    try {
+      const [sk, ts] = await Promise.all([listSkills(), getMetaTools().catch(() => [])])
+      skills = sk || []
+      availTools = Array.isArray(ts) ? ts : []
+    }
     catch (e) { toasts.error('Failed to load skills: ' + e.message) }
     finally { loading = false }
   }
@@ -33,7 +39,7 @@
       prompt_fragment: s.prompt_fragment,
       context_include: joinTags(s.context_include),
       context_exclude: joinTags(s.context_exclude),
-      allowed_tools: joinTags(s.allowed_tools),
+      allowed_tools: Array.isArray(s.allowed_tools) ? [...s.allowed_tools] : [],
       enabled: s.enabled,
     }
   }
@@ -46,7 +52,7 @@
       prompt_fragment: buf.prompt_fragment,
       context_include: splitTags(buf.context_include),
       context_exclude: splitTags(buf.context_exclude),
-      allowed_tools: splitTags(buf.allowed_tools),
+      allowed_tools: buf.allowed_tools,
       enabled: buf.enabled,
     }
     try {
@@ -97,7 +103,7 @@
       <div class="grid grid-cols-3 gap-3">
         <input class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm" placeholder="context include (space-separated)" bind:value={buf.context_include} />
         <input class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm" placeholder="context exclude" bind:value={buf.context_exclude} />
-        <input class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm" placeholder="allowed tools" bind:value={buf.allowed_tools} />
+        <MultiSelect bind:value={buf.allowed_tools} options={availTools} placeholder="allowed tools" />
       </div>
       <div class="flex justify-end gap-2">
         <button class="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200" onclick={cancel}>Cancel</button>

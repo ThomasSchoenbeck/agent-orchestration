@@ -14,9 +14,10 @@ vi.mock('../lib/api.js', () => ({
   seedRoles:         vi.fn(),
   previewRolePrompt: vi.fn(),
   listProviders:     vi.fn(),
+  getMetaTools:      vi.fn(),
 }))
 
-import { listRoles, listProviders, createRole } from '../lib/api.js'
+import { listRoles, listProviders, createRole, getMetaTools } from '../lib/api.js'
 
 const PROVIDERS = [
   { id: 'p1', name: 'gpt-4o',   roles: ['planner', 'reviewer'], enabled: true },
@@ -35,6 +36,10 @@ beforeEach(() => {
   listRoles.mockResolvedValue([ROLE])
   listProviders.mockResolvedValue(PROVIDERS)
   createRole.mockResolvedValue({ id: 'r2', ...ROLE, name: 'new-role' })
+  getMetaTools.mockResolvedValue([
+    { value: 'read_file', label: 'read_file' },
+    { value: 'write_file', label: 'write_file' },
+  ])
 })
 
 describe('Roles — rendering', () => {
@@ -136,5 +141,22 @@ describe('Roles — provider dropdown filtering', () => {
       const select = screen.getByRole('combobox')
       expect(select.value).toBe('p1')
     })
+  })
+})
+
+describe('Roles — rename (Bug 9)', () => {
+  it('allows editing the role name when editing an existing role', async () => {
+    render(Roles)
+    await waitFor(() => screen.getByText('Planner'))
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Edit'))
+
+    const nameInput = screen.getByDisplayValue('planner')
+    expect(nameInput).not.toHaveAttribute('readonly')
+
+    await user.clear(nameInput)
+    await user.type(nameInput, 'builder')
+    expect(nameInput.value).toBe('builder')
   })
 })

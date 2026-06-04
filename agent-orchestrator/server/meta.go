@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"agent-orchestrator/api"
+	"agent-orchestrator/tools"
 )
 
 // metaItem describes a task type or agent role.
@@ -73,6 +74,28 @@ func (s *Server) handleMetaSkills(w http.ResponseWriter, r *http.Request) {
 			label = d.Name
 		}
 		items = append(items, metaItem{Value: d.Name, Label: label, Description: d.Description})
+	}
+	api.WriteJSON(w, http.StatusOK, items)
+}
+
+// handleMetaTools returns the available code tool names so the UI can offer a
+// searchable multiselect for role/skill allowed_tools instead of free text.
+func (s *Server) handleMetaTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	reg := tools.NewRegistry()
+	_ = tools.RegisterCodeTools(reg)
+	_ = tools.RegisterTaskTools(reg, s.db)
+	_ = tools.RegisterPlanTools(reg, s.db)
+	_ = tools.RegisterContextTools(reg, s.db)
+	_ = tools.RegisterCommentTools(reg, s.db)
+
+	defs := reg.List()
+	items := make([]metaItem, 0, len(defs))
+	for _, d := range defs {
+		items = append(items, metaItem{Value: d.Name, Label: d.Name, Description: d.Description})
 	}
 	api.WriteJSON(w, http.StatusOK, items)
 }

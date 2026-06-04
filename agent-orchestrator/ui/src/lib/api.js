@@ -149,6 +149,7 @@ export const getTaskCost = (taskId) => get(`/api/tasks/${taskId}/cost`)
 
 // ── Meta (enumerations) ──────────────────────────────────────────────────────
 export const getTaskRoles = () => get('/api/meta/task-roles')
+export const getMetaTools = () => get('/api/meta/tools')
 
 // ── Conversations ───────────────────────────────────────────────────────────
 export const listConversations = (params = {}) => {

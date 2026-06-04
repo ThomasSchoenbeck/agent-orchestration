@@ -69,6 +69,7 @@ func (s *Server) registerHandlers() {
 	// Meta (enumerations)
 	s.mux.HandleFunc("/api/meta/task-roles", s.handleMetaTaskRoles)
 	s.mux.HandleFunc("/api/meta/skills", s.handleMetaSkills)
+	s.mux.HandleFunc("/api/meta/tools", s.handleMetaTools)
 
 	// Metrics
 	s.mux.HandleFunc("/api/metrics", s.handleMetrics)
