@@ -938,15 +938,15 @@ func TestUnqueueTask(t *testing.T) {
 	var task db.Task
 	_ = json.Unmarshal(tw.Body.Bytes(), &task)
 
-	// Unqueue from BACKLOG — expect 200 and status BACKLOG.
+	// Unqueue from BACKLOG — expect 200 and status UNQUEUED (parked).
 	uw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/unqueue", nil)
 	if uw.Code != http.StatusOK {
 		t.Fatalf("unqueue: expected 200, got %d: %s", uw.Code, uw.Body.String())
 	}
 	var unqueued db.Task
 	_ = json.Unmarshal(uw.Body.Bytes(), &unqueued)
-	if unqueued.Status != db.TaskStatusBacklog {
-		t.Errorf("unqueue: expected status %s, got %s", db.TaskStatusBacklog, unqueued.Status)
+	if unqueued.Status != db.TaskStatusUnqueued {
+		t.Errorf("unqueue: expected status %s, got %s", db.TaskStatusUnqueued, unqueued.Status)
 	}
 }
 
@@ -968,15 +968,15 @@ func TestUnqueueTask_InvalidStatus(t *testing.T) {
 	_ = json.Unmarshal(aw.Body.Bytes(), &regResp)
 	do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/claim", map[string]string{"agent_id": regResp["agent_id"]})
 
-	// DEVELOPING is now allowed — unqueue must succeed and reset to BACKLOG.
+	// DEVELOPING is now allowed — unqueue must succeed and park as UNQUEUED.
 	uw := do(t, srv, http.MethodPost, "/api/tasks/"+task.ID+"/unqueue", nil)
 	if uw.Code != http.StatusOK {
 		t.Fatalf("unqueue DEVELOPING: expected 200, got %d: %s", uw.Code, uw.Body.String())
 	}
 	var unqueued db.Task
 	_ = json.Unmarshal(uw.Body.Bytes(), &unqueued)
-	if unqueued.Status != db.TaskStatusBacklog {
-		t.Errorf("unqueue DEVELOPING: expected BACKLOG, got %s", unqueued.Status)
+	if unqueued.Status != db.TaskStatusUnqueued {
+		t.Errorf("unqueue DEVELOPING: expected UNQUEUED, got %s", unqueued.Status)
 	}
 	if unqueued.AssignedAgentID != "" {
 		t.Errorf("unqueue DEVELOPING: expected AssignedAgentID cleared, got %s", unqueued.AssignedAgentID)

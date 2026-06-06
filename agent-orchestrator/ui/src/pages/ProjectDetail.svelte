@@ -9,7 +9,9 @@
     listRequirements, createRequirement, updateRequirement, deleteRequirement,
     listFeatures, createFeature, updateFeature, deleteFeature,
     initRepo, listBranches, deleteBranch, commitFiles, listCommits,
+    resyncProjectScope,
   } from '../lib/api.js'
+  import { roleLabel } from '../lib/roles.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
   import AssistantSidebar from '../components/AssistantSidebar.svelte'
   import Skeleton from '../components/Skeleton.svelte'
@@ -229,6 +231,7 @@
   // ── Helpers ───────────────────────────────────────────────────────────────
   const statusColors = {
     BACKLOG:           'bg-blue-900 text-blue-300',
+    UNQUEUED:          'bg-gray-700 text-gray-300',
     DEVELOPING:        'bg-orange-900 text-orange-300',
     AWAITING_REVIEW:   'bg-yellow-900 text-yellow-300',
     REVIEWING:         'bg-purple-900 text-purple-300',
@@ -353,14 +356,10 @@
   async function requestScopeResync() {
     resyncing = true
     try {
-      // Enqueue a planner task that reconciles scope against the description.
-      await createTask({
-        project_id: projectId,
-        role:       'planner',
-        priority:   8,
-        payload:    { mode: 'sync', title: 'Re-sync project scope' },
-      })
-      toasts.success('Scope re-sync requested — a planner will reconcile it')
+      // The server owns the re-sync instructions (orchestrator.resync_prompt
+      // setting) and enqueues the orchestrator task.
+      await resyncProjectScope(projectId)
+      toasts.success('Scope re-sync requested — an orchestrator will reconcile it')
       await loadTasks()
     } catch (e) {
       toasts.error('Could not request re-sync: ' + e.message)
@@ -447,6 +446,15 @@
       await loadTasks()
     } catch (e) {
       toasts.error('Update failed: ' + e.message)
+    }
+  }
+
+  async function changeTaskRole(id, role) {
+    try {
+      await updateTask(id, { role })
+      await loadTasks()
+    } catch (e) {
+      toasts.error('Role change failed: ' + e.message)
     }
   }
 
@@ -1061,22 +1069,33 @@
                       {t.status}
                     </span>
                     <span class="text-xs text-gray-500 bg-surface-700 px-1.5 py-0.5 rounded">{t.type}</span>
-                    <span class="text-xs text-gray-600">{t.role}</span>
+                    <span class="text-xs text-gray-600">{roleLabel(t.role, taskRoles)}</span>
                   </div>
                   {#if t.payload?.description}
                     <p class="text-xs text-gray-400 mt-1 line-clamp-2">{t.payload.description}</p>
                   {/if}
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
+                  <select
+                    class="text-xs bg-surface-700 border border-surface-600 rounded px-1 py-0.5 text-gray-300 focus:outline-none focus:border-accent"
+                    value={roleLabel(t.role, taskRoles)}
+                    onclick={(e) => e.stopPropagation()}
+                    onchange={(e) => { e.stopPropagation(); changeTaskRole(t.id, e.currentTarget.value) }}
+                    title="Change role"
+                  >
+                    {#each taskRoles as tr}
+                      <option value={tr.value}>{tr.label || tr.value}</option>
+                    {/each}
+                  </select>
                   {#if t.status === 'BACKLOG'}
                     <button
                       class="text-xs text-orange-400 hover:text-orange-300 transition-colors"
                       onclick={(e) => { e.stopPropagation(); unqueueTaskAction(t.id) }}
                     >Unqueue</button>
-                  {:else if t.status !== 'COMPLETED'}
+                  {:else if t.status === 'UNQUEUED' || t.status === 'FAILED'}
                     <button
                       class="text-xs text-yellow-400 hover:text-yellow-300 transition-colors"
-                      onclick={(e) => { e.stopPropagation(); (t.status === 'FAILED' || t.status === 'COMPLETED') ? queueTaskAction(t.id) : unqueueTaskAction(t.id) }}
+                      onclick={(e) => { e.stopPropagation(); queueTaskAction(t.id) }}
                     >Queue</button>
                   {/if}
                   <button

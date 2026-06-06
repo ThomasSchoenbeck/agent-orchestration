@@ -163,3 +163,14 @@ func (c *ServerClient) CompleteProject(ctx context.Context, projectID, summary s
 	}
 	return resp, nil
 }
+
+// ListRoles fetches the enabled agent role definitions over HTTP. Used to tell
+// planning agents which roles exist so they only assign valid roles to work
+// packages.
+func (c *ServerClient) ListRoles(ctx context.Context) ([]*db.RoleDefinition, error) {
+	var roles []*db.RoleDefinition
+	if err := c.get(ctx, "/api/roles", &roles); err != nil {
+		return nil, err
+	}
+	return roles, nil
+}

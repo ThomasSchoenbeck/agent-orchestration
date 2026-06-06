@@ -277,6 +277,11 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if sub == "resync" {
+		s.handleProjectResync(w, r, id)
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		p, err := s.db.GetProject(r.Context(), id)
@@ -810,7 +815,7 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.releaseTaskResources(t)
-		t.Status = db.TaskStatusBacklog
+		t.Status = db.TaskStatusUnqueued
 		t.AssignedAgentID = ""
 		if err := s.db.UpdateTask(r.Context(), t); err != nil {
 			s.internalError(w, err)
@@ -970,6 +975,16 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			}
 			if req.Payload != nil {
 				t.Payload = req.Payload
+			}
+			if req.Role != nil {
+				t.Role = s.resolveTaskRole(r.Context(), *req.Role)
+			}
+			if req.ReviewRole != nil {
+				if resolved, rerr := s.db.ResolveRoleRefs(r.Context(), []string{*req.ReviewRole}); rerr == nil {
+					t.ReviewRole = resolved[0]
+				} else {
+					t.ReviewRole = *req.ReviewRole
+				}
 			}
 			if err := s.db.UpdateTask(r.Context(), t); err != nil {
 				s.internalError(w, err)

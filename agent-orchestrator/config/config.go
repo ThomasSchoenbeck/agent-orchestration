@@ -26,6 +26,17 @@ type Config struct {
 	RoleDefinitions []RoleDefinitionConfig    `yaml:"role_definitions"`
 	// AgentTemplates seed server-managed agent templates into the DB on first run.
 	AgentTemplates  []AgentTemplateConfig     `yaml:"agent_templates"`
+	// Orchestrator holds orchestrator-role behaviour seeded into platform settings.
+	Orchestrator    OrchestratorConfig         `yaml:"orchestrator"`
+}
+
+// OrchestratorConfig configures the orchestrator role's built-in behaviour.
+// Values seed platform_settings on first run; the Settings page is the source
+// of truth afterwards (config changes do not override an existing DB value).
+type OrchestratorConfig struct {
+	// ResyncPrompt is the task description handed to the orchestrator when the
+	// project "Re-sync scope" action is triggered. Empty → the built-in default.
+	ResyncPrompt string `yaml:"resync_prompt"`
 }
 
 // ProviderModelConfig declares one model within a provider: its supported roles,

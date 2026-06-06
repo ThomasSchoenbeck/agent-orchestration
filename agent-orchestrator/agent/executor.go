@@ -641,7 +641,7 @@ func defaultToolsForRole(role string) []string {
 	case "reviewer":
 		return []string{"read_file", "list_files", "task_comment"}
 	case "orchestrator":
-		return []string{"list_tasks", "create_work_package", "plan_project", "query_context", "save_context", "task_comment"}
+		return []string{"list_tasks", "create_work_package", "plan_project", "bootstrap_project", "sync_scope", "complete_project", "query_context", "save_context", "task_comment"}
 	default:
 		return nil // unknown role: send all tools
 	}
@@ -739,6 +739,19 @@ func (e *Executor) planningContext(ctx context.Context, projectID string) string
 			sb.WriteString("- " + f.Title + " (" + f.Status + ")\n")
 		}
 		sb.WriteString("\n")
+	}
+	if roles, err := e.client.ListRoles(ctx); err == nil && len(roles) > 0 {
+		var names []string
+		for _, r := range roles {
+			if r.Enabled {
+				names = append(names, r.Name)
+			}
+		}
+		if len(names) > 0 {
+			sb.WriteString("Available agent roles for work packages (use one of these exact names for the \"role\" field): ")
+			sb.WriteString(strings.Join(names, ", "))
+			sb.WriteString("\n\n")
+		}
 	}
 	return strings.TrimSpace(sb.String())
 }

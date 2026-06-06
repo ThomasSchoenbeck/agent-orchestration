@@ -43,9 +43,11 @@ type CreateTaskRequest struct {
 }
 
 type UpdateTaskRequest struct {
-	Status   *string                `json:"status,omitempty"`
-	Priority *int                   `json:"priority,omitempty"`
-	Payload  map[string]interface{} `json:"payload,omitempty"`
+	Status     *string                `json:"status,omitempty"`
+	Priority   *int                   `json:"priority,omitempty"`
+	Payload    map[string]interface{} `json:"payload,omitempty"`
+	Role       *string                `json:"role,omitempty"`
+	ReviewRole *string                `json:"review_role,omitempty"`
 }
 
 type SubmitTaskResultRequest struct {

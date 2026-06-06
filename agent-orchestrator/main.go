@@ -298,6 +298,11 @@ func runServer(args []string) error {
 		log.Printf("warning: seed retention config: %v", err)
 	}
 
+	// Seed the orchestrator re-sync prompt (config value wins on first run only).
+	if err := database.SeedResyncPrompt(startCtx, cfg.Orchestrator.ResyncPrompt); err != nil {
+		log.Printf("warning: seed resync prompt: %v", err)
+	}
+
 	srv := server.New(cfg, database, llmReg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

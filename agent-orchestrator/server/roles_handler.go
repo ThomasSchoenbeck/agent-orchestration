@@ -26,7 +26,7 @@ func defaultToolsForRole(name string) []string {
 	case "reviewer":
 		return []string{"read_file", "list_files", "task_comment"}
 	case "orchestrator":
-		return []string{"list_tasks", "create_work_package", "plan_project", "query_context", "save_context", "task_comment"}
+		return []string{"list_tasks", "create_work_package", "plan_project", "bootstrap_project", "sync_scope", "complete_project", "query_context", "save_context", "task_comment"}
 	default:
 		return nil
 	}

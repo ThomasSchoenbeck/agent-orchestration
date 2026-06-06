@@ -19,6 +19,7 @@ import {
   listBranches,
   deleteBranch,
   getCostBreakdown,
+  resyncProjectScope,
 } from '../lib/api.js'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -318,5 +319,21 @@ describe('cost breakdown', () => {
     const res = await getCostBreakdown('agent_role')
     expect(fetch).toHaveBeenCalledWith('/api/metrics/costs?group_by=agent_role', expect.anything())
     expect(res[0].key).toBe('agent')
+  })
+})
+
+describe('resyncProjectScope', () => {
+  it('POST /api/projects/:id/resync', async () => {
+    stubFetch({ id: 't1', role: 'orchestrator' })
+    const res = await resyncProjectScope('p1')
+    const [url, opts] = fetch.mock.calls[0]
+    expect(url).toBe('/api/projects/p1/resync')
+    expect(opts.method).toBe('POST')
+    expect(res).toEqual({ id: 't1', role: 'orchestrator' })
+  })
+
+  it('throws on non-ok response', async () => {
+    stubFetchError('project not found')
+    await expect(resyncProjectScope('nope')).rejects.toThrow('project not found')
   })
 })

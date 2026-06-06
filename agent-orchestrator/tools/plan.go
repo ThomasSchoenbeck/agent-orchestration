@@ -26,10 +26,32 @@ func RegisterPlanTools(reg *Registry, backend ToolBackend) error {
 	return nil
 }
 
+// normalizeJSONArg returns a parseable JSON string from an argument that may be
+// over-escaped. Smaller models sometimes emit a JSON array as a string with the
+// inner quotes backslash-escaped (e.g. `[{\"title\":...}]`), which is invalid
+// JSON at the top level. When the value does not parse as-is, this strips one
+// level of escaping by decoding it as a JSON string literal and returns the
+// result. Returns the trimmed input unchanged when no recovery applies.
+func normalizeJSONArg(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+	var probe interface{}
+	if json.Unmarshal([]byte(s), &probe) == nil {
+		return s // already valid JSON
+	}
+	var inner string
+	if json.Unmarshal([]byte(`"`+s+`"`), &inner) == nil {
+		return strings.TrimSpace(inner)
+	}
+	return s
+}
+
 // decodeWorkPackages parses a JSON array (or single object) of work packages
 // into the backend input type.
 func decodeWorkPackages(s string) ([]WorkPackageInput, error) {
-	s = strings.TrimSpace(s)
+	s = normalizeJSONArg(s)
 	if s == "" {
 		return nil, fmt.Errorf("work_packages is empty")
 	}
@@ -50,7 +72,7 @@ func decodeWorkPackages(s string) ([]WorkPackageInput, error) {
 // decodeScopeItems parses a JSON array (or single object) of scope items into
 // the backend input type. An empty string yields no items (the field is optional).
 func decodeScopeItems(s string) ([]ScopeItemInput, error) {
-	s = strings.TrimSpace(s)
+	s = normalizeJSONArg(s)
 	if s == "" {
 		return nil, nil
 	}
@@ -90,10 +112,7 @@ func planProjectTool(backend ToolBackend) Definition {
 			if err != nil {
 				return nil, err
 			}
-			wpJSON, err := strArg(args, "work_packages")
-			if err != nil {
-				return nil, err
-			}
+			wpJSON := jsonArg(args, "work_packages")
 			packages, err := decodeWorkPackages(wpJSON)
 			if err != nil {
 				return nil, fmt.Errorf("plan_project: %w", err)
@@ -128,11 +147,11 @@ func bootstrapProjectTool(backend ToolBackend) Definition {
 			if err != nil {
 				return nil, err
 			}
-			reqs, err := decodeScopeItems(strArgOpt(args, "requirements"))
+			reqs, err := decodeScopeItems(jsonArg(args, "requirements"))
 			if err != nil {
 				return nil, fmt.Errorf("bootstrap_project: %w", err)
 			}
-			feats, err := decodeScopeItems(strArgOpt(args, "features"))
+			feats, err := decodeScopeItems(jsonArg(args, "features"))
 			if err != nil {
 				return nil, fmt.Errorf("bootstrap_project: %w", err)
 			}
@@ -164,11 +183,11 @@ func syncScopeTool(backend ToolBackend) Definition {
 			if err != nil {
 				return nil, err
 			}
-			reqs, err := decodeScopeItems(strArgOpt(args, "requirements"))
+			reqs, err := decodeScopeItems(jsonArg(args, "requirements"))
 			if err != nil {
 				return nil, fmt.Errorf("sync_scope: %w", err)
 			}
-			feats, err := decodeScopeItems(strArgOpt(args, "features"))
+			feats, err := decodeScopeItems(jsonArg(args, "features"))
 			if err != nil {
 				return nil, fmt.Errorf("sync_scope: %w", err)
 			}

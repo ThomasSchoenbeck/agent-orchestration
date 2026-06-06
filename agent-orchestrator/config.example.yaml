@@ -248,3 +248,11 @@ storage:
 merge:
   squash: true          # collapse the branch into a single commit on main. Default: true
   delete_branch: true   # delete the source branch after a successful merge. Default: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Orchestrator — seeds platform_settings at startup (UI changes take precedence).
+# ─────────────────────────────────────────────────────────────────────────────
+orchestrator:
+  # Task description handed to the orchestrator on a project "Re-sync scope".
+  # Empty → built-in default. Editable later on the Settings page (DB wins).
+  resync_prompt: ""

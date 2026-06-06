@@ -111,12 +111,12 @@ func (d *Database) UpdateTask(ctx context.Context, t *Task) error {
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE tasks SET status=?, priority=?, assigned_agent_id=?, payload=?,
 		 result=?, attempts=?, branch_head_sha=?, worktree_path=?, assigned_port=?,
-		 review_role=?, focus=?, updated_at=?, started_at=?, completed_at=?
+		 role=?, review_role=?, focus=?, updated_at=?, started_at=?, completed_at=?
 		 WHERE id=?`,
 		t.Status, t.Priority, nullableStr(t.AssignedAgentID),
 		marshalJSON(t.Payload), nullableJSON(t.Result), t.Attempts,
 		t.BranchHeadSHA, t.WorktreePath, nullableInt(t.AssignedPort),
-		t.ReviewRole, marshalJSONArray(t.Focus), t.UpdatedAt, nullableTime(t.StartedAt), nullableTime(t.CompletedAt),
+		t.Role, t.ReviewRole, marshalJSONArray(t.Focus), t.UpdatedAt, nullableTime(t.StartedAt), nullableTime(t.CompletedAt),
 		t.ID,
 	)
 	if err == nil {

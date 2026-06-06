@@ -157,3 +157,22 @@ func intArgOpt(args map[string]interface{}, key string, defaultVal int) int {
 	}
 	return defaultVal
 }
+
+// jsonArg returns the argument as a JSON string, accepting either a string the
+// model already stringified, or a native array/object the model passed directly
+// (smaller models commonly emit structured JSON instead of a JSON-encoded
+// string). Returns "" when the key is absent.
+func jsonArg(args map[string]interface{}, key string) string {
+	v, ok := args[key]
+	if !ok {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}

@@ -37,6 +37,7 @@ export const updateProject  = (id, d)  => put(`/api/projects/${id}`, d)
 export const deleteProject  = (id)     => del(`/api/projects/${id}`)
 export const projectChat = (projectId, data) => post(`/api/projects/${projectId}/chat`, data)
 export const taskChat    = (taskId, data)    => post(`/api/tasks/${taskId}/chat`, data)
+export const resyncProjectScope = (projectId) => post(`/api/projects/${projectId}/resync`)
 
 // ── Project git file/tree/diff ───────────────────────────────────────────────
 export const initRepo      = (projectId)                => post(`/api/projects/${projectId}/init-repo`)

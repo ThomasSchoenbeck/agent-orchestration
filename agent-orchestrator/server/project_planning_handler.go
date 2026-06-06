@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -29,6 +30,22 @@ type scopeItemBody struct {
 	Body  string `json:"body"`
 }
 
+// resolveTaskRole maps an LLM-supplied role name to its stored id, matching the
+// UI task-creation and agent-registration paths (which store role refs as ids).
+// Without this, work packages created with a role name like "worker" never match
+// an agent whose roles are stored as ids, so they are never claimed. Empty roles
+// default to "worker"; unknown names are returned unchanged.
+func (s *Server) resolveTaskRole(ctx context.Context, role string) string {
+	role = strings.TrimSpace(role)
+	if role == "" {
+		role = "worker"
+	}
+	if resolved, err := s.db.ResolveRoleRefs(ctx, []string{role}); err == nil {
+		return resolved[0]
+	}
+	return role
+}
+
 // handleAgentProjectDetail intercepts the agent-only planning POST actions and
 // delegates everything else to the shared handleProjectDetail.
 func (s *Server) handleAgentProjectDetail(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +71,50 @@ func (s *Server) handleAgentProjectDetail(w http.ResponseWriter, r *http.Request
 		}
 	}
 	s.handleProjectDetail(w, r)
+}
+
+// handleProjectResync enqueues an orchestrator task that reconciles a project's
+// scope against its description. The task description comes from the
+// orchestrator.resync_prompt platform setting (seeded from config / default),
+// so the guidance is owned by the server rather than the UI button.
+//
+// POST /api/projects/{id}/resync
+func (s *Server) handleProjectResync(w http.ResponseWriter, r *http.Request, projectID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	ctx := r.Context()
+	if _, err := s.db.GetProject(ctx, projectID); err != nil {
+		api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, "project not found")
+		return
+	}
+
+	description := db.DefaultResyncPrompt
+	if setting, err := s.db.GetSetting(ctx, db.SettingKeyResyncPrompt); err == nil && setting.Value != "" {
+		description = setting.Value
+	}
+
+	role := "orchestrator"
+	if resolved, rerr := s.db.ResolveRoleRefs(ctx, []string{role}); rerr == nil {
+		role = resolved[0]
+	}
+
+	task := &db.Task{
+		ProjectID: projectID,
+		Role:      role,
+		Priority:  8,
+		Payload: map[string]interface{}{
+			"mode":        "sync",
+			"title":       "Re-sync project scope",
+			"description": description,
+		},
+	}
+	if err := s.db.CreateTask(ctx, task); err != nil {
+		s.internalError(w, err)
+		return
+	}
+	api.WriteJSON(w, http.StatusCreated, task)
 }
 
 // POST /api/agent/projects/{id}/plan
@@ -92,10 +153,7 @@ func (s *Server) handlePlanProject(w http.ResponseWriter, r *http.Request, proje
 		if priority == 0 {
 			priority = 5
 		}
-		role := wp.Role
-		if role == "" {
-			role = "worker"
-		}
+		role := s.resolveTaskRole(ctx, wp.Role)
 		task := &db.Task{
 			ProjectID: projectID, Role: role, Status: db.TaskStatusBacklog, Priority: priority,
 			Payload: map[string]interface{}{"title": wp.Title, "description": wp.Description},
@@ -126,10 +184,7 @@ func (s *Server) handleCreateWorkPackage(w http.ResponseWriter, r *http.Request,
 		api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, "title and description are required")
 		return
 	}
-	role := wp.Role
-	if role == "" {
-		role = "worker"
-	}
+	role := s.resolveTaskRole(r.Context(), wp.Role)
 	priority := wp.Priority
 	if priority == 0 {
 		priority = 5

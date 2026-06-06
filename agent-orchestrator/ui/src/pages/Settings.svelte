@@ -250,6 +250,30 @@
       </div>
     </section>
 
+    <!-- Orchestrator -->
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-gray-200 mb-1">Orchestrator</h2>
+      <p class="text-xs text-gray-400 mb-4">Behaviour for the orchestrator role.</p>
+
+      <div class="p-3 bg-surface-800 rounded border border-surface-600">
+        <div class="text-sm text-gray-200 font-medium">Re-sync scope prompt</div>
+        <div class="text-xs text-gray-500 mt-0.5 mb-2">Task description handed to the orchestrator when a project's "Re-sync scope" action runs. It should tell the agent to read the description, reconcile requirements and features, then create work packages.</div>
+        <textarea
+          rows="6"
+          class="w-full bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 font-mono focus:outline-none focus:border-accent"
+          value={settingVal('orchestrator.resync_prompt')}
+          oninput={(e) => { const s = settings['orchestrator.resync_prompt']; if (s) s.value = e.currentTarget.value }}
+        ></textarea>
+        <div class="flex justify-end mt-2">
+          <button
+            class="px-3 py-1 bg-accent hover:bg-accent-hover text-white text-xs rounded transition-colors disabled:opacity-40"
+            disabled={saving}
+            onclick={() => saveDefault('orchestrator.resync_prompt')}
+          >Save</button>
+        </div>
+      </div>
+    </section>
+
     <!-- Agent Log Retention -->
     <section class="mb-8">
       <h2 class="text-base font-semibold text-gray-200 mb-1">Agent Log Retention</h2>

@@ -39,6 +39,7 @@
 
   const statusColors = {
     BACKLOG: "bg-blue-900 text-blue-300",
+    UNQUEUED: "bg-gray-700 text-gray-300",
     DEVELOPING: "bg-orange-900 text-orange-300",
     AWAITING_REVIEW: "bg-yellow-900 text-yellow-300",
     REVIEWING: "bg-purple-900 text-purple-300",
@@ -465,7 +466,7 @@
             onchange={loadTasks}
           >
             <option value="">All statuses</option>
-            {#each ["BACKLOG", "DEVELOPING", "AWAITING_REVIEW", "REVIEWING", "AWAITING_REVISION", "AWAITING_MERGE", "MERGING", "COMPLETED", "FAILED"] as s}
+            {#each ["BACKLOG", "UNQUEUED", "DEVELOPING", "AWAITING_REVIEW", "REVIEWING", "AWAITING_REVISION", "AWAITING_MERGE", "MERGING", "COMPLETED", "FAILED"] as s}
               <option value={s}>{s}</option>
             {/each}
           </select>

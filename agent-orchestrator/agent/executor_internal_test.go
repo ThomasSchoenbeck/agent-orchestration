@@ -32,6 +32,21 @@ func TestBuildUserMessage_IncludesProjectID(t *testing.T) {
 	}
 }
 
+func TestDefaultToolsForRole_OrchestratorHasScopeTools(t *testing.T) {
+	got := defaultToolsForRole("orchestrator")
+	set := make(map[string]bool, len(got))
+	for _, name := range got {
+		set[name] = true
+	}
+	// The orchestrator runs project re-sync: it must be able to reconcile scope
+	// (requirements/features) and create work packages.
+	for _, want := range []string{"bootstrap_project", "sync_scope", "create_work_package"} {
+		if !set[want] {
+			t.Errorf("orchestrator default tools missing %q; got %v", want, got)
+		}
+	}
+}
+
 func TestIsPlannerTask(t *testing.T) {
 	reg := llm.NewRegistry()
 	reg.Set("p", llm.NewOllamaProvider("p", "http://localhost:11434", "m"))
