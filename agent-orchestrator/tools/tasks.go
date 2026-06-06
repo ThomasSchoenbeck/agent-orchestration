@@ -8,13 +8,13 @@ import (
 )
 
 // RegisterTaskTools registers all task-management tools into reg.
-// These tools allow an agent to list tasks, submit results, and fetch the
-// next available task — all through the database directly.
-func RegisterTaskTools(reg *Registry, database *db.Database) error {
+// These tools list tasks, submit results, and fetch the next available task —
+// all over HTTP via the ToolBackend (no direct database access).
+func RegisterTaskTools(reg *Registry, backend ToolBackend) error {
 	tools := []Definition{
-		listTasksTool(database),
-		submitTaskResultTool(database),
-		getNextTaskTool(database),
+		listTasksTool(backend),
+		submitTaskResultTool(backend),
+		getNextTaskTool(backend),
 	}
 	for _, t := range tools {
 		if err := reg.Register(t); err != nil {
@@ -25,7 +25,7 @@ func RegisterTaskTools(reg *Registry, database *db.Database) error {
 }
 
 // listTasksTool returns a Definition for the list_tasks tool.
-func listTasksTool(database *db.Database) Definition {
+func listTasksTool(backend ToolBackend) Definition {
 	return Definition{
 		Name:        "list_tasks",
 		Description: "List tasks for a project. Optionally filter by status or role.",
@@ -47,7 +47,7 @@ func listTasksTool(database *db.Database) Definition {
 				Role:      strArgOpt(args, "role"),
 				Limit:     intArgOpt(args, "limit", 50),
 			}
-			tasks, err := database.ListTasks(ctx, filters)
+			tasks, err := backend.ListTasks(ctx, filters)
 			if err != nil {
 				return nil, fmt.Errorf("list_tasks: %w", err)
 			}
@@ -60,7 +60,7 @@ func listTasksTool(database *db.Database) Definition {
 }
 
 // submitTaskResultTool returns a Definition for the submit_task_result tool.
-func submitTaskResultTool(database *db.Database) Definition {
+func submitTaskResultTool(backend ToolBackend) Definition {
 	return Definition{
 		Name:        "submit_task_result",
 		Description: "Submit the result of a completed or failed task. Updates the task status and stores the result.",
@@ -92,7 +92,7 @@ func submitTaskResultTool(database *db.Database) Definition {
 				result["error"] = errMsg
 			}
 
-			if err := database.SubmitTaskResult(ctx, taskID, result, status); err != nil {
+			if err := backend.SubmitTaskResult(ctx, taskID, result, status, nil); err != nil {
 				return nil, fmt.Errorf("submit_task_result: %w", err)
 			}
 			return map[string]interface{}{
@@ -105,7 +105,7 @@ func submitTaskResultTool(database *db.Database) Definition {
 }
 
 // getNextTaskTool returns a Definition for the get_next_task tool.
-func getNextTaskTool(database *db.Database) Definition {
+func getNextTaskTool(backend ToolBackend) Definition {
 	return Definition{
 		Name:        "get_next_task",
 		Description: "Fetch the next available task in a queue state (BACKLOG, AWAITING_REVIEW, AWAITING_REVISION, AWAITING_MERGE) matching the given roles. Returns null if no tasks are available.",
@@ -129,7 +129,7 @@ func getNextTaskTool(database *db.Database) Definition {
 				}
 			}
 
-			task, err := database.GetNextTask(ctx, roles)
+			task, err := backend.PeekNextTask(ctx, roles)
 			if err != nil {
 				return nil, fmt.Errorf("get_next_task: %w", err)
 			}

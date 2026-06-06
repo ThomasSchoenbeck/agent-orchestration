@@ -354,6 +354,12 @@ type Metric struct {
 	DurationMs   int       `json:"duration_ms"`
 	Success      bool      `json:"success"`
 	CreatedAt    time.Time `json:"created_at"`
+	// F6 attribution: who/what incurred the cost.
+	Source         string `json:"source,omitempty"`          // "agent" | "chat"
+	ProviderID     string `json:"provider_id,omitempty"`
+	AgentRole      string `json:"agent_role,omitempty"`      // role/type for agent source
+	ConversationID string `json:"conversation_id,omitempty"` // chat source
+	ProjectID      string `json:"project_id,omitempty"`
 }
 
 // --- JSON marshal helpers ---

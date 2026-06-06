@@ -8,7 +8,7 @@
     getTaskRoles,
     listRequirements, createRequirement, updateRequirement, deleteRequirement,
     listFeatures, createFeature, updateFeature, deleteFeature,
-    initRepo, listBranches, commitFiles, listCommits,
+    initRepo, listBranches, deleteBranch, commitFiles, listCommits,
   } from '../lib/api.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
   import AssistantSidebar from '../components/AssistantSidebar.svelte'
@@ -97,6 +97,19 @@
     activeFileRef  = branch
     diffHeadRef    = branch
     await loadBranchCommits()
+  }
+
+  async function handleDeleteBranch(branch) {
+    if (branch === 'main') return
+    if (!confirm(`Delete branch "${branch}"? This cannot be undone.`)) return
+    try {
+      await deleteBranch(projectId, branch)
+      toasts.success(`Deleted branch ${branch}`)
+      if (selectedBranch === branch) selectedBranch = 'main'
+      await loadFileBranches()
+    } catch (e) {
+      toasts.error('Failed to delete branch: ' + e.message)
+    }
   }
 
   function onFileSelect(path, ref) {
@@ -1093,14 +1106,22 @@
               <p class="px-2 py-2 text-xs text-gray-600 italic">No branches</p>
             {:else}
               {#each fileBranches as b}
-                <button
-                  class="w-full text-left px-2 py-1.5 text-xs font-mono truncate transition-colors
-                         {selectedBranch === b
-                           ? 'bg-accent text-white'
-                           : 'text-gray-300 hover:bg-surface-700'}"
-                  title={b}
-                  onclick={() => selectBranch(b)}
-                >{b.startsWith('task/') && b.length > 14 ? 'task/' + b.slice(5, 13) + '…' : b}</button>
+                <div class="flex items-center group transition-colors
+                            {selectedBranch === b ? 'bg-accent' : 'hover:bg-surface-700'}">
+                  <button
+                    class="flex-1 min-w-0 text-left px-2 py-1.5 text-xs font-mono truncate
+                           {selectedBranch === b ? 'text-white' : 'text-gray-300'}"
+                    title={b}
+                    onclick={() => selectBranch(b)}
+                  >{b.startsWith('task/') && b.length > 14 ? 'task/' + b.slice(5, 13) + '…' : b}</button>
+                  {#if b !== 'main'}
+                    <button
+                      class="px-1.5 py-1.5 text-xs text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 shrink-0"
+                      title={'Delete branch ' + b}
+                      onclick={() => handleDeleteBranch(b)}
+                    >✕</button>
+                  {/if}
+                </div>
               {/each}
             {/if}
           </div>

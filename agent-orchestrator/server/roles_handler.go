@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 	"text/template"
@@ -87,16 +86,6 @@ func (s *Server) handleRoleDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	sub := pathSegment(r.URL.Path, "/api/roles/", 1)
 
-	// POST /api/roles/seed
-	if id == "seed" {
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w)
-			return
-		}
-		s.handleRoleSeed(w, r)
-		return
-	}
-
 	// POST /api/roles/:id/preview-prompt
 	if sub == "preview-prompt" {
 		if r.Method != http.MethodPost {
@@ -157,70 +146,6 @@ func (s *Server) handleRoleDetail(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
-}
-
-// handleRoleSeed imports role definitions from the loaded config (idempotent).
-func (s *Server) handleRoleSeed(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	providers, err := s.db.ListProviders(ctx)
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	provByName := make(map[string]*db.Provider, len(providers))
-	for _, p := range providers {
-		provByName[p.Name] = p
-	}
-
-	var toSeed []*db.RoleDefinition
-	for _, rc := range s.cfg.RoleDefinitions {
-		label := rc.Label
-		if label == "" && rc.Name != "" {
-			label = strings.ToUpper(rc.Name[:1]) + rc.Name[1:]
-		}
-		temp := rc.Temperature
-		if temp == 0 {
-			temp = 0.7
-		}
-		maxTok := rc.MaxTokens
-		if maxTok == 0 {
-			maxTok = 4096
-		}
-		tools := rc.AllowedTools
-		if len(tools) == 0 {
-			tools = defaultToolsForRole(rc.Name)
-		}
-		rd := &db.RoleDefinition{
-			Name:           rc.Name,
-			Label:          label,
-			Description:    rc.Description,
-			Capabilities:   rc.Capabilities,
-			AllowedTools:   tools,
-			ContextInclude: rc.ContextInclude,
-			ContextExclude: rc.ContextExclude,
-			SystemPrompt:   rc.SystemPrompt,
-			ModelOverride:  rc.ModelOverride,
-			Temperature:    temp,
-			MaxTokens:      maxTok,
-			Enabled:        true,
-		}
-		if prov, ok := provByName[rc.Provider]; ok {
-			rd.ProviderID = prov.ID
-		}
-		toSeed = append(toSeed, rd)
-	}
-
-	n, err := s.db.SeedRoleDefinitions(ctx, toSeed)
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	if n > 0 {
-		s.router.ReloadFromDB(s.db)
-	}
-	log.Printf("role seed: inserted %d new role definition(s)", n)
-	api.WriteJSON(w, http.StatusOK, map[string]int{"seeded": n})
 }
 
 // handleRolePreviewPrompt renders the system prompt template with provided variables.

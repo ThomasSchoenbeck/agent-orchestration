@@ -21,21 +21,23 @@ type ManagedProcess interface {
 	Done() <-chan struct{} // closed when the process exits
 }
 
-// Launcher spawns an agent process with the given CLI args.
+// Launcher spawns an agent process with the given CLI args and extra environment
+// variables (KEY=VALUE), layered on top of the parent environment.
 type Launcher interface {
-	Launch(args []string) (ManagedProcess, error)
+	Launch(args, env []string) (ManagedProcess, error)
 }
 
 // execLauncher runs the orchestrator's own binary in `agent` mode (Bug 3: the
 // child uses the embedded git server over localhost like any other agent).
 type execLauncher struct{}
 
-func (execLauncher) Launch(args []string) (ManagedProcess, error) {
+func (execLauncher) Launch(args, env []string) (ManagedProcess, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("os.Executable: %w", err)
 	}
 	cmd := exec.Command(exe, args...)
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -91,8 +93,40 @@ type AgentSupervisor struct {
 	relaunchBackoff time.Duration
 	graceTimeout    time.Duration
 
+	// Connection settings injected into spawned co-located agents via env, so
+	// they self-configure over HTTP(S) with no --config and no DB access.
+	spawnToken string // AGENT_AUTH_TOKEN (agents.api_key)
+	spawnCA    string // AGENT_SERVER_CA (server cert path; empty when insecure)
+	spawnURL   string // AGENT_SERVER_URL (scheme honours TLS)
+
 	mu        sync.Mutex
 	instances map[string]map[int]*instance // templateID -> slot -> instance
+}
+
+// SetSpawnEnv configures the connection settings injected into spawned agents.
+// Called before Boot so co-located children can reach and authenticate to the
+// server over HTTP(S) without a config file.
+func (s *AgentSupervisor) SetSpawnEnv(token, caPath, serverURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.spawnToken = token
+	s.spawnCA = caPath
+	s.spawnURL = serverURL
+}
+
+// spawnEnv builds the KEY=VALUE env list for a spawned agent. Caller holds s.mu.
+func (s *AgentSupervisor) spawnEnv() []string {
+	var env []string
+	if s.spawnToken != "" {
+		env = append(env, "AGENT_AUTH_TOKEN="+s.spawnToken)
+	}
+	if s.spawnCA != "" {
+		env = append(env, "AGENT_SERVER_CA="+s.spawnCA)
+	}
+	if s.spawnURL != "" {
+		env = append(env, "AGENT_SERVER_URL="+s.spawnURL)
+	}
+	return env
 }
 
 // NewAgentSupervisor creates a supervisor using the real exec launcher.
@@ -285,6 +319,8 @@ func (s *AgentSupervisor) launchSlotLocked(ctx context.Context, tpl *db.AgentTem
 		})
 	}
 
+	// No --config and no secrets in argv: co-located agents self-configure over
+	// HTTP(S), receiving the token + server cert + URL via env (see spawnEnv).
 	args := []string{
 		"agent",
 		"--name", name,
@@ -293,7 +329,7 @@ func (s *AgentSupervisor) launchSlotLocked(ctx context.Context, tpl *db.AgentTem
 		"--server", s.serverURL,
 		"--mode", "colocated",
 	}
-	proc, err := s.launcher.Launch(args)
+	proc, err := s.launcher.Launch(args, s.spawnEnv())
 	if err != nil {
 		return fmt.Errorf("launch %q: %w", name, err)
 	}

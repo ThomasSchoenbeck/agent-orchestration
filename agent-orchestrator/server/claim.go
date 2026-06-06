@@ -67,8 +67,12 @@ func (s *Server) provisionWorkspace(ctx context.Context, task *db.Task, branchNa
 		slug = project.ID
 	}
 
-	resp.RepoURL = fmt.Sprintf("http://%s:%d/git/%s.git",
-		s.cfg.Server.PublicHost(), s.cfg.Server.Port, slug)
+	scheme := "https"
+	if s.cfg.Server.Insecure {
+		scheme = "http"
+	}
+	resp.RepoURL = fmt.Sprintf("%s://%s:%d/git/%s.git",
+		scheme, s.cfg.Server.PublicHost(), s.cfg.Server.Port, slug)
 	resp.Branch = branchName
 
 	// Log and notify so the user can see the branch immediately after claim.

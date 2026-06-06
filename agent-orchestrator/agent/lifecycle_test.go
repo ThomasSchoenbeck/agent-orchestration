@@ -40,7 +40,7 @@ func TestAgentHonorsStop(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		}
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	t.Cleanup(srv.Close)
 
 	cfg := testConfig()

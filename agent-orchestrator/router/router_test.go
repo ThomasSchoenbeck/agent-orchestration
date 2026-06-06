@@ -589,3 +589,130 @@ func TestRouterProviderLevelFallback(t *testing.T) {
 		t.Errorf("ToolAllowlist = %v, want [read_file list_files]", result.ToolAllowlist)
 	}
 }
+
+// TestRouteByRole_ExposesCapabilities verifies the route carries the role's
+// capabilities so the executor can tell planner (creates_tasks) tasks apart.
+func TestRouteByRole_ExposesCapabilities(t *testing.T) {
+	d := openRouterDB(t)
+	ctx := context.Background()
+	prov := &db.Provider{
+		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
+		ModelName: "gemma3:4b", Enabled: true,
+		Models: []db.ProviderModel{{Name: "gemma3:4b", Roles: []string{"orchestrator"}}},
+	}
+	if err := d.CreateProvider(ctx, prov); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	if err := d.CreateRoleDefinition(ctx, &db.RoleDefinition{
+		Name: "orchestrator", Label: "Orchestrator", ProviderID: prov.ID, Enabled: true,
+		Capabilities: []string{"creates_tasks", "handles_merge"},
+	}); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
+	}
+
+	cfg := &config.Config{Providers: []config.ProviderConfig{}}
+	reg := llm.NewRegistry()
+	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
+	rtr := router.New(cfg, reg)
+	if err := rtr.LoadFromDB(d); err != nil {
+		t.Fatalf("LoadFromDB: %v", err)
+	}
+
+	res, err := rtr.RouteByRole("orchestrator")
+	if err != nil {
+		t.Fatalf("RouteByRole: %v", err)
+	}
+	has := false
+	for _, c := range res.Capabilities {
+		if c == "creates_tasks" {
+			has = true
+		}
+	}
+	if !has {
+		t.Errorf("route capabilities = %v, want creates_tasks", res.Capabilities)
+	}
+}
+
+// TestLoadFromData_MatchesLoadFromDB verifies that LoadFromData (the agent's
+// no-DB path, fed providers/roles fetched over HTTP) resolves roles identically
+// to LoadFromDB for the same provider/role state.
+func TestLoadFromData_MatchesLoadFromDB(t *testing.T) {
+	d := openRouterDB(t)
+	ctx := context.Background()
+
+	models := []db.ProviderModel{
+		{Name: "gemma3:4b", Roles: []string{"worker"}, ToolAllowlist: []string{"write_file", "read_file"}},
+		{Name: "qwen2.5:14b", Roles: []string{"reviewer"}},
+	}
+	prov := &db.Provider{
+		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
+		ModelName: "gemma3:4b", Enabled: true, Models: models,
+	}
+	if err := d.CreateProvider(ctx, prov); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	for _, name := range []string{"worker", "reviewer"} {
+		if err := d.CreateRoleDefinition(ctx, &db.RoleDefinition{
+			Name: name, Label: name, ProviderID: prov.ID, Enabled: true,
+		}); err != nil {
+			t.Fatalf("CreateRoleDefinition(%s): %v", name, err)
+		}
+	}
+
+	newRtr := func() *router.Router {
+		cfg := &config.Config{Providers: []config.ProviderConfig{}}
+		reg := llm.NewRegistry()
+		reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
+		return router.New(cfg, reg)
+	}
+
+	// Router A: loaded straight from the DB.
+	rA := newRtr()
+	if err := rA.LoadFromDB(d); err != nil {
+		t.Fatalf("LoadFromDB: %v", err)
+	}
+
+	// Router B: loaded from in-memory data fetched from the DB (mirrors the agent
+	// fetching providers/roles over HTTP and calling LoadFromData).
+	provs, err := d.ListProviders(ctx)
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	roles, err := d.ListRoleDefinitions(ctx)
+	if err != nil {
+		t.Fatalf("ListRoleDefinitions: %v", err)
+	}
+	rB := newRtr()
+	if err := rB.LoadFromData(provs, roles); err != nil {
+		t.Fatalf("LoadFromData: %v", err)
+	}
+
+	for _, role := range []string{"worker", "reviewer"} {
+		ra, err := rA.RouteByRole(role)
+		if err != nil {
+			t.Fatalf("A RouteByRole(%s): %v", role, err)
+		}
+		rb, err := rB.RouteByRole(role)
+		if err != nil {
+			t.Fatalf("B RouteByRole(%s): %v", role, err)
+		}
+		if ra.Provider.Name() != rb.Provider.Name() {
+			t.Errorf("%s provider: A=%s B=%s", role, ra.Provider.Name(), rb.Provider.Name())
+		}
+		if ra.Model != rb.Model {
+			t.Errorf("%s model: A=%s B=%s", role, ra.Model, rb.Model)
+		}
+		if ra.Role != rb.Role {
+			t.Errorf("%s role: A=%s B=%s", role, ra.Role, rb.Role)
+		}
+		if len(ra.ToolAllowlist) != len(rb.ToolAllowlist) {
+			t.Errorf("%s allowlist len: A=%v B=%v", role, ra.ToolAllowlist, rb.ToolAllowlist)
+			continue
+		}
+		for i := range ra.ToolAllowlist {
+			if ra.ToolAllowlist[i] != rb.ToolAllowlist[i] {
+				t.Errorf("%s allowlist[%d]: A=%s B=%s", role, i, ra.ToolAllowlist[i], rb.ToolAllowlist[i])
+			}
+		}
+	}
+}

@@ -128,6 +128,7 @@ func (s *Server) handleProjectChat(w http.ResponseWriter, r *http.Request, proje
 		Role:           "assistant",
 		Content:        resp.Content,
 	})
+	s.recordChatMetric(r.Context(), result.Model, convID, projectID, resp)
 
 	// Return response
 	api.WriteJSON(w, http.StatusOK, map[string]interface{}{

@@ -20,6 +20,7 @@ type Config struct {
 	Agents        AgentConfig               `yaml:"agents"`
 	LogRetention  LogRetentionConfig         `yaml:"log_retention"`
 	Storage       StorageConfig              `yaml:"storage"`
+	Merge         MergeConfig                `yaml:"merge"`
 	// RoleDefinitions seed agent role definitions (capabilities, prompt, tools)
 	// into the DB on first run.
 	RoleDefinitions []RoleDefinitionConfig    `yaml:"role_definitions"`
@@ -77,7 +78,16 @@ type ServerConfig struct {
 	Port         int    `yaml:"port"`
 	Host         string `yaml:"host"`
 	ExternalHost string `yaml:"external_host"` // publicly-reachable address for agents (defaults to Host)
-	TLSEnabled   bool   `yaml:"tls_enabled"`
+	TLSEnabled   bool   `yaml:"tls_enabled"`   // legacy/unused — see Insecure (kept for back-compat)
+
+	// Insecure serves plain HTTP instead of HTTPS. The server runs HTTPS by
+	// default; set this (or pass --insecure) for local/dev use.
+	Insecure bool `yaml:"insecure"`
+	// TLSCertFile/TLSKeyFile point at a provided certificate + key. When both are
+	// set they are used; otherwise the server auto-generates a self-signed cert
+	// under {storage.root}/tls and reuses it on restart.
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
 }
 
 // PublicHost returns the host that agents should use when connecting to the
@@ -92,6 +102,19 @@ func (s ServerConfig) PublicHost() string {
 	}
 	return s.Host
 }
+
+// MergeConfig controls how approved pull requests are merged. Both options
+// default to true when unset (hence *bool: nil means "use the default").
+type MergeConfig struct {
+	Squash       *bool `yaml:"squash"`        // squash the branch into one commit (default true)
+	DeleteBranch *bool `yaml:"delete_branch"` // delete the source branch after merge (default true)
+}
+
+// ShouldSquash reports whether merges should squash (default true).
+func (m MergeConfig) ShouldSquash() bool { return m.Squash == nil || *m.Squash }
+
+// ShouldDeleteBranch reports whether the source branch is deleted post-merge (default true).
+func (m MergeConfig) ShouldDeleteBranch() bool { return m.DeleteBranch == nil || *m.DeleteBranch }
 
 // DatabaseConfig holds database settings.
 type DatabaseConfig struct {
@@ -130,6 +153,9 @@ type AgentConfig struct {
 	PortPoolSize                 int               `yaml:"port_pool_size"`            // number of ports in pool
 	MergeSupervisorIntervalSec   int               `yaml:"merge_supervisor_interval_sec"`
 	MaxManagedAgents             int               `yaml:"max_managed_agents"` // cap on server-spawned agents (0 = unlimited)
+	APIKey                       string            `yaml:"api_key"`            // bearer token agents must present on /api/agent/*; empty = open
+	ServerCA                     string            `yaml:"server_ca"`          // PEM CA file the agent trusts for the server's HTTPS cert
+	TLSInsecure                  bool              `yaml:"tls_insecure"`       // agent skips TLS verification (dev only)
 	Workdir                      string            `yaml:"workdir"`     // default workdir root; per-agent gets {workdir}/{name}
 	ServerURL                    string            `yaml:"server_url"`  // orchestrator URL for agent-mode connections
 	Definitions                  []AgentDefinition `yaml:"definitions"` // agent instances to launch via "agents" subcommand

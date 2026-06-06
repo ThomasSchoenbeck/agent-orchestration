@@ -15,7 +15,7 @@ func openTaskToolDB(t *testing.T) (*db.Database, *tools.Registry, string) {
 	d, _, projectID := openPlanDB(t)
 
 	reg := tools.NewRegistry()
-	if err := tools.RegisterTaskTools(reg, d); err != nil {
+	if err := tools.RegisterTaskTools(reg, toolBackend(t, d)); err != nil {
 		t.Fatalf("RegisterTaskTools: %v", err)
 	}
 	return d, reg, projectID

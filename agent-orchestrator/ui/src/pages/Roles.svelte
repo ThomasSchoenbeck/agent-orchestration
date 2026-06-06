@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import {
-    listRoles, createRole, updateRole, deleteRole, seedRoles, previewRolePrompt,
+    listRoles, createRole, updateRole, deleteRole, previewRolePrompt,
     getMetaTools,
   } from '../lib/api.js'
   import { listProviders } from '../lib/api.js'
@@ -189,16 +189,6 @@
     }
   }
 
-  // ── Seed from config ──────────────────────────────────────────────────────
-  async function runSeed() {
-    try {
-      const res = await seedRoles()
-      toasts.success(`Seeded ${res.seeded ?? 0} new role(s) from config`)
-      await load()
-    } catch (e) {
-      toasts.error('Seed failed: ' + e.message)
-    }
-  }
 
   // ── Prompt preview ────────────────────────────────────────────────────────
   async function runPreview() {
@@ -226,10 +216,6 @@
   <div class="flex items-center justify-between mb-5">
     <h1 class="text-xl font-semibold text-gray-100">Roles</h1>
     <div class="flex items-center gap-2">
-      <button
-        class="text-xs text-gray-500 hover:text-gray-300 transition-colors"
-        onclick={runSeed}
-      >↥ Import from config</button>
       <button
         class="text-xs text-gray-500 hover:text-gray-300 transition-colors"
         onclick={load}
@@ -445,8 +431,7 @@
     <Skeleton rows={3} />
   {:else if roles.length === 0}
     <p class="text-gray-400 text-sm mb-8">
-      No role definitions yet. Add one above or
-      <button class="underline hover:text-gray-300" onclick={runSeed}>import from config</button>.
+      No role definitions yet. Add one above.
     </p>
   {:else}
     <div class="flex flex-col gap-3">

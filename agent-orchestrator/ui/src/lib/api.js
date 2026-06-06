@@ -41,6 +41,7 @@ export const taskChat    = (taskId, data)    => post(`/api/tasks/${taskId}/chat`
 // ── Project git file/tree/diff ───────────────────────────────────────────────
 export const initRepo      = (projectId)                => post(`/api/projects/${projectId}/init-repo`)
 export const listBranches  = (projectId)                => get(`/api/projects/${projectId}/branches`)
+export const deleteBranch  = (projectId, name)          => del(`/api/projects/${projectId}/branches?name=${encodeURIComponent(name)}`)
 export const readTree      = (projectId, ref, path='')  => {
   const qs = new URLSearchParams({ ref, path }).toString()
   return get(`/api/projects/${projectId}/tree?${qs}`)
@@ -110,7 +111,6 @@ export const createProvider  = (data)    => post('/api/providers', data)
 export const updateProvider  = (id, d)   => put(`/api/providers/${id}`, d)
 export const deleteProvider  = (id)      => del(`/api/providers/${id}`)
 export const testProvider    = (id)      => post(`/api/providers/${id}/test`)
-export const seedProviders   = ()        => post('/api/providers/seed')
 
 // ── Roles ────────────────────────────────────────────────────────────────────
 export const listRoles        = ()        => get('/api/roles')
@@ -118,7 +118,6 @@ export const getRole          = (id)      => get(`/api/roles/${id}`)
 export const createRole       = (data)    => post('/api/roles', data)
 export const updateRole       = (id, d)   => put(`/api/roles/${id}`, d)
 export const deleteRole       = (id)      => del(`/api/roles/${id}`)
-export const seedRoles        = ()        => post('/api/roles/seed')
 export const previewRolePrompt = (id, vars) => post(`/api/roles/${id}/preview-prompt`, vars)
 
 // ── Skills (Feature 6) ─────────────────────────────────────────────────────────
@@ -145,6 +144,7 @@ export const deleteTaskLogs = (taskId) =>
 // ── Metrics ──────────────────────────────────────────────────────────────────
 export const getMetrics = () => get('/api/metrics')
 export const getMetricsCosts = () => get('/api/metrics/costs')
+export const getCostBreakdown = (groupBy) => get(`/api/metrics/costs?group_by=${encodeURIComponent(groupBy)}`)
 export const getTaskCost = (taskId) => get(`/api/tasks/${taskId}/cost`)
 
 // ── Meta (enumerations) ──────────────────────────────────────────────────────

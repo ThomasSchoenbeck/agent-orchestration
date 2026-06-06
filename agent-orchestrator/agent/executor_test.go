@@ -81,7 +81,7 @@ func TestExecutor_SubmitsResult(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	defer srv.Close()
 
 	// Build a registry with the mock provider.
@@ -370,7 +370,7 @@ func fullExecMockServer(t *testing.T, task *db.Task) (
 		w.WriteHeader(http.StatusOK)
 	})
 
-	srv = httptest.NewServer(mux)
+	srv = httptest.NewServer(wrapAgentAPI(mux))
 	t.Cleanup(srv.Close)
 	return
 }
@@ -527,7 +527,7 @@ func TestExecutor_PostsCompletionComment(t *testing.T) {
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	defer srv.Close()
 
 	cfg := buildExecutorConfig()
@@ -584,7 +584,7 @@ func TestClaimTask_RepoURLAndBranchPropagated(t *testing.T) {
 			"branch":   branch,
 		})
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	defer srv.Close()
 
 	client := agent.NewServerClient(srv.URL)
@@ -629,7 +629,7 @@ func TestExecutor_SubmitsForReviewOnSuccess(t *testing.T) {
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	defer srv.Close()
 
 	cfg := buildExecutorConfig()
@@ -689,7 +689,7 @@ func TestExecutor_SubmitsReviewOnReviewingTask(t *testing.T) {
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	defer srv.Close()
 
 	cfg := buildExecutorConfig()
@@ -745,7 +745,7 @@ func TestExecutor_UppercaseStatusOnFailure(t *testing.T) {
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	defer srv.Close()
 
 	cfg := buildExecutorConfig()
@@ -802,7 +802,7 @@ func TestExecutor_PushFailureSetsTaskFailed(t *testing.T) {
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	defer srv.Close()
 
 	cfg := buildExecutorConfig()
@@ -860,7 +860,7 @@ func TestExecutor_InjectsRepoPath(t *testing.T) {
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	defer srv.Close()
 
 	cfg := buildExecutorConfig()
@@ -950,7 +950,7 @@ func TestExecutor_LogsErrorToServer(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	defer srv.Close()
 
 	cfg := buildExecutorConfig()

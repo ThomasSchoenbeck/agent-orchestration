@@ -16,6 +16,9 @@ import {
   listAllTaskLogs,
   listSettings,
   updateSetting,
+  listBranches,
+  deleteBranch,
+  getCostBreakdown,
 } from '../lib/api.js'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -289,5 +292,31 @@ describe('updateSetting', () => {
       text: () => Promise.resolve('not found'),
     }))
     await expect(updateSetting('missing', '1')).rejects.toThrow()
+  })
+})
+
+describe('branches', () => {
+  it('GET /api/projects/:id/branches', async () => {
+    stubFetch(['main', 'task/abc'])
+    const res = await listBranches('p1')
+    expect(fetch).toHaveBeenCalledWith('/api/projects/p1/branches', expect.anything())
+    expect(res).toEqual(['main', 'task/abc'])
+  })
+
+  it('DELETE /api/projects/:id/branches?name= (url-encoded)', async () => {
+    stubFetch(null, { status: 204 })
+    await deleteBranch('p1', 'task/abc')
+    const [url, opts] = fetch.mock.calls[0]
+    expect(url).toBe('/api/projects/p1/branches?name=task%2Fabc')
+    expect(opts.method).toBe('DELETE')
+  })
+})
+
+describe('cost breakdown', () => {
+  it('GET /api/metrics/costs?group_by=', async () => {
+    stubFetch([{ key: 'agent', cost: 0.1, count: 2 }])
+    const res = await getCostBreakdown('agent_role')
+    expect(fetch).toHaveBeenCalledWith('/api/metrics/costs?group_by=agent_role', expect.anything())
+    expect(res[0].key).toBe('agent')
   })
 })

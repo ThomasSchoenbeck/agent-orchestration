@@ -66,7 +66,7 @@ func cleanupMockServer(t *testing.T, task *db.Task, repoURL, branch string) (*ht
 		w.WriteHeader(http.StatusOK)
 	})
 
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	t.Cleanup(srv.Close)
 	return srv, &doneCalls
 }

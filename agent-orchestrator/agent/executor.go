@@ -153,6 +153,18 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		return
 	}
 
+	// Planner/orchestrator (creates_tasks) tasks mutate project state through
+	// tools and produce no code — complete directly, never a branch or a review.
+	if e.IsPlannerTask(task) {
+		if err := e.client.SubmitTaskResult(ctx, task.ID, result, db.TaskStatusCompleted, metrics); err != nil {
+			tlog.ErrorCtx(ctx, "failed to submit planner result: %v", err)
+		} else {
+			tlog.InfoCtx(ctx, "planner task completed (tokens=%d duration=%dms)", stats.totalTokens, durationMs)
+		}
+		e.postCompletionComment(ctx, task, result, db.TaskStatusCompleted, stats.totalTokens, durationMs, nil)
+		return
+	}
+
 	// Commit and push work when the agent has a worktree.
 	if task.WorktreePath != "" {
 		if _, pushErr := e.commitTaskWork(ctx, task); pushErr != nil {
@@ -262,6 +274,26 @@ func effectiveRole(task *db.Task) string {
 	return task.Role
 }
 
+// IsPlannerTask reports whether the task's effective role carries the
+// creates_tasks capability. Such a task plans/reconciles project state via tools
+// and produces no code, so it needs no worktree, no branch, and no review — it
+// completes directly.
+func (e *Executor) IsPlannerTask(task *db.Task) bool {
+	if e.rtr == nil {
+		return false
+	}
+	route, err := e.rtr.RouteByRole(effectiveRole(task))
+	if err != nil || route == nil {
+		return false
+	}
+	for _, c := range route.Capabilities {
+		if c == "creates_tasks" {
+			return true
+		}
+	}
+	return false
+}
+
 // extractReviewFromResult pulls the review status and body out of the LLM
 // result map. The LLM is expected to return:
 //
@@ -329,6 +361,13 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 		systemMsg = route.SystemPrefix + "\n" + systemMsg
 	}
 	userMsg := e.buildUserMessage(task)
+	// Planner/orchestrator tasks need the project's description and current scope
+	// to reconcile/plan meaningfully — inject it ahead of the task instructions.
+	if e.IsPlannerTask(task) {
+		if pc := e.planningContext(ctx, task.ProjectID); pc != "" {
+			userMsg = pc + "\n\n" + userMsg
+		}
+	}
 
 	// Some models (e.g. Gemma via llama.cpp) have no system role in their chat
 	// template; injecting one breaks tool-call argument generation. Fold the
@@ -671,6 +710,39 @@ func (e *Executor) commitTaskWork(ctx context.Context, task *db.Task) (bool, err
 	return true, nil
 }
 
+// planningContext fetches the project description + current requirements and
+// features over HTTP and formats them for a planner task's prompt. Returns an
+// empty string when nothing is available (errors are non-fatal — planning can
+// still proceed without the extra context).
+func (e *Executor) planningContext(ctx context.Context, projectID string) string {
+	if e.client == nil || projectID == "" {
+		return ""
+	}
+	var sb strings.Builder
+	if p, err := e.client.GetProject(ctx, projectID); err == nil && p != nil {
+		if d := strings.TrimSpace(p.Description); d != "" {
+			sb.WriteString("Project description:\n")
+			sb.WriteString(d)
+			sb.WriteString("\n\n")
+		}
+	}
+	if reqs, err := e.client.ListRequirements(ctx, projectID); err == nil && len(reqs) > 0 {
+		sb.WriteString("Current requirements:\n")
+		for _, r := range reqs {
+			sb.WriteString("- " + r.Title + " (" + r.Status + ")\n")
+		}
+		sb.WriteString("\n")
+	}
+	if feats, err := e.client.ListFeatures(ctx, projectID); err == nil && len(feats) > 0 {
+		sb.WriteString("Current features:\n")
+		for _, f := range feats {
+			sb.WriteString("- " + f.Title + " (" + f.Status + ")\n")
+		}
+		sb.WriteString("\n")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
 // buildSystemMessage assembles the system prompt for the task.
 // Uses the DB-backed role definition's system prompt, or a generic fallback.
 func (e *Executor) buildSystemMessage(task *db.Task, route *router.RouteResult) string {
@@ -764,6 +836,13 @@ func (e *Executor) buildUserMessage(task *db.Task) string {
 	}
 	if msg == "" {
 		msg = fmt.Sprintf("Execute task %s (role=%s).", task.ID, task.Role)
+	}
+	// Give the agent the project id so project-scoped tools (plan_project,
+	// sync_scope, list_tasks, …) target the right project. Without this the model
+	// guesses — and the worktree directory it sees is the *task* id, which it
+	// would otherwise (wrongly) pass as the project id.
+	if task.ProjectID != "" {
+		msg += fmt.Sprintf("\n\nProject ID: %s", task.ProjectID)
 	}
 	// Tell the agent where its workspace is. Use forward slashes so the model
 	// never sees backslashes mid-sentence, which can break JSON argument generation.

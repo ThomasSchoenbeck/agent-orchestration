@@ -3,16 +3,14 @@ package tools
 import (
 	"context"
 	"fmt"
-
-	"agent-orchestrator/db"
 )
 
 // RegisterCommentTools registers the task_comment tool.
-func RegisterCommentTools(reg *Registry, database *db.Database) error {
-	return reg.Register(taskCommentTool(database))
+func RegisterCommentTools(reg *Registry, backend ToolBackend) error {
+	return reg.Register(taskCommentTool(backend))
 }
 
-func taskCommentTool(database *db.Database) Definition {
+func taskCommentTool(backend ToolBackend) Definition {
 	return Definition{
 		Name:        "task_comment",
 		Description: "Post a comment on a task. Use this to ask questions, report errors, request clarification, or reply to a review thread.",
@@ -35,17 +33,12 @@ func taskCommentTool(database *db.Database) Definition {
 			if body == "" {
 				return nil, fmt.Errorf("body must not be empty")
 			}
-			comment := &db.TaskComment{
-				TaskID:     taskID,
-				AuthorType: "agent",
-				AuthorRole: strArgOpt(args, "role"),
-				ReviewID:   strArgOpt(args, "review_id"),
-				Body:       body,
-			}
-			if err := database.CreateComment(ctx, comment); err != nil {
+			commentID, err := backend.PostTaskComment(ctx, taskID, body,
+				strArgOpt(args, "role"), strArgOpt(args, "review_id"))
+			if err != nil {
 				return nil, fmt.Errorf("failed to post comment: %w", err)
 			}
-			return map[string]string{"comment_id": comment.ID, "status": "posted"}, nil
+			return map[string]string{"comment_id": commentID, "status": "posted"}, nil
 		},
 	}
 }

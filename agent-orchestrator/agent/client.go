@@ -5,10 +5,12 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"agent-orchestrator/api"
@@ -16,18 +18,66 @@ import (
 )
 
 // ServerClient is a typed HTTP client for talking to the orchestrator server.
+// All requests target the gated agent namespace (/api/agent/*) and carry the
+// bearer token when one is configured.
 type ServerClient struct {
 	serverURL string
 	agentID   string
+	token     string
 	client    *http.Client
 }
 
-// NewServerClient creates a client pointed at serverURL.
+// NewServerClient creates a client pointed at serverURL with no auth token and
+// default (system) TLS trust.
 func NewServerClient(serverURL string) *ServerClient {
+	return NewServerClientWithAuth(serverURL, "", nil)
+}
+
+// NewServerClientWithAuth creates a client that presents the given bearer token
+// on every request (when non-empty) and, when tlsConfig is non-nil, uses it for
+// HTTPS trust (a pinned self-signed CA for remote agents, or InsecureSkipVerify
+// for dev).
+func NewServerClientWithAuth(serverURL, token string, tlsConfig *tls.Config) *ServerClient {
+	hc := &http.Client{Timeout: 30 * time.Second}
+	if tlsConfig != nil {
+		hc.Transport = &http.Transport{TLSClientConfig: tlsConfig}
+	}
 	return &ServerClient{
 		serverURL: serverURL,
-		client:    &http.Client{Timeout: 30 * time.Second},
+		token:     token,
+		client:    hc,
 	}
+}
+
+// agentURL maps an "/api/..." path onto the gated agent namespace
+// "/api/agent/...". Every agent request goes through this namespace.
+func agentURL(path string) string {
+	return "/api/agent" + strings.TrimPrefix(path, "/api")
+}
+
+func (c *ServerClient) setAuth(req *http.Request) {
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+}
+
+// ListProvidersWithKeys fetches providers including API keys and models from the
+// agent-only endpoint, for self-configuration (no DB access).
+func (c *ServerClient) ListProvidersWithKeys(ctx context.Context) ([]*db.Provider, error) {
+	var provs []*db.Provider
+	if err := c.get(ctx, "/api/internal/providers", &provs); err != nil {
+		return nil, err
+	}
+	return provs, nil
+}
+
+// ListRoleDefinitions fetches the role definitions used to build the router.
+func (c *ServerClient) ListRoleDefinitions(ctx context.Context) ([]*db.RoleDefinition, error) {
+	var roles []*db.RoleDefinition
+	if err := c.get(ctx, "/api/roles", &roles); err != nil {
+		return nil, err
+	}
+	return roles, nil
 }
 
 // Register registers this agent and stores the returned agent ID.
@@ -201,10 +251,11 @@ func (c *ServerClient) PostComment(ctx context.Context, taskID, body, authorID s
 // --- HTTP helpers ---
 
 func (c *ServerClient) get(ctx context.Context, path string, out interface{}) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.serverURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.serverURL+agentURL(path), nil)
 	if err != nil {
 		return err
 	}
+	c.setAuth(req)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return err
@@ -229,11 +280,12 @@ func (c *ServerClient) post(ctx context.Context, path string, in, out interface{
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.serverURL+path, body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.serverURL+agentURL(path), body)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return err

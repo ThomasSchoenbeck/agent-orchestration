@@ -559,6 +559,28 @@ func (d *Database) applyColumnMigrations() error {
 			name: "add_template_id_to_agents",
 			sql:  "ALTER TABLE agents ADD COLUMN template_id TEXT NOT NULL DEFAULT ''",
 		},
+		// F6: unified cost ledger — attribution columns on metrics so cost can be
+		// broken down by source (agent vs chat), agent role/type, provider, etc.
+		{
+			name: "add_source_to_metrics",
+			sql:  "ALTER TABLE metrics ADD COLUMN source TEXT NOT NULL DEFAULT 'agent'",
+		},
+		{
+			name: "add_provider_id_to_metrics",
+			sql:  "ALTER TABLE metrics ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			name: "add_agent_role_to_metrics",
+			sql:  "ALTER TABLE metrics ADD COLUMN agent_role TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			name: "add_conversation_id_to_metrics",
+			sql:  "ALTER TABLE metrics ADD COLUMN conversation_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			name: "add_project_id_to_metrics",
+			sql:  "ALTER TABLE metrics ADD COLUMN project_id TEXT NOT NULL DEFAULT ''",
+		},
 	}
 
 	for _, m := range migrations {

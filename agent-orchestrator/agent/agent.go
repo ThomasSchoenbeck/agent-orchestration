@@ -47,6 +47,21 @@ func NewAgent(name string, roles []string, serverURL string, cfg *config.Config)
 	}
 }
 
+// Client returns the agent's HTTP server client, which implements
+// tools.ToolBackend. Used to wire the DB-free tools.
+func (a *Agent) Client() *ServerClient {
+	return a.client
+}
+
+// WithClient replaces the agent's server client (e.g. with one configured for
+// TLS + bearer auth). Must be called before Start. The interim logger is
+// rebuilt; Start re-creates it again with the registered agent ID.
+func (a *Agent) WithClient(c *ServerClient) *Agent {
+	a.client = c
+	a.alog = newLogger("", c)
+	return a
+}
+
 // WithMode sets the agent's operating mode ("colocated" or "remote").
 func (a *Agent) WithMode(mode string) *Agent {
 	a.mode = mode
@@ -318,7 +333,8 @@ func (a *Agent) executeTask(ctx context.Context, task *db.Task) {
 
 	// Clone the project repo so the executor's file tools have a local workspace.
 	// All agents use the server's git HTTP endpoint regardless of topology.
-	if task.RepoURL != "" {
+	// Planner/orchestrator tasks touch no files, so skip the clone entirely.
+	if task.RepoURL != "" && !a.executor.IsPlannerTask(task) {
 		localPath := a.LocalWorkspacePath(task.ID)
 		branch := task.Branch
 		if branch == "" {

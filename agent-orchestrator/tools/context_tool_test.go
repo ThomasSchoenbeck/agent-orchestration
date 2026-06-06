@@ -12,7 +12,7 @@ func openContextToolDB(t *testing.T) (*tools.Registry, string) {
 	d, _, projectID := openPlanDB(t)
 
 	reg := tools.NewRegistry()
-	if err := tools.RegisterContextTools(reg, d); err != nil {
+	if err := tools.RegisterContextTools(reg, toolBackend(t, d)); err != nil {
 		t.Fatalf("RegisterContextTools: %v", err)
 	}
 	return reg, projectID
@@ -55,7 +55,7 @@ func TestSaveContext_WithTaskID(t *testing.T) {
 	task := seedTask(t, d, projectID, "planned")
 
 	reg := tools.NewRegistry()
-	if err := tools.RegisterContextTools(reg, d); err != nil {
+	if err := tools.RegisterContextTools(reg, toolBackend(t, d)); err != nil {
 		t.Fatalf("RegisterContextTools: %v", err)
 	}
 
@@ -220,7 +220,7 @@ func TestQueryContext_CrossProjectIsolation(t *testing.T) {
 	d, _, projectA := openPlanDB(t)
 
 	reg := tools.NewRegistry()
-	if err := tools.RegisterContextTools(reg, d); err != nil {
+	if err := tools.RegisterContextTools(reg, toolBackend(t, d)); err != nil {
 		t.Fatalf("RegisterContextTools: %v", err)
 	}
 

@@ -300,6 +300,42 @@ func TestCostMetrics_ByProject(t *testing.T) {
 	}
 }
 
+// TestSummary_Aggregates exercises Collector.Summary across the overall totals,
+// the per-agent breakdown, and the per-project breakdown.
+func TestSummary_Aggregates(t *testing.T) {
+	d, col := openMetricsDB(t)
+	ctx := context.Background()
+
+	p := &db.Project{Name: "SummaryProject"}
+	if err := d.CreateProject(ctx, p); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	task := &db.Task{ProjectID: p.ID, Role: "worker"}
+	if err := d.CreateTask(ctx, task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	insertMetric(t, d, &db.Metric{TaskID: task.ID, AgentID: "agent-A", TokensUsed: 1000, Cost: 0.10, Success: true})
+	insertMetric(t, d, &db.Metric{TaskID: task.ID, AgentID: "agent-B", TokensUsed: 500, Cost: 0.05, Success: false})
+
+	s, err := col.Summary(ctx)
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	if s.TotalTokens != 1500 {
+		t.Errorf("total tokens = %d, want 1500", s.TotalTokens)
+	}
+	if s.TotalCost < 0.149 || s.TotalCost > 0.151 {
+		t.Errorf("total cost = %.4f, want ~0.15", s.TotalCost)
+	}
+	if len(s.ByAgent) != 2 {
+		t.Errorf("expected 2 agent rows, got %d", len(s.ByAgent))
+	}
+	if len(s.ByProject) != 1 || s.ByProject[0].ProjectID != p.ID {
+		t.Errorf("expected 1 project row for %s, got %+v", p.ID, s.ByProject)
+	}
+}
+
 // TestGetTaskCost_MultipleRounds verifies GetTaskCost sums multiple metric
 // rows for the same task (one per LLM round).
 func TestGetTaskCost_MultipleRounds(t *testing.T) {

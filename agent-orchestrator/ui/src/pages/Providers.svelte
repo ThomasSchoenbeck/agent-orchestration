@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import {
     listProviders, createProvider, updateProvider, deleteProvider,
-    testProvider, seedProviders, getMetrics, getMetricsCosts, listRoles,
+    testProvider, getMetrics, getCostBreakdown, listRoles,
   } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
@@ -11,8 +11,21 @@
   let providers   = $state([])
   let roles       = $state([])
   let metrics     = $state(null)
-  let costs       = $state(null)
   let loading     = $state(false)
+
+  // ── Cost breakdown (F6) ──────────────────────────────────────────────────
+  let breakdownGroup = $state('source')
+  let breakdown      = $state([])
+  let breakdownMax   = $derived(breakdown.reduce((mx, b) => Math.max(mx, b.cost ?? 0), 0))
+  async function loadBreakdown() {
+    try {
+      const b = await getCostBreakdown(breakdownGroup)
+      breakdown = Array.isArray(b) ? b : []
+    } catch (_) { breakdown = [] }
+  }
+  function breakdownPct(b) {
+    return breakdownMax > 0 ? Math.round((b.cost ?? 0) / breakdownMax * 100) : 0
+  }
   let showForm    = $state(false)
   let editingId   = $state(null)   // null = create, string = update
   let showKey     = $state(false)
@@ -75,14 +88,12 @@
   async function load() {
     loading = true
     try {
-      const [pr, mr, cr] = await Promise.all([
+      const [pr, mr] = await Promise.all([
         listProviders().catch(() => []),
         getMetrics().catch(() => null),
-        getMetricsCosts().catch(() => null),
       ])
       providers = Array.isArray(pr) ? pr : (pr?.providers ?? [])
       metrics   = mr
-      costs     = cr
     } catch (e) {
       toasts.error('Failed to load: ' + e.message)
     } finally {
@@ -212,18 +223,7 @@
     }
   }
 
-  // ── Seed from config ──────────────────────────────────────────────────────
-  async function runSeed() {
-    try {
-      const res = await seedProviders()
-      toasts.success(`Seeded ${res.seeded ?? 0} new provider(s) from config`)
-      await load()
-    } catch (e) {
-      toasts.error('Seed failed: ' + e.message)
-    }
-  }
-
-  onMount(() => { load(); loadRoles() })
+  onMount(() => { load(); loadRoles(); loadBreakdown() })
 </script>
 
 <div class="flex-1 overflow-y-auto p-6">
@@ -232,10 +232,6 @@
   <div class="flex items-center justify-between mb-5">
     <h1 class="text-xl font-semibold text-gray-100">Providers</h1>
     <div class="flex items-center gap-2">
-      <button
-        class="text-xs text-gray-500 hover:text-gray-300 transition-colors"
-        onclick={runSeed}
-      >↥ Import from config</button>
       <button
         class="text-xs text-gray-500 hover:text-gray-300 transition-colors"
         onclick={load}
@@ -542,8 +538,7 @@
     <Skeleton rows={3} />
   {:else if providers.length === 0}
     <p class="text-gray-400 text-sm mb-8">
-      No providers configured. Add one above or
-      <button class="underline hover:text-gray-300" onclick={runSeed}>import from config</button>.
+      No providers configured. Add one above.
     </p>
   {:else}
     <div class="flex flex-col gap-3 mb-8">
@@ -645,36 +640,7 @@
     </div>
   {/if}
 
-  <!-- Cost (Bug 13: providers page now surfaces actual accumulated cost) -->
-  {#if costs}
-    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Cost</h2>
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 mb-4">
-      <div class="p-3 bg-surface-800 rounded border border-surface-600">
-        <div class="text-xs text-gray-500 mb-1">Total cost (actual usage)</div>
-        <div class="text-lg font-semibold text-gray-100">~${(costs.total_cost ?? 0).toFixed(4)}</div>
-      </div>
-    </div>
-    {#if costs.by_agent?.length}
-      <div class="mb-4 overflow-x-auto">
-        <table class="w-full text-xs text-left text-gray-300">
-          <thead class="text-gray-500">
-            <tr><th class="pr-4 pb-1 font-medium">Agent</th><th class="pr-4 pb-1 font-medium">Cost</th><th class="pr-4 pb-1 font-medium">Tasks</th></tr>
-          </thead>
-          <tbody>
-            {#each costs.by_agent as a}
-              <tr class="border-t border-surface-700">
-                <td class="pr-4 py-1 font-mono">{a.agent_id}</td>
-                <td class="pr-4 py-1">~${(a.cost ?? 0).toFixed(4)}</td>
-                <td class="pr-4 py-1">{a.tasks}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
-    {/if}
-  {/if}
-
-  <!-- Metrics -->
+  <!-- Metrics (cost is surfaced here too — the separate Cost box was redundant) -->
   {#if metrics && (metricEntries(metrics).length > 0 || metricTableEntries(metrics).length > 0)}
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Metrics</h2>
     {#if metricEntries(metrics).length > 0}
@@ -683,7 +649,9 @@
           <div class="p-3 bg-surface-800 rounded border border-surface-600">
             <div class="text-xs text-gray-500 mb-1 capitalize">{key.replace(/_/g, ' ')}</div>
             <div class="text-lg font-semibold text-gray-100">
-              {typeof val === 'number' ? val.toLocaleString() : String(val)}
+              {key.includes('cost')
+                ? '~$' + (Number(val) || 0).toFixed(4)
+                : (typeof val === 'number' ? val.toLocaleString() : String(val))}
             </div>
           </div>
         {/each}
@@ -717,4 +685,38 @@
       </div>
     {/each}
   {/if}
+
+  <!-- Cost breakdown (F6): distinguish cost by agent vs chat, agent type, etc. -->
+  <div class="mb-8">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Cost breakdown</h2>
+      <select
+        class="bg-surface-700 border border-surface-600 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none"
+        bind:value={breakdownGroup}
+        onchange={loadBreakdown}
+      >
+        <option value="source">Agent vs Chat</option>
+        <option value="agent_role">By agent type</option>
+        <option value="agent_id">By specific agent</option>
+        <option value="provider">By provider</option>
+        <option value="model">By model</option>
+      </select>
+    </div>
+    {#if breakdown.length === 0}
+      <p class="text-xs text-gray-600 italic">No cost data recorded yet.</p>
+    {:else}
+      <div class="flex flex-col gap-1.5">
+        {#each breakdown as b}
+          <div class="flex items-center gap-2 text-xs">
+            <div class="w-40 shrink-0 truncate font-mono text-gray-300" title={b.key}>{b.key || '(none)'}</div>
+            <div class="flex-1 bg-surface-800 rounded h-4 overflow-hidden">
+              <div class="bg-accent h-4 rounded" style="width: {breakdownPct(b)}%"></div>
+            </div>
+            <div class="w-20 shrink-0 text-right text-gray-200">~${(b.cost ?? 0).toFixed(4)}</div>
+            <div class="w-14 shrink-0 text-right text-gray-500">{b.count}×</div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </div>
 </div>

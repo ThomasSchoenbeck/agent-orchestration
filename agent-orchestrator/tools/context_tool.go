@@ -8,10 +8,10 @@ import (
 )
 
 // RegisterContextTools registers context-management tools into reg.
-func RegisterContextTools(reg *Registry, database *db.Database) error {
+func RegisterContextTools(reg *Registry, backend ToolBackend) error {
 	defs := []Definition{
-		saveContextTool(database),
-		queryContextTool(database),
+		saveContextTool(backend),
+		queryContextTool(backend),
 	}
 	for _, d := range defs {
 		if err := reg.Register(d); err != nil {
@@ -21,7 +21,7 @@ func RegisterContextTools(reg *Registry, database *db.Database) error {
 	return nil
 }
 
-func saveContextTool(database *db.Database) Definition {
+func saveContextTool(backend ToolBackend) Definition {
 	return Definition{
 		Name:        "save_context",
 		Description: "Save a piece of context (summary, snippet, note, diff, test results) associated with a project or task.",
@@ -52,18 +52,19 @@ func saveContextTool(database *db.Database) Definition {
 				Type:      ctxType,
 				Content:   content,
 			}
-			if err := database.CreateContextEntry(ctx, entry); err != nil {
+			saved, err := backend.SaveContext(ctx, entry)
+			if err != nil {
 				return nil, fmt.Errorf("save_context: %w", err)
 			}
 			return map[string]interface{}{
 				"success":    true,
-				"context_id": entry.ID,
+				"context_id": saved.ID,
 			}, nil
 		},
 	}
 }
 
-func queryContextTool(database *db.Database) Definition {
+func queryContextTool(backend ToolBackend) Definition {
 	return Definition{
 		Name:        "query_context",
 		Description: "Search stored context for a project by keyword. Returns relevant context entries.",
@@ -84,7 +85,7 @@ func queryContextTool(database *db.Database) Definition {
 			}
 			limit := intArgOpt(args, "limit", 10)
 
-			entries, err := database.QueryContext(ctx, projectID, query, limit)
+			entries, err := backend.QueryContext(ctx, projectID, query, limit)
 			if err != nil {
 				return nil, fmt.Errorf("query_context: %w", err)
 			}

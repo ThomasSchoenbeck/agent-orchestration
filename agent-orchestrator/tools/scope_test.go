@@ -13,11 +13,15 @@ func sliceLen(t *testing.T, result map[string]interface{}, key string) int {
 	if !ok || raw == nil {
 		return 0
 	}
-	s, ok := raw.([]string)
-	if !ok {
-		t.Fatalf("expected %q to be []string, got %T", key, raw)
+	switch s := raw.(type) {
+	case []string:
+		return len(s)
+	case []interface{}: // JSON-decoded from the HTTP response
+		return len(s)
+	default:
+		t.Fatalf("expected %q to be a slice, got %T", key, raw)
+		return 0
 	}
-	return len(s)
 }
 
 func TestBootstrapProject_FromDescription(t *testing.T) {

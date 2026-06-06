@@ -64,6 +64,7 @@ type RouteResult struct {
 	SystemPrefix       string
 	ToolAllowlist      []string
 	ProviderModels     []db.ProviderModel // for cost calculation; may be empty
+	Capabilities       []string           // role capabilities (e.g. creates_tasks, handles_merge)
 }
 
 // LoadFromDB populates the in-memory role cache from the database.
@@ -76,14 +77,20 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 	if err != nil {
 		return fmt.Errorf("router.LoadFromDB: list providers: %w", err)
 	}
-	provByID := make(map[string]*db.Provider, len(providers))
-	for _, p := range providers {
-		provByID[p.ID] = p
-	}
-
 	roles, err := database.ListRoleDefinitions(ctx)
 	if err != nil {
 		return fmt.Errorf("router.LoadFromDB: list roles: %w", err)
+	}
+	return r.LoadFromData(providers, roles)
+}
+
+// LoadFromData populates the in-memory role cache from already-fetched providers
+// and role definitions, without touching the database. Used by agents that
+// receive this data over HTTP. Disabled roles are skipped.
+func (r *Router) LoadFromData(providers []*db.Provider, roles []*db.RoleDefinition) error {
+	provByID := make(map[string]*db.Provider, len(providers))
+	for _, p := range providers {
+		provByID[p.ID] = p
 	}
 
 	r.mu.Lock()
@@ -138,7 +145,7 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 		}
 	}
 
-	log.Printf("router: loaded %d role definition(s) from database", len(roles))
+	log.Printf("router: loaded %d role definition(s)", len(roles))
 	for name, cr := range r.rolesByName {
 		log.Printf("router: role %q → provider=%q model=%q",
 			name, cr.providerName, cr.def.ModelOverride)
@@ -151,6 +158,15 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 func (r *Router) ReloadFromDB(database *db.Database) {
 	if err := r.LoadFromDB(database); err != nil {
 		log.Printf("router: ReloadFromDB: %v", err)
+	}
+}
+
+// ReloadFromData refreshes the in-memory cache from already-fetched providers
+// and role definitions (the agent's HTTP reload path). Errors are logged, not
+// returned, mirroring ReloadFromDB.
+func (r *Router) ReloadFromData(providers []*db.Provider, roles []*db.RoleDefinition) {
+	if err := r.LoadFromData(providers, roles); err != nil {
+		log.Printf("router: ReloadFromData: %v", err)
 	}
 }
 
@@ -186,6 +202,7 @@ func (r *Router) RouteByRole(role string) (*RouteResult, error) {
 		// exists, even though it carried no provider binding.
 		if ok && cr.def != nil {
 			res.SystemPrompt = cr.def.SystemPrompt
+			res.Capabilities = cr.def.Capabilities
 			if len(cr.def.AllowedTools) > 0 {
 				res.ToolAllowlist = cr.def.AllowedTools
 			}
@@ -272,6 +289,7 @@ func (r *Router) routeFromCache(cr *cachedRole) (*RouteResult, error) {
 		SystemPrefix:       systemPrefix,
 		ToolAllowlist:      toolAllowlist,
 		ProviderModels:     cr.providerModels,
+		Capabilities:       def.Capabilities,
 	}, nil
 }
 

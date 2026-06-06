@@ -79,6 +79,32 @@
   let chartTypeFilter = $state(new Set())
   let bucketMinutes = $state(60)
 
+  // ── Resizable divider between the task list and the activity-logs panel ──────
+  function savedListHeight() {
+    try {
+      const v = Number(localStorage.getItem("tasksListHeight"))
+      if (v >= 120 && v <= 800) return v
+    } catch (_) {}
+    return 320
+  }
+  let listHeight = $state(savedListHeight())
+
+  function startListResize(e) {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = listHeight
+    function onMove(ev) {
+      listHeight = Math.max(120, Math.min(startH + (ev.clientY - startY), 800))
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
+      try { localStorage.setItem("tasksListHeight", String(listHeight)) } catch (_) {}
+    }
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
+  }
+
   const TASK_COLORS = {
     task_created: "#34d399",
     task_updated: "#60a5fa",
@@ -426,8 +452,8 @@
 
 <div class="flex h-full overflow-hidden">
   <div class="flex-1 flex flex-col overflow-hidden min-w-0">
-    <!-- ── Task list (top, scrollable) ───────────────────────────────────────── -->
-    <div class="shrink-0 max-h-80 overflow-y-auto border-b border-surface-600">
+    <!-- ── Task list (top, scrollable; height adjustable via the divider) ──────── -->
+    <div class="shrink-0 overflow-y-auto border-b border-surface-600" style="height: {listHeight}px">
       <div
         class="flex items-center justify-between px-6 py-3 sticky top-0 bg-surface-900 z-10 flex-wrap gap-2"
       >
@@ -718,6 +744,15 @@
         </div>
       {/if}
     </div>
+
+    <!-- ── Draggable divider: resize the task list vs. activity logs ───────────── -->
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      title="Drag to resize"
+      class="shrink-0 h-1.5 cursor-row-resize bg-surface-700 hover:bg-accent transition-colors"
+      onmousedown={startListResize}
+    ></div>
 
     <!-- ── Log panel header ───────────────────────────────────────────────────── -->
     <div

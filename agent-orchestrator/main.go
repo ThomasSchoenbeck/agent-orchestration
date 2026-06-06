@@ -20,6 +20,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"log"
@@ -81,6 +83,7 @@ func runServer(args []string) error {
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	configPath := fs.String("config", "config.yaml", "path to config YAML")
 	portOverride := fs.Int("port", 0, "override server port from config")
+	insecure := fs.Bool("insecure", false, "serve plain HTTP instead of HTTPS (dev/local)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -91,6 +94,9 @@ func runServer(args []string) error {
 	}
 	if *portOverride != 0 {
 		cfg.Server.Port = *portOverride
+	}
+	if *insecure {
+		cfg.Server.Insecure = true
 	}
 
 	database, err := db.Open(cfg.Database.Path)
@@ -313,6 +319,7 @@ func runAgent(args []string) error {
 	serverURL := fs.String("server", "http://localhost:8080", "orchestrator server URL")
 	workdir := fs.String("workdir", "", "local workspace root for agent code checkouts (default: .agent-work)")
 	mode := fs.String("mode", "colocated", `agent mode: "colocated" (server provisions worktrees) or "remote" (agent clones via git)`)
+	serverOverride := fs.Bool("server-override", false, "fetch providers/roles from the server even when --config is set (in-memory only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -324,7 +331,7 @@ func runAgent(args []string) error {
 		return fmt.Errorf("--roles is required")
 	}
 
-	a, cleanup, cfg, err := buildAgent(*name, parseRoles(*rolesStr), parseRoles(*skillsStr), *serverURL, *configPath, *workdir, *mode)
+	a, cleanup, cfg, err := buildAgent(*name, parseRoles(*rolesStr), parseRoles(*skillsStr), *serverURL, *configPath, *workdir, *mode, *serverOverride)
 	if err != nil {
 		return err
 	}
@@ -350,7 +357,7 @@ func runAgent(args []string) error {
 // the LLM executor is not wired up (polling-only mode).
 // mode should be "colocated" or "remote"; defaults to "colocated" when empty.
 // The returned cleanup func must be called when the agent is done.
-func buildAgent(name string, roles, skills []string, serverURL, configPath, workdir, mode string) (*agent.Agent, func(), *config.Config, error) {
+func buildAgent(name string, roles, skills []string, serverURL, configPath, workdir, mode string, serverOverride bool) (*agent.Agent, func(), *config.Config, error) {
 	var cfg *config.Config
 	if configPath != "" {
 		var err error
@@ -380,109 +387,181 @@ func buildAgent(name string, roles, skills []string, serverURL, configPath, work
 		a.WithWorkdir(wd)
 	}
 
-	cleanup := func() {}
+	// Resolve connection settings uniformly for all agents: env first (the
+	// supervisor injects these into co-located children), then config. The agent
+	// never opens the database — providers/roles come over HTTP.
+	token := os.Getenv("AGENT_AUTH_TOKEN")
+	if token == "" {
+		token = cfg.Agents.APIKey
+	}
+	if envURL := os.Getenv("AGENT_SERVER_URL"); envURL != "" {
+		serverURL = envURL
+	}
+	caPath := os.Getenv("AGENT_SERVER_CA")
+	if caPath == "" {
+		caPath = cfg.Agents.ServerCA
+	}
+	insecureTLS := os.Getenv("AGENT_TLS_INSECURE") == "true" || cfg.Agents.TLSInsecure
+	tlsCfg, err := agentTLSConfig(caPath, insecureTLS)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("agent %q: TLS config: %w", name, err)
+	}
+	client := agent.NewServerClientWithAuth(serverURL, token, tlsCfg)
+	a.WithClient(client)
+	// Make git clone/push over HTTPS trust the same cert as the API client.
+	agent.InstallGitTLS(tlsCfg)
 
-	// Wire LLM executor only when a full config is provided.
-	if configPath != "" {
-		database, err := db.Open(cfg.Database.Path)
-		if err != nil {
-			log.Printf("agent %q: could not open database (%v) — running without tool execution", name, err)
+	llmReg := llm.NewRegistry()
+	rtr := router.New(cfg, llmReg)
+
+	// syncFromServer (re)builds the registry + router from the server's providers
+	// (with keys) and role definitions, over HTTP. Used at startup and on reload.
+	syncFromServer := func() error {
+		provs, perr := client.ListProvidersWithKeys(context.Background())
+		if perr != nil {
+			return perr
+		}
+		roleDefs, perr := client.ListRoleDefinitions(context.Background())
+		if perr != nil {
+			return perr
+		}
+		seen := make(map[string]bool, len(provs))
+		for _, p := range provs {
+			if !p.Enabled {
+				continue
+			}
+			prov, e := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config)
+			if e != nil {
+				log.Printf("agent %q: init provider %q: %v", name, p.Name, e)
+				continue
+			}
+			llmReg.Set(p.Name, prov)
+			if len(p.Roles) > 0 {
+				llmReg.SetRoles(p.Name, p.ModelName, p.Roles)
+			}
+			seen[p.Name] = true
+		}
+		for _, existing := range llmReg.List() {
+			if !seen[existing] {
+				llmReg.Remove(existing)
+			}
+		}
+		return rtr.LoadFromData(provs, roleDefs)
+	}
+
+	useServer := configPath == "" || serverOverride
+	if useServer {
+		if err := syncFromServer(); err != nil {
+			// A 401 with no token means the server requires an agent API key that
+			// this agent doesn't have — abort with a clear message rather than
+			// silently running unauthenticated.
+			if token == "" && strings.Contains(err.Error(), "401") {
+				return nil, nil, nil, fmt.Errorf("agent %q: server requires an agent API key — set AGENT_AUTH_TOKEN or agents.api_key: %w", name, err)
+			}
+			// Other errors (server starting, transient): wire the executor anyway
+			// and let the reload recover; the poll loop pauses until a provider is
+			// available.
+			log.Printf("agent %q: initial provider sync failed (%v) — will retry on reload", name, err)
+		}
+		a.WithReload(func() {
+			if err := syncFromServer(); err != nil {
+				log.Printf("agent %q: provider reload failed: %v", name, err)
+			}
+		})
+	} else {
+		// Config-driven providers/roles (no server override). Role routing relies
+		// on the provider role preferences declared in config.
+		if initErr := llmReg.InitFromConfig(cfg); initErr != nil {
+			return nil, nil, nil, fmt.Errorf("agent %q: init LLM providers from config: %w", name, initErr)
+		}
+		cfgProvs := configProvidersToDB(cfg)
+		for _, p := range cfgProvs {
+			if len(p.Roles) > 0 {
+				llmReg.SetRoles(p.Name, p.ModelName, p.Roles)
+			}
+		}
+		_ = rtr.LoadFromData(cfgProvs, nil)
+	}
+
+	// Tools reach the server over HTTP via the agent's client (tools.ToolBackend);
+	// they never touch the database.
+	backend := a.Client()
+	toolReg := tools.NewRegistry()
+	_ = tools.RegisterCodeTools(toolReg)
+	_ = tools.RegisterTaskTools(toolReg, backend)
+	_ = tools.RegisterPlanTools(toolReg, backend)
+	_ = tools.RegisterContextTools(toolReg, backend)
+	_ = tools.RegisterCommentTools(toolReg, backend)
+	a.WithExecutor(rtr, toolReg)
+
+	log.Printf("agent %q: executor wired (LLM providers: %d)", name, len(llmReg.List()))
+	for _, role := range roles {
+		if route, rerr := rtr.RouteByRole(role); rerr != nil {
+			log.Printf("agent %q: WARNING role %q has no route — tasks for this role will fail until a provider is available (%v)", name, role, rerr)
 		} else {
-			llmReg := llm.NewRegistry()
-			providersOK := true
-
-			// Prefer DB providers so that role preferences and live updates are respected.
-			// Fall back to config-file providers if the DB has none yet.
-			startCtx := context.Background()
-			dbProviders, dbErr := database.ListProviders(startCtx)
-			if dbErr == nil && len(dbProviders) > 0 {
-				for _, p := range dbProviders {
-					if !p.Enabled {
-						continue
-					}
-					prov, perr := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config)
-					if perr != nil {
-						log.Printf("agent %q: init provider %q: %v", name, p.Name, perr)
-						continue
-					}
-					llmReg.Set(p.Name, prov)
-					if len(p.Roles) > 0 {
-						llmReg.SetRoles(p.Name, p.ModelName, p.Roles)
-					}
-				}
-			} else {
-				if initErr := llmReg.InitFromConfig(cfg); initErr != nil {
-					log.Printf("agent %q: could not init LLM providers (%v) — running without LLM execution", name, initErr)
-					_ = database.Close()
-					providersOK = false
-				}
-			}
-
-			if providersOK {
-				rtr := router.New(cfg, llmReg)
-				if rtrErr := rtr.LoadFromDB(database); rtrErr != nil {
-					log.Printf("agent %q: could not load role definitions from DB (%v) — using config roles only", name, rtrErr)
-				}
-				toolReg := tools.NewRegistry()
-				_ = tools.RegisterCodeTools(toolReg)
-				_ = tools.RegisterTaskTools(toolReg, database)
-				_ = tools.RegisterPlanTools(toolReg, database)
-				_ = tools.RegisterContextTools(toolReg, database)
-				_ = tools.RegisterCommentTools(toolReg, database)
-				a.WithExecutor(rtr, toolReg)
-
-				// Refresh providers + router from the DB on each heartbeat so the
-				// agent picks up providers/roles added or changed after startup
-				// (otherwise it never learns about a newly added provider).
-				a.WithReload(func() {
-					provs, perr := database.ListProviders(context.Background())
-					if perr != nil {
-						log.Printf("agent %q: provider reload failed: %v", name, perr)
-						return
-					}
-					seen := make(map[string]bool, len(provs))
-					for _, p := range provs {
-						if !p.Enabled {
-							continue
-						}
-						prov, perr2 := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config)
-						if perr2 != nil {
-							continue
-						}
-						llmReg.Set(p.Name, prov)
-						if len(p.Roles) > 0 {
-							llmReg.SetRoles(p.Name, p.ModelName, p.Roles)
-						}
-						seen[p.Name] = true
-					}
-					// Drop providers that were removed or disabled in the DB.
-					for _, existing := range llmReg.List() {
-						if !seen[existing] {
-							llmReg.Remove(existing)
-						}
-					}
-					rtr.ReloadFromDB(database)
-				})
-
-				log.Printf("agent %q: executor wired (LLM providers: %d)", name, len(llmReg.List()))
-				// Validate each role resolves to a provider so misconfiguration is
-				// visible at startup rather than silently failing on the first task.
-				for _, role := range roles {
-					if route, rerr := rtr.RouteByRole(role); rerr != nil {
-						log.Printf("agent %q: WARNING role %q has no route — tasks for this role will fail immediately (%v)", name, role, rerr)
-					} else {
-						log.Printf("agent %q: role %q → provider=%q model=%q", name, role, route.Provider.Name(), route.Model)
-					}
-				}
-				cleanup = func() {
-					llmReg.CloseAll()
-					_ = database.Close()
-				}
-			}
+			log.Printf("agent %q: role %q → provider=%q model=%q", name, role, route.Provider.Name(), route.Model)
 		}
 	}
 
+	cleanup := func() { llmReg.CloseAll() }
 	return a, cleanup, cfg, nil
+}
+
+// agentTLSConfig builds the TLS client config for the agent. insecure skips
+// verification (dev only); caPath pins a CA certificate (for self-signed servers
+// reached by remote agents). When neither is set, system roots are used.
+func agentTLSConfig(caPath string, insecure bool) (*tls.Config, error) {
+	if insecure {
+		return &tls.Config{InsecureSkipVerify: true}, nil
+	}
+	if caPath == "" {
+		return nil, nil
+	}
+	// Layer the server CA on top of system roots so external HTTPS (e.g. upstream
+	// git remotes) still verifies while the self-signed server cert is trusted.
+	pool, _ := x509.SystemCertPool()
+	if pool == nil {
+		pool = x509.NewCertPool()
+	}
+	pem, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("read CA %q: %w", caPath, err)
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("CA %q: no certificates found", caPath)
+	}
+	return &tls.Config{RootCAs: pool}, nil
+}
+
+// configProvidersToDB converts config-file providers into db.Provider values so
+// the router can register their model-level role preferences (config-driven
+// agents route via provider role preferences, with no DB-backed role defs).
+func configProvidersToDB(cfg *config.Config) []*db.Provider {
+	out := make([]*db.Provider, 0, len(cfg.Providers))
+	for _, p := range cfg.Providers {
+		var models []db.ProviderModel
+		roleSet := map[string]bool{}
+		for _, m := range p.Models {
+			models = append(models, db.ProviderModel{Name: m.Name, Roles: m.Roles})
+			for _, r := range m.Roles {
+				roleSet[r] = true
+			}
+		}
+		roles := make([]string, 0, len(roleSet))
+		for r := range roleSet {
+			roles = append(roles, r)
+		}
+		out = append(out, &db.Provider{
+			Name:      p.Name,
+			Type:      p.Type,
+			BaseURL:   p.BaseURL,
+			ModelName: p.DefaultModel(),
+			Roles:     roles,
+			Models:    models,
+			Enabled:   true,
+		})
+	}
+	return out
 }
 
 // -------------------------------------------------------------------------
@@ -540,7 +619,7 @@ func runAgents(args []string) error {
 		if defMode == "" {
 			defMode = "colocated"
 		}
-		a, cleanup, _, err := buildAgent(def.Name, def.Roles, def.Skills, serverURL, agentConfig, workdir, defMode)
+		a, cleanup, _, err := buildAgent(def.Name, def.Roles, def.Skills, serverURL, agentConfig, workdir, defMode, false)
 		if err != nil {
 			return fmt.Errorf("build agent %q: %w", def.Name, err)
 		}

@@ -3,6 +3,7 @@ package git
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -65,6 +66,94 @@ func MergeBranch(repoPath, base, branch string) (sha string, err error) {
 		return "", fmt.Errorf("git.MergeBranch update base: %w", err)
 	}
 	return mergedHash.String(), nil
+}
+
+// SquashMerge collapses all of branch's changes into a single commit on base
+// (one parent = base's current HEAD) with the given message and author. Like
+// MergeBranch, it rejects genuine three-way conflicts with a *ConflictError.
+// Returns the new HEAD SHA of base.
+func SquashMerge(repoPath, base, branch, message, authorName, authorEmail string) (sha string, err error) {
+	repo, err := gogit.PlainOpen(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("git.SquashMerge open %q: %w", repoPath, err)
+	}
+	baseRef, err := repo.Reference(plumbing.NewBranchReferenceName(base), true)
+	if err != nil {
+		return "", fmt.Errorf("git.SquashMerge resolve base %q: %w", base, err)
+	}
+	branchRef, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
+	if err != nil {
+		return "", fmt.Errorf("git.SquashMerge resolve branch %q: %w", branch, err)
+	}
+	branchCommit, err := repo.CommitObject(branchRef.Hash())
+	if err != nil {
+		return "", fmt.Errorf("git.SquashMerge branch commit: %w", err)
+	}
+
+	// Determine the squashed tree.
+	var treeHash plumbing.Hash
+	if commitIsAncestor(repo, baseRef.Hash(), branchRef.Hash()) {
+		// Fast-forward: the branch already contains base, so its tree is the result.
+		treeHash = branchCommit.TreeHash
+	} else {
+		// Divergent: reject real conflicts, otherwise build the three-way merged tree.
+		if conflicts, derr := conflictingPaths(repo, baseRef.Hash(), branchRef.Hash()); derr != nil {
+			return "", fmt.Errorf("git.SquashMerge conflict check: %w", derr)
+		} else if len(conflicts) > 0 {
+			return "", &ConflictError{Paths: conflicts}
+		}
+		mergeBase, mberr := findMergeBase(repo, baseRef.Hash(), branchRef.Hash())
+		if mberr != nil {
+			return "", fmt.Errorf("git.SquashMerge merge base: %w", mberr)
+		}
+		mergeBaseTree, _ := treeForCommit(repo, mergeBase)
+		baseTree, terr := treeForCommit(repo, baseRef.Hash())
+		if terr != nil {
+			return "", terr
+		}
+		branchTree, terr := branchCommit.Tree()
+		if terr != nil {
+			return "", terr
+		}
+		entries, berr := buildMergedEntries(mergeBaseTree, baseTree, branchTree)
+		if berr != nil {
+			return "", berr
+		}
+		newTree := &object.Tree{Entries: entries}
+		obj := repo.Storer.NewEncodedObject()
+		if encErr := newTree.Encode(obj); encErr != nil {
+			return "", fmt.Errorf("git.SquashMerge encode tree: %w", encErr)
+		}
+		treeHash, err = repo.Storer.SetEncodedObject(obj)
+		if err != nil {
+			return "", fmt.Errorf("git.SquashMerge store tree: %w", err)
+		}
+	}
+
+	if message == "" {
+		message = fmt.Sprintf("Squash merge of '%s'\n", branch)
+	}
+	sig := object.Signature{Name: authorName, Email: authorEmail, When: time.Now()}
+	commit := &object.Commit{
+		Author:       sig,
+		Committer:    sig,
+		Message:      message,
+		TreeHash:     treeHash,
+		ParentHashes: []plumbing.Hash{baseRef.Hash()},
+	}
+	cObj := repo.Storer.NewEncodedObject()
+	if encErr := commit.Encode(cObj); encErr != nil {
+		return "", fmt.Errorf("git.SquashMerge encode commit: %w", encErr)
+	}
+	newHash, err := repo.Storer.SetEncodedObject(cObj)
+	if err != nil {
+		return "", fmt.Errorf("git.SquashMerge store commit: %w", err)
+	}
+	newRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(base), newHash)
+	if err := repo.Storer.SetReference(newRef); err != nil {
+		return "", fmt.Errorf("git.SquashMerge update base: %w", err)
+	}
+	return newHash.String(), nil
 }
 
 // DeleteBranch removes the branch ref from the bare repo at repoPath. Deleting a

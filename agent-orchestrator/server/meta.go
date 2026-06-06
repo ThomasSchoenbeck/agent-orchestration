@@ -86,12 +86,14 @@ func (s *Server) handleMetaTools(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	// nil backend: this only enumerates tool definitions (names/descriptions) for
+	// the UI; the handlers are never invoked here, so no ToolBackend is needed.
 	reg := tools.NewRegistry()
 	_ = tools.RegisterCodeTools(reg)
-	_ = tools.RegisterTaskTools(reg, s.db)
-	_ = tools.RegisterPlanTools(reg, s.db)
-	_ = tools.RegisterContextTools(reg, s.db)
-	_ = tools.RegisterCommentTools(reg, s.db)
+	_ = tools.RegisterTaskTools(reg, nil)
+	_ = tools.RegisterPlanTools(reg, nil)
+	_ = tools.RegisterContextTools(reg, nil)
+	_ = tools.RegisterCommentTools(reg, nil)
 
 	defs := reg.List()
 	items := make([]metaItem, 0, len(defs))

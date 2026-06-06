@@ -91,6 +91,9 @@ func (s *Server) registerHandlers() {
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		api.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+
+	// Agent-facing API namespace (/api/agent/*), gated by agents.api_key.
+	s.registerAgentRoutes()
 }
 
 // =========================================================================
@@ -396,23 +399,43 @@ func (s *Server) handleProjectInitRepo(w http.ResponseWriter, r *http.Request, p
 }
 
 func (s *Server) handleProjectBranches(w http.ResponseWriter, r *http.Request, projectID string) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w)
-		return
-	}
 	repoPath, ok := s.projectRepoPath(w, r, projectID)
 	if !ok {
 		return
 	}
-	branches, err := git.ListBranches(repoPath)
-	if err != nil {
-		s.internalError(w, err)
-		return
+	switch r.Method {
+	case http.MethodGet:
+		branches, err := git.ListBranches(repoPath)
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		if branches == nil {
+			branches = []string{}
+		}
+		api.WriteJSON(w, http.StatusOK, branches)
+
+	case http.MethodDelete:
+		// Branch names contain slashes (e.g. task/<id>), so the name comes as a
+		// query param rather than a path segment.
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, "branch name is required (?name=)")
+			return
+		}
+		if name == "main" {
+			api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, "cannot delete the base branch")
+			return
+		}
+		if err := git.DeleteBranch(repoPath, name); err != nil {
+			s.internalError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		methodNotAllowed(w)
 	}
-	if branches == nil {
-		branches = []string{}
-	}
-	api.WriteJSON(w, http.StatusOK, branches)
 }
 
 func (s *Server) handleProjectTree(w http.ResponseWriter, r *http.Request, projectID string) {
@@ -631,6 +654,11 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			AgentID:       r.URL.Query().Get("agent_id"),
 			RequirementID: r.URL.Query().Get("requirement_id"),
 			FeatureID:     r.URL.Query().Get("feature_id"),
+		}
+		if lStr := r.URL.Query().Get("limit"); lStr != "" {
+			if n, err := strconv.Atoi(lStr); err == nil && n > 0 {
+				f.Limit = n
+			}
 		}
 		tasks, err := s.db.ListTasks(r.Context(), f)
 		if err != nil {
@@ -1428,16 +1456,6 @@ func (s *Server) handleProviderDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	sub := pathSegment(r.URL.Path, "/api/providers/", 1)
 
-	// POST /api/providers/seed
-	if id == "seed" {
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w)
-			return
-		}
-		s.handleProviderSeed(w, r)
-		return
-	}
-
 	// POST /api/providers/:id/test
 	if sub == "test" {
 		if r.Method != http.MethodPost {
@@ -1504,80 +1522,6 @@ func (s *Server) handleProviderDetail(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
-}
-
-// handleProviderSeed imports providers from the loaded config into the DB
-// (idempotent — skips any provider whose name already exists).
-func (s *Server) handleProviderSeed(w http.ResponseWriter, r *http.Request) {
-	existing, err := s.db.ListProviders(r.Context())
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	existingNames := make(map[string]struct{}, len(existing))
-	for _, p := range existing {
-		existingNames[p.Name] = struct{}{}
-	}
-
-	var toSeed []*db.Provider
-	for _, pcfg := range s.cfg.Providers {
-		if _, ok := existingNames[pcfg.Name]; ok {
-			continue
-		}
-		var models []db.ProviderModel
-		roleSet := map[string]bool{}
-		for _, m := range pcfg.Models {
-			models = append(models, db.ProviderModel{
-				Name:               m.Name,
-				Roles:              m.Roles,
-				InputPerMillion:    m.InputPerMillion,
-				OutputPerMillion:   m.OutputPerMillion,
-				TextToolCalls:      m.TextToolCalls,
-				FoldSystemIntoUser: m.FoldSystemIntoUser,
-				SystemPrefix:       m.SystemPrefix,
-				ToolAllowlist:      m.ToolAllowlist,
-			})
-			for _, role := range m.Roles {
-				roleSet[role] = true
-			}
-		}
-		roles := make([]string, 0, len(roleSet))
-		for role := range roleSet {
-			roles = append(roles, role)
-		}
-		toSeed = append(toSeed, &db.Provider{
-			Name:      pcfg.Name,
-			Type:      pcfg.Type,
-			BaseURL:   pcfg.BaseURL,
-			APIKey:    pcfg.APIKey,
-			ModelName: pcfg.DefaultModel(),
-			Enabled:   true,
-			Roles:     roles,
-			Models:    models,
-		})
-	}
-
-	n, err := s.db.SeedProviders(r.Context(), toSeed)
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-
-	// Load any newly seeded providers into the in-memory registry.
-	if n > 0 {
-		if all, err := s.db.ListProviders(r.Context()); err == nil {
-			for _, p := range all {
-				if p.Enabled {
-					if prov, err := llm.NewFromSpec(p.Name, p.Type, p.BaseURL, p.APIKey, p.ModelName, p.Config); err == nil {
-						s.llmReg.Set(p.Name, prov)
-					}
-				}
-			}
-		}
-	}
-
-	log.Printf("provider seed: inserted %d new provider(s)", n)
-	api.WriteJSON(w, http.StatusOK, map[string]int{"seeded": n})
 }
 
 // handleProviderTest instantiates a provider on-the-fly and makes a minimal
@@ -1652,7 +1596,13 @@ func (s *Server) handleContextQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	projectID := r.URL.Query().Get("project_id")
 	query := r.URL.Query().Get("query")
-	entries, err := s.db.QueryContext(r.Context(), projectID, query, 20)
+	limit := 20
+	if lStr := r.URL.Query().Get("limit"); lStr != "" {
+		if n, err := strconv.Atoi(lStr); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	entries, err := s.db.QueryContext(r.Context(), projectID, query, limit)
 	if err != nil {
 		s.internalError(w, err)
 		return
@@ -1940,6 +1890,20 @@ func (s *Server) recordMetric(ctx context.Context, taskID, agentID string, m *ap
 	if m.Model != "" && m.Cost == 0 && (m.InputTokens > 0 || m.OutputTokens > 0) {
 		cost = s.costFromModel(ctx, m.Model, m.InputTokens, m.OutputTokens)
 	}
+	providerID := ""
+	if m.Model != "" {
+		providerID = s.providerIDForModel(ctx, m.Model)
+	}
+	// Attribution: pull the role/project (and the assigned agent when the caller
+	// didn't supply one) from the task so cost can be broken down later.
+	role, projectID := "", ""
+	if t, err := s.db.GetTask(ctx, taskID); err == nil && t != nil {
+		role = s.roleName(ctx, t.Role)
+		projectID = t.ProjectID
+		if agentID == "" {
+			agentID = t.AssignedAgentID
+		}
+	}
 	_ = s.db.CreateMetric(ctx, &db.Metric{
 		TaskID:       taskID,
 		AgentID:      agentID,
@@ -1950,7 +1914,58 @@ func (s *Server) recordMetric(ctx context.Context, taskID, agentID string, m *ap
 		Cost:         cost,
 		DurationMs:   m.DurationMs,
 		Success:      success,
+		Source:       "agent",
+		ProviderID:   providerID,
+		AgentRole:    role,
+		ProjectID:    projectID,
 	})
+}
+
+// recordChatMetric records a chat (non-agent) LLM interaction into the cost
+// ledger, computing cost from the model's pricing. conversationID/projectID may
+// be empty (e.g. the standalone chat page has neither).
+func (s *Server) recordChatMetric(ctx context.Context, model, conversationID, projectID string, resp llm.ChatResponse) {
+	_ = s.db.CreateMetric(ctx, &db.Metric{
+		Model:          model,
+		TokensUsed:     resp.TokensUsed,
+		InputTokens:    resp.InputTokens,
+		OutputTokens:   resp.OutputTokens,
+		Cost:           s.costFromModel(ctx, model, resp.InputTokens, resp.OutputTokens),
+		Success:        true,
+		Source:         "chat",
+		ProviderID:     s.providerIDForModel(ctx, model),
+		ConversationID: conversationID,
+		ProjectID:      projectID,
+	})
+}
+
+// providerIDForModel returns the id of the provider that declares modelName, or
+// "" when none is found.
+func (s *Server) providerIDForModel(ctx context.Context, modelName string) string {
+	providers, err := s.db.ListProviders(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, p := range providers {
+		for _, m := range p.Models {
+			if m.Name == modelName {
+				return p.ID
+			}
+		}
+	}
+	return ""
+}
+
+// roleName resolves a role reference (id or name) to its human-readable name,
+// falling back to the ref itself when no definition matches.
+func (s *Server) roleName(ctx context.Context, ref string) string {
+	if ref == "" {
+		return ""
+	}
+	if rd, err := s.db.GetRoleDefinition(ctx, ref); err == nil && rd != nil && rd.Name != "" {
+		return rd.Name
+	}
+	return ref
 }
 
 // costFromModel looks up the provider that owns modelName and computes cost

@@ -16,11 +16,13 @@ vi.mock('../lib/api.js', () => ({
   seedProviders:  vi.fn(),
   getMetrics:     vi.fn(),
   getMetricsCosts: vi.fn(),
+  getCostBreakdown: vi.fn(),
   listRoles:      vi.fn(),
 }))
 
 import {
   listProviders, createProvider, updateProvider, listRoles, getMetrics, getMetricsCosts,
+  getCostBreakdown,
 } from '../lib/api.js'
 
 const ROLES = [
@@ -42,19 +44,34 @@ beforeEach(() => {
   updateProvider.mockResolvedValue({ ...PROVIDER })
   getMetrics.mockResolvedValue(null)
   getMetricsCosts.mockResolvedValue(null)
+  getCostBreakdown.mockResolvedValue([])
 })
 
-describe('Providers — cost (Bug 13)', () => {
-  it('renders total cost from /api/metrics/costs', async () => {
-    getMetricsCosts.mockResolvedValue({
-      total_cost: 0.1234,
-      by_agent: [{ agent_id: 'a1', cost: 0.1, tasks: 3 }],
-    })
+describe('Providers — cost breakdown (F6)', () => {
+  it('renders breakdown buckets from the group_by endpoint', async () => {
+    getCostBreakdown.mockResolvedValue([
+      { key: 'agent', input_tokens: 100, output_tokens: 20, cost: 0.12, count: 3 },
+      { key: 'chat', input_tokens: 200, output_tokens: 40, cost: 0.05, count: 2 },
+    ])
     render(Providers)
     await waitFor(() =>
-      expect(screen.getByText('Total cost (actual usage)')).toBeInTheDocument()
+      expect(screen.getByText('Cost breakdown')).toBeInTheDocument()
     )
-    expect(screen.getByText('~$0.1234')).toBeInTheDocument()
+    expect(screen.getByText('agent')).toBeInTheDocument()
+    expect(screen.getByText('chat')).toBeInTheDocument()
+    expect(screen.getByText('~$0.1200')).toBeInTheDocument()
+  })
+})
+
+describe('Providers — cost (merged into Metrics section)', () => {
+  it('renders total cost from the metrics summary, currency-formatted', async () => {
+    getMetrics.mockResolvedValue({ total_cost: 0.1234, total_tokens: 500 })
+    render(Providers)
+    await waitFor(() =>
+      expect(screen.getByText('~$0.1234')).toBeInTheDocument()
+    )
+    // The separate "Cost" box is gone — cost lives in the Metrics grid now.
+    expect(screen.queryByText('Total cost (actual usage)')).not.toBeInTheDocument()
   })
 })
 

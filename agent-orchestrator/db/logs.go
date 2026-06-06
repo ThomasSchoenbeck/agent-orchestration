@@ -97,15 +97,72 @@ func (d *Database) CreateMetric(ctx context.Context, m *Metric) error {
 	if m.Success {
 		success = 1
 	}
+	if m.Source == "" {
+		m.Source = "agent"
+	}
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO metrics
-		 (id, task_id, agent_id, model, tokens_used, input_tokens, output_tokens, cost, duration_ms, success, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, task_id, agent_id, model, tokens_used, input_tokens, output_tokens, cost, duration_ms, success, created_at,
+		  source, provider_id, agent_role, conversation_id, project_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, nullableStr(m.TaskID), nullableStr(m.AgentID), m.Model,
 		m.TokensUsed, m.InputTokens, m.OutputTokens,
 		m.Cost, m.DurationMs, success, m.CreatedAt,
+		m.Source, m.ProviderID, m.AgentRole, m.ConversationID, m.ProjectID,
 	)
 	return err
+}
+
+// CostBucket is one row of a cost breakdown grouped by some dimension.
+type CostBucket struct {
+	Key          string  `json:"key"`
+	InputTokens  int     `json:"input_tokens"`
+	OutputTokens int     `json:"output_tokens"`
+	Cost         float64 `json:"cost"`
+	Count        int     `json:"count"`
+}
+
+// costBreakdownColumns whitelists the group-by dimensions to a safe SQL column
+// expression (prevents injection via the query param).
+var costBreakdownColumns = map[string]string{
+	"source":     "source",
+	"agent_role": "agent_role",
+	"agent_id":   "agent_id",
+	"provider":   "provider_id",
+	"model":      "model",
+	"project":    "project_id",
+	"day":        "date(created_at)",
+}
+
+// CostBreakdown aggregates token usage and cost from the metrics ledger grouped
+// by the given dimension (defaults to "source" for an unknown value).
+func (d *Database) CostBreakdown(ctx context.Context, groupBy string) ([]*CostBucket, error) {
+	col, ok := costBreakdownColumns[groupBy]
+	if !ok {
+		col = "source"
+	}
+	rows, err := d.db.QueryContext(ctx, fmt.Sprintf(
+		`SELECT COALESCE(%s, '') AS k,
+		        COALESCE(SUM(input_tokens), 0),
+		        COALESCE(SUM(output_tokens), 0),
+		        COALESCE(SUM(cost), 0),
+		        COUNT(*)
+		 FROM metrics
+		 GROUP BY k
+		 ORDER BY SUM(cost) DESC`, col))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*CostBucket
+	for rows.Next() {
+		var b CostBucket
+		if err := rows.Scan(&b.Key, &b.InputTokens, &b.OutputTokens, &b.Cost, &b.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, &b)
+	}
+	return out, rows.Err()
 }
 
 // TaskCostSummary is the response payload for GET /api/tasks/{id}/cost.

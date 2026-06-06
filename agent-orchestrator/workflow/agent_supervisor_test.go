@@ -32,12 +32,16 @@ type fakeLauncher struct {
 	procs    []*fakeProc
 	autoExit bool
 	nextPID  int
+	lastArgs []string // args of the most recent Launch
+	lastEnv  []string // env of the most recent Launch
 }
 
-func (l *fakeLauncher) Launch(_ []string) (ManagedProcess, error) {
+func (l *fakeLauncher) Launch(args, env []string) (ManagedProcess, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.nextPID++
+	l.lastArgs = args
+	l.lastEnv = env
 	p := &fakeProc{pid: l.nextPID, done: make(chan struct{})}
 	if l.autoExit {
 		close(p.done)
@@ -51,6 +55,20 @@ func (l *fakeLauncher) at(i int) *fakeProc {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.procs[i]
+}
+func (l *fakeLauncher) last() (args, env []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.lastArgs, l.lastEnv
+}
+
+func containsStr(ss []string, target string) bool {
+	for _, s := range ss {
+		if s == target {
+			return true
+		}
+	}
+	return false
 }
 
 // --- helpers (methods on AgentSupervisor are fine in a _test.go in-package) ---
@@ -118,6 +136,36 @@ func TestSupervisor_StartsNInstances(t *testing.T) {
 	rows, _ := d.ListAgentsByTemplate(ctx, tpl.ID)
 	if len(rows) != 3 {
 		t.Errorf("expected 3 instance rows, got %d", len(rows))
+	}
+}
+
+func TestSupervisor_InjectsEnvAndNoConfigInArgs(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	fl := &fakeLauncher{}
+	s := newTestSupervisor(d, fl, 0)
+	s.SetSpawnEnv("secret-token", "/tls/server.crt", "https://localhost:8080")
+	tpl := makeTemplate(t, d, "bw", 1, true, false)
+
+	if err := s.StartTemplate(ctx, tpl.ID); err != nil {
+		t.Fatalf("StartTemplate: %v", err)
+	}
+
+	args, env := fl.last()
+	if !containsStr(args, "--server") || !containsStr(args, "--mode") {
+		t.Errorf("args missing --server/--mode: %v", args)
+	}
+	if containsStr(args, "--config") {
+		t.Errorf("co-located spawn must not pass --config: %v", args)
+	}
+	for _, want := range []string{
+		"AGENT_AUTH_TOKEN=secret-token",
+		"AGENT_SERVER_CA=/tls/server.crt",
+		"AGENT_SERVER_URL=https://localhost:8080",
+	} {
+		if !containsStr(env, want) {
+			t.Errorf("env missing %q; got %v", want, env)
+		}
 	}
 }
 

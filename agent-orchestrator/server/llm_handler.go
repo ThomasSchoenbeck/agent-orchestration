@@ -95,6 +95,8 @@ func (s *Server) handleLLMChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.recordChatMetric(r.Context(), model, "", "", resp)
+
 	api.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"role":     role,
 		"model":    model,
@@ -139,6 +141,21 @@ func (s *Server) handleMetricsTokens(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMetricsCosts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		api.WriteError(w, http.StatusMethodNotAllowed, api.ErrCodeInvalidInput, "method not allowed")
+		return
+	}
+	// F6: ?group_by=source|agent_role|agent_id|provider|model|project|day returns
+	// the unified cost ledger broken down by that dimension.
+	if gb := r.URL.Query().Get("group_by"); gb != "" {
+		buckets, err := s.db.CostBreakdown(r.Context(), gb)
+		if err != nil {
+			api.WriteError(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to collect cost breakdown: "+err.Error())
+			return
+		}
+		if buckets == nil {
+			api.WriteJSON(w, http.StatusOK, []any{})
+			return
+		}
+		api.WriteJSON(w, http.StatusOK, buckets)
 		return
 	}
 	collector := logging.NewCollector(s.db)

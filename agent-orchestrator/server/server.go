@@ -180,6 +180,29 @@ func (s *Server) Start(ctx context.Context) error {
 		workflow.NewQueueSupervisor(s.db, 0).Run(ctx)
 	}()
 
+	// Resolve TLS up front (before booting co-located agents) so the cert file
+	// exists when agents start and trust it. Reused by the listener below.
+	var certFile, keyFile string
+	scheme := "http"
+	if !s.cfg.Server.Insecure {
+		sans := []string{"localhost", "127.0.0.1", "::1"}
+		if h := s.cfg.Server.PublicHost(); h != "" {
+			sans = append(sans, h)
+		}
+		var err error
+		certFile, keyFile, err = resolveTLSCert(
+			s.cfg.Server.TLSCertFile, s.cfg.Server.TLSKeyFile, s.cfg.Storage.Root, sans)
+		if err != nil {
+			return err
+		}
+		scheme = "https"
+	}
+
+	// Give the supervisor the connection settings to inject into spawned agents,
+	// before Boot so co-located children can reach + authenticate to the server.
+	agentURL := fmt.Sprintf("%s://localhost:%d", scheme, s.cfg.Server.Port)
+	s.agentSup.SetSpawnEnv(s.cfg.Agents.APIKey, certFile, agentURL)
+
 	// Feature 8: launch autostart managed-agent templates; stop them on shutdown.
 	s.agentSup.Boot(ctx)
 	go func() {
@@ -189,8 +212,16 @@ func (s *Server) Start(ctx context.Context) error {
 		s.agentSup.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("server: listening on http://%s", addr)
-	if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	// Insecure (dev/local): plain HTTP. Default: HTTPS with the resolved cert.
+	if s.cfg.Server.Insecure {
+		log.Printf("server: listening on http://%s (insecure)", addr)
+		if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
+	}
+	log.Printf("server: listening on https://%s", addr)
+	if err := s.httpSrv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil

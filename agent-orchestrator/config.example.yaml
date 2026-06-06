@@ -16,7 +16,13 @@ server:
   port: 8080                 # TCP port the HTTP server binds to. Default: 8080
   host: "0.0.0.0"            # interface to listen on ("0.0.0.0" = all). Default: 0.0.0.0
   external_host: ""          # publicly-reachable address agents use (defaults to host)
-  tls_enabled: false         # enable TLS (supply cert/key separately). Default: false
+  tls_enabled: false         # legacy/unused — superseded by `insecure` below
+  insecure: false            # serve plain HTTP instead of HTTPS. Default: false (HTTPS).
+                             #   Also settable via `server --insecure`. Use for local/dev.
+  tls_cert_file: ""          # PEM cert path; with tls_key_file, used for HTTPS.
+  tls_key_file: ""           # PEM key path (pairs with tls_cert_file).
+                             #   When both empty, the server auto-generates a self-signed cert
+                             #   under {storage.root}/tls and reuses it on restart.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Database (main) + separate logs DB
@@ -182,6 +188,14 @@ agents:
   circuit_breaker_threshold: 5     # consecutive failures before tripping. Default: 5
   max_managed_agents: 0            # cap on server-spawned agents (0 = unlimited)
 
+  # Agent API auth + TLS trust.
+  api_key: ""                      # bearer token agents must present on /api/agent/*; empty = open.
+                                   #   The server injects this into co-located agents automatically;
+                                   #   remote agents read it here (or from $AGENT_AUTH_TOKEN).
+  server_ca: ""                    # PEM CA file the agent trusts for the server's HTTPS cert
+                                   #   (remote agents; co-located get it via $AGENT_SERVER_CA).
+  tls_insecure: false              # agent skips TLS verification (dev only). Env: $AGENT_TLS_INSECURE=true
+
   port_pool_start: 18000           # first port in the agent test-server pool. Default: 18000
   port_pool_size: 100              # number of ports in the pool. Default: 100
   merge_supervisor_interval_sec: 10 # AWAITING_MERGE poll cadence. Default: 10
@@ -227,3 +241,10 @@ storage:
   repos_dir: repos                      # → {root}/{repos_dir}/{project_id}.git
   worktrees_dir: worktrees              # → {root}/{worktrees_dir}/{task_id}
   worktree_retention_failed_hours: 168  # retain failed-task worktrees (hours). Default: 168
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Merge — how approved pull requests land on main. Both default to true.
+# ─────────────────────────────────────────────────────────────────────────────
+merge:
+  squash: true          # collapse the branch into a single commit on main. Default: true
+  delete_branch: true   # delete the source branch after a successful merge. Default: true

@@ -92,7 +92,14 @@ func (s *Server) approvePR(w http.ResponseWriter, r *http.Request, taskID, prID,
 	}
 	repoPath := s.storage.RepoPath(project.ID)
 
-	sha, mergeErr := git.MergeBranch(repoPath, pr.Base, pr.Branch)
+	var sha string
+	var mergeErr error
+	if s.cfg.Merge.ShouldSquash() {
+		msg, name, email := s.squashCommitInfo(ctx, task, deciderID)
+		sha, mergeErr = git.SquashMerge(repoPath, pr.Base, pr.Branch, msg, name, email)
+	} else {
+		sha, mergeErr = git.MergeBranch(repoPath, pr.Base, pr.Branch)
+	}
 	if mergeErr != nil {
 		// Conflict or merge failure: reject the PR and send the task back for
 		// revision. The branch is kept so the worker can resolve and resubmit.
@@ -111,11 +118,13 @@ func (s *Server) approvePR(w http.ResponseWriter, r *http.Request, taskID, prID,
 		return
 	}
 
-	// Merge succeeded: delete the source branch, record the SHA, complete.
-	if derr := git.DeleteBranch(repoPath, pr.Branch); derr != nil {
-		// Non-fatal: the merge already landed; log and continue.
-		s.logPREvent(ctx, task, deciderID, "pr_branch_delete_failed", task.Status, task.Status,
-			fmt.Sprintf("branch %s delete failed: %v", pr.Branch, derr))
+	// Merge succeeded: optionally delete the source branch, record the SHA, complete.
+	if s.cfg.Merge.ShouldDeleteBranch() {
+		if derr := git.DeleteBranch(repoPath, pr.Branch); derr != nil {
+			// Non-fatal: the merge already landed; log and continue.
+			s.logPREvent(ctx, task, deciderID, "pr_branch_delete_failed", task.Status, task.Status,
+				fmt.Sprintf("branch %s delete failed: %v", pr.Branch, derr))
+		}
 	}
 	_ = s.db.SetPRDecision(ctx, prID, "merged", deciderID, body)
 
@@ -173,6 +182,25 @@ func (s *Server) rejectPR(w http.ResponseWriter, r *http.Request, taskID, prID, 
 
 	updated, _ := s.db.GetPR(ctx, prID)
 	api.WriteJSON(w, http.StatusOK, updated)
+}
+
+// squashCommitInfo derives the squash commit message and author for a merged
+// task: the message is "task/<id>: <title>" and the author is the agent that
+// performed the merge (deciderID), resolved to its name when available.
+func (s *Server) squashCommitInfo(ctx context.Context, task *db.Task, deciderID string) (message, name, email string) {
+	title, _ := task.Payload["title"].(string)
+	if title == "" {
+		title = "merge work"
+	}
+	message = fmt.Sprintf("task/%s: %s\n", task.ID, title)
+	name = deciderID
+	if a, err := s.db.GetAgent(ctx, deciderID); err == nil && a != nil && a.Name != "" {
+		name = a.Name
+	}
+	if name == "" {
+		name = "Agent Orchestrator"
+	}
+	return message, name, "agent@agent-orchestrator"
 }
 
 func (s *Server) logPREvent(ctx context.Context, task *db.Task, agentID, event, from, to, desc string) {

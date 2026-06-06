@@ -12,6 +12,7 @@ const (
 	ErrCodeConflict     = "CONFLICT"
 	ErrCodeInternal     = "INTERNAL_ERROR"
 	ErrCodeUnavailable  = "UNAVAILABLE"
+	ErrCodeUnauthorized = "UNAUTHORIZED"
 )
 
 // ErrorResponse is the standard JSON error body.

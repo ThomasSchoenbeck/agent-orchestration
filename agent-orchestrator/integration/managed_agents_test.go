@@ -32,7 +32,7 @@ type itFakeLauncher struct {
 	procs []*itFakeProc
 }
 
-func (l *itFakeLauncher) Launch(_ []string) (workflow.ManagedProcess, error) {
+func (l *itFakeLauncher) Launch(_, _ []string) (workflow.ManagedProcess, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	p := &itFakeProc{done: make(chan struct{})}

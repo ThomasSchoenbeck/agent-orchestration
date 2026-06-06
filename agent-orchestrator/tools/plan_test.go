@@ -2,12 +2,33 @@ package tools_test
 
 import (
 	"context"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
+	"agent-orchestrator/agent"
+	"agent-orchestrator/config"
 	"agent-orchestrator/db"
+	"agent-orchestrator/llm"
+	"agent-orchestrator/server"
 	"agent-orchestrator/tools"
 )
+
+// toolBackend wraps a database in a real server over httptest and returns a
+// ToolBackend (the agent's HTTP client) pointed at it. Tool calls therefore
+// exercise the full tool→HTTP→server→DB path, so DB-effect assertions on the
+// same *db.Database still hold after the T6 migration.
+func toolBackend(t *testing.T, d *db.Database) tools.ToolBackend {
+	t.Helper()
+	cfg := &config.Config{
+		Server:  config.ServerConfig{Port: 8080, Host: "127.0.0.1"},
+		Storage: config.StorageConfig{Root: t.TempDir()},
+	}
+	srv := server.New(cfg, d, llm.NewRegistry())
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	return agent.NewServerClient(ts.URL)
+}
 
 // openPlanDB opens a temporary database and returns it with a Registry
 // that has plan tools registered. It also creates and returns a test project.
@@ -21,7 +42,7 @@ func openPlanDB(t *testing.T) (*db.Database, *tools.Registry, string) {
 	t.Cleanup(func() { _ = d.Close() })
 
 	reg := tools.NewRegistry()
-	if err := tools.RegisterPlanTools(reg, d); err != nil {
+	if err := tools.RegisterPlanTools(reg, toolBackend(t, d)); err != nil {
 		t.Fatalf("RegisterPlanTools: %v", err)
 	}
 
@@ -57,19 +78,29 @@ func callToolExpectError(t *testing.T, reg *tools.Registry, name string, args ma
 	return err
 }
 
-// taskIDsFromResult extracts the []string task_ids from a plan_project result.
-// Handlers return native Go types (not JSON-decoded), so the slice is []string.
+// taskIDsFromResult extracts the task_ids from a plan_project result. Planning
+// tools now return the server's JSON-decoded response, so the slice arrives as
+// []interface{}; native []string is still accepted for safety.
 func taskIDsFromResult(t *testing.T, result map[string]interface{}) []string {
 	t.Helper()
 	raw, ok := result["task_ids"]
 	if !ok {
 		t.Fatal("result missing 'task_ids' key")
 	}
-	ids, ok := raw.([]string)
-	if !ok {
-		t.Fatalf("expected task_ids to be []string, got %T", raw)
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []interface{}: // JSON-decoded from the HTTP response
+		ids := make([]string, 0, len(v))
+		for _, item := range v {
+			s, _ := item.(string)
+			ids = append(ids, s)
+		}
+		return ids
+	default:
+		t.Fatalf("expected task_ids to be a string slice, got %T", raw)
+		return nil
 	}
-	return ids
 }
 
 // intResult extracts an int value from a result map key.

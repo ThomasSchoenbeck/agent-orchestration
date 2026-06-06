@@ -113,10 +113,35 @@ func (qs *QueueSupervisor) planMode(ctx context.Context, p *db.Project) string {
 	return "initial"
 }
 
+// plannerRoleRef returns the role reference for planner tasks: the enabled role
+// definition that carries the creates_tasks capability (matched by id, the same
+// form agents register and tasks store). The role's name is irrelevant — in
+// setups that call it "orchestrator" rather than "planner" this still resolves
+// correctly. Falls back to the literal "planner" name (and warns) when no role
+// has the capability, since the task would otherwise be unclaimable.
+func (qs *QueueSupervisor) plannerRoleRef(ctx context.Context) string {
+	defs, err := qs.database.ListRoleDefinitions(ctx)
+	if err == nil {
+		for _, d := range defs {
+			if !d.Enabled {
+				continue
+			}
+			for _, c := range d.Capabilities {
+				if c == "creates_tasks" {
+					return d.ID
+				}
+			}
+		}
+	}
+	log.Printf("queue_supervisor: no enabled role has the creates_tasks capability; " +
+		"planner tasks will use role \"planner\" and may be unclaimable")
+	return "planner"
+}
+
 func (qs *QueueSupervisor) enqueuePlanner(ctx context.Context, p *db.Project, mode string) {
 	task := &db.Task{
 		ProjectID: p.ID,
-		Role:      "planner",
+		Role:      qs.plannerRoleRef(ctx),
 		Status:    db.TaskStatusBacklog,
 		Priority:  9,
 		Payload: map[string]interface{}{

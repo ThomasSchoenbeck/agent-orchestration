@@ -178,3 +178,44 @@ func TestAutoQueue_Terminates(t *testing.T) {
 		t.Errorf("expected no further planner tasks after completion, got %d", n)
 	}
 }
+
+// TestPlannerRoleRef_PicksCreatesTasksRole verifies planner tasks target the
+// role carrying creates_tasks (by id), regardless of its name — so a setup that
+// names it "orchestrator" rather than "planner" still gets claimable tasks.
+func TestPlannerRoleRef_PicksCreatesTasksRole(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	if err := d.CreateRoleDefinition(ctx, &db.RoleDefinition{Name: "worker", Label: "Worker", Enabled: true}); err != nil {
+		t.Fatalf("CreateRoleDefinition worker: %v", err)
+	}
+	orch := &db.RoleDefinition{Name: "orchestrator", Label: "Orchestrator", Enabled: true, Capabilities: []string{"creates_tasks"}}
+	if err := d.CreateRoleDefinition(ctx, orch); err != nil {
+		t.Fatalf("CreateRoleDefinition orchestrator: %v", err)
+	}
+
+	qs := newQueueSupervisor(d)
+	if got := qs.plannerRoleRef(ctx); got != orch.ID {
+		t.Errorf("plannerRoleRef = %q, want orchestrator id %q", got, orch.ID)
+	}
+
+	// And the enqueued planner task carries that role id.
+	pid := armedProject(t, d, &db.Project{Name: "cap"})
+	qs.TickOnce(ctx)
+	tasks, _ := d.ListTasks(ctx, db.TaskFilters{ProjectID: pid, Role: orch.ID})
+	if len(tasks) != 1 {
+		t.Errorf("expected 1 planner task with role=%s, got %d", orch.ID, len(tasks))
+	}
+}
+
+func TestPlannerRoleRef_FallbackWhenNoCapabilityRole(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	if err := d.CreateRoleDefinition(ctx, &db.RoleDefinition{Name: "worker", Label: "Worker", Enabled: true}); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
+	}
+	qs := newQueueSupervisor(d)
+	if got := qs.plannerRoleRef(ctx); got != "planner" {
+		t.Errorf("plannerRoleRef = %q, want fallback \"planner\"", got)
+	}
+}

@@ -54,7 +54,7 @@ func mockServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 		_ = json.NewEncoder(w).Encode(nil)
 	})
 
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	t.Cleanup(srv.Close)
 	return srv, &heartbeats
 }
@@ -270,7 +270,7 @@ func taskOnceServer(t *testing.T, task *db.Task) (*httptest.Server, *atomic.Int3
 		w.WriteHeader(http.StatusOK)
 	})
 
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	t.Cleanup(srv.Close)
 	return srv, &nextCalls, &resultCalls, &reviewCalls
 }
@@ -359,7 +359,7 @@ func TestAgent_ReconnectsAfterHeartbeatFailures(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(nil)
 	})
 
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	t.Cleanup(srv.Close)
 
 	cfg := testConfig()
@@ -471,7 +471,7 @@ func TestAgent_PollLoop_SkipsWrongRoleTask(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(wrapAgentAPI(mux))
 	t.Cleanup(srv.Close)
 
 	cfg := testConfig()
