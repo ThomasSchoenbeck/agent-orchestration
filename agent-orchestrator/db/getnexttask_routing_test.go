@@ -1,10 +1,10 @@
 package db_test
 
-// Feature 3 / Bug 9: capability-driven GetNextTask routing.
-//   - AWAITING_REVIEW is claimable only by an agent whose role matches the
+// Feature 3 / Task 9: capability-driven GetNextTask routing, id-based.
+//   - AWAITING_REVIEW is claimable only by an agent whose role id matches the
 //     task's review_role AND carries handles_review.
 //   - AWAITING_MERGE is claimable by any agent role carrying handles_merge.
-//   - CreateTask resolves a default review_role.
+//   - CreateTask resolves a default review_role to a role id.
 
 import (
 	"context"
@@ -13,32 +13,33 @@ import (
 	"agent-orchestrator/db"
 )
 
-func seedRole(t *testing.T, d *db.Database, name string, caps []string) {
+// seedRole creates a role definition and returns it (with its assigned id).
+func seedRole(t *testing.T, d *db.Database, name string, caps []string) *db.RoleDefinition {
 	t.Helper()
-	if err := d.CreateRoleDefinition(context.Background(), &db.RoleDefinition{
-		Name: name, Label: name, Capabilities: caps, Enabled: true,
-	}); err != nil {
+	rd := &db.RoleDefinition{Name: name, Label: name, Capabilities: caps, Enabled: true}
+	if err := d.CreateRoleDefinition(context.Background(), rd); err != nil {
 		t.Fatalf("seed role %q: %v", name, err)
 	}
+	return rd
 }
 
 func TestGetNextTask_CapabilityReviewRouting(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	seedRole(t, d, "reviewer", []string{"handles_review"})
+	reviewer := seedRole(t, d, "reviewer", []string{"handles_review"})
 
 	task := &db.Task{
 		ProjectID:  "p1",
 		Role:       "worker",
-		ReviewRole: "reviewer",
+		ReviewRole: reviewer.ID, // review pinned by role id
 		Status:     db.TaskStatusAwaitingReview,
 	}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 
-	// A reviewer (has handles_review, matches review_role) claims it.
-	got, err := d.GetNextTask(ctx, []string{"reviewer"})
+	// A reviewer (has handles_review, id matches review_role) claims it.
+	got, err := d.GetNextTask(ctx, []string{reviewer.ID})
 	if err != nil {
 		t.Fatalf("GetNextTask reviewer: %v", err)
 	}
@@ -46,33 +47,32 @@ func TestGetNextTask_CapabilityReviewRouting(t *testing.T) {
 		t.Fatalf("reviewer should claim the AWAITING_REVIEW task, got %v", got)
 	}
 
-	// A worker (no handles_review) does not claim it.
-	none, err := d.GetNextTask(ctx, []string{"worker"})
+	// An agent without handles_review does not claim it.
+	none, err := d.GetNextTask(ctx, []string{"some-other-role"})
 	if err != nil {
-		t.Fatalf("GetNextTask worker: %v", err)
+		t.Fatalf("GetNextTask other: %v", err)
 	}
 	if none != nil {
-		t.Errorf("worker must not claim an AWAITING_REVIEW task, got %v", none)
+		t.Errorf("non-reviewer must not claim an AWAITING_REVIEW task, got %v", none)
 	}
 }
 
 func TestGetNextTask_ReviewRoleWithoutCapability(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	// worker exists but lacks handles_review.
-	seedRole(t, d, "worker", nil)
+	worker := seedRole(t, d, "worker", nil) // exists but lacks handles_review
 
 	task := &db.Task{
 		ProjectID:  "p1",
 		Role:       "worker",
-		ReviewRole: "worker", // review pinned to a role without the capability
+		ReviewRole: worker.ID, // review pinned to a role without the capability
 		Status:     db.TaskStatusAwaitingReview,
 	}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 
-	none, err := d.GetNextTask(ctx, []string{"worker"})
+	none, err := d.GetNextTask(ctx, []string{worker.ID})
 	if err != nil {
 		t.Fatalf("GetNextTask: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestGetNextTask_ReviewRoleWithoutCapability(t *testing.T) {
 func TestGetNextTask_MergeRoutingByCapability(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	seedRole(t, d, "deployer", []string{"handles_merge"})
+	deployer := seedRole(t, d, "deployer", []string{"handles_merge"})
 
 	task := &db.Task{
 		ProjectID: "p1",
@@ -96,7 +96,7 @@ func TestGetNextTask_MergeRoutingByCapability(t *testing.T) {
 	}
 
 	// Deployer (handles_merge) claims the AWAITING_MERGE task.
-	got, err := d.GetNextTask(ctx, []string{"deployer"})
+	got, err := d.GetNextTask(ctx, []string{deployer.ID})
 	if err != nil {
 		t.Fatalf("GetNextTask deployer: %v", err)
 	}
@@ -105,9 +105,9 @@ func TestGetNextTask_MergeRoutingByCapability(t *testing.T) {
 	}
 
 	// An agent without handles_merge does not.
-	none, err := d.GetNextTask(ctx, []string{"worker"})
+	none, err := d.GetNextTask(ctx, []string{"some-other-role"})
 	if err != nil {
-		t.Fatalf("GetNextTask worker: %v", err)
+		t.Fatalf("GetNextTask other: %v", err)
 	}
 	if none != nil {
 		t.Errorf("agent without handles_merge must not claim AWAITING_MERGE, got %v", none)
@@ -117,26 +117,26 @@ func TestGetNextTask_MergeRoutingByCapability(t *testing.T) {
 func TestCreateTask_ResolvesDefaultReviewRole(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	seedRole(t, d, "reviewer", []string{"handles_review"})
+	reviewer := seedRole(t, d, "reviewer", []string{"handles_review"})
 
 	task := &db.Task{ProjectID: "p1", Role: "worker"}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if task.ReviewRole != "reviewer" {
-		t.Errorf("default ReviewRole = %q, want %q", task.ReviewRole, "reviewer")
+	if task.ReviewRole != reviewer.ID {
+		t.Errorf("default ReviewRole = %q, want reviewer id %q", task.ReviewRole, reviewer.ID)
 	}
 }
 
 func TestCreateTask_DefaultReviewRoleFallback(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	// No roles seeded → fallback to the literal "reviewer".
+	// No review-capable role seeded → default review_role resolves to empty.
 	task := &db.Task{ProjectID: "p1", Role: "worker"}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if task.ReviewRole != "reviewer" {
-		t.Errorf("fallback ReviewRole = %q, want %q", task.ReviewRole, "reviewer")
+	if task.ReviewRole != "" {
+		t.Errorf("fallback ReviewRole = %q, want empty", task.ReviewRole)
 	}
 }

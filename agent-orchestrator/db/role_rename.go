@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"strings"
 )
 
 // RoleIDByName returns the role-definition id for a role name, or "" if no
@@ -42,6 +43,56 @@ func replaceInSlice(arr []string, old, neu string) ([]string, bool) {
 		}
 	}
 	return out, changed
+}
+
+// ResolveRoleRefs maps each ref to a role-definition id where one exists
+// (matching by name or id), leaving refs with no role definition unchanged.
+// Used at write boundaries (agent registration, task creation) to store ids
+// while callers may still submit human-readable names (Task 9, Phase 3).
+func (d *Database) ResolveRoleRefs(ctx context.Context, refs []string) ([]string, error) {
+	if len(refs) == 0 {
+		return refs, nil
+	}
+	ph := strings.Repeat("?,", len(refs))
+	ph = ph[:len(ph)-1]
+	args := make([]interface{}, 0, len(refs)*2)
+	for _, r := range refs {
+		args = append(args, r)
+	}
+	for _, r := range refs {
+		args = append(args, r)
+	}
+	rows, err := d.db.QueryContext(ctx,
+		"SELECT id, name FROM agent_role_definitions WHERE id IN ("+ph+") OR name IN ("+ph+")", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	nameToID := map[string]string{}
+	idSet := map[string]bool{}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		nameToID[name] = id
+		idSet[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]string, len(refs))
+	for i, r := range refs {
+		switch {
+		case idSet[r]:
+			out[i] = r // already an id
+		case nameToID[r] != "":
+			out[i] = nameToID[r] // name → id
+		default:
+			out[i] = r // no role definition; leave as-is
+		}
+	}
+	return out, nil
 }
 
 // RenameRoleReferences rewrites every stored reference to a role name from

@@ -70,16 +70,17 @@ func (r *Registry) List() []string {
 // InitFromConfig initialises providers from the configuration file.
 func (r *Registry) InitFromConfig(cfg *config.Config) error {
 	for _, pcfg := range cfg.Providers {
+		model := pcfg.DefaultModel()
 		var provider LLMProvider
 		switch pcfg.Type {
 		case "openai_compatible":
-			provider = NewOpenAIProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, pcfg.Model)
+			provider = NewOpenAIProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, model)
 		case "ollama":
-			provider = NewOllamaProvider(pcfg.Name, pcfg.BaseURL, pcfg.Model)
+			provider = NewOllamaProvider(pcfg.Name, pcfg.BaseURL, model)
 		case "anthropic":
-			provider = NewAnthropicProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, pcfg.Model)
+			provider = NewAnthropicProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, model)
 		case "azure":
-			provider = NewAzureOpenAIProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, pcfg.Model, pcfg.Deployment)
+			provider = NewAzureOpenAIProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, model, pcfg.Deployment)
 		default:
 			// Skip unknown providers with a warning; they'll be added in later phases.
 			continue

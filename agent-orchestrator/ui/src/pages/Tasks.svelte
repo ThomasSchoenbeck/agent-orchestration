@@ -18,6 +18,7 @@
     getSkillsMeta,
   } from "../lib/api.js"
   import { toasts, router } from "../lib/stores.js"
+  import { roleLabel } from "../lib/roles.js"
   import AssistantSidebar from "../components/AssistantSidebar.svelte"
   import Skeleton from "../components/Skeleton.svelte"
 
@@ -667,7 +668,7 @@
                         'bg-gray-700 text-gray-300'}">{t.status}</span
                     >
                     <span class="text-[10px] text-gray-500 font-mono">{t.type}</span>
-                    <span class="text-[10px] text-gray-600">{t.role}</span>
+                    <span class="text-[10px] text-gray-600">{roleLabel(t.role, taskRoles)}</span>
                     {#if t.project_id}
                       <span class="text-[10px] text-gray-500 bg-surface-700 px-1 py-0.5 rounded"
                         >📁 {projectName(t.project_id)}</span

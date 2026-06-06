@@ -12,15 +12,16 @@ type metaItem struct {
 	Value       string `json:"value"`
 	Label       string `json:"label"`
 	Description string `json:"description"`
+	ID          string `json:"id,omitempty"` // role-definition id (roles only) for id↔name display mapping
 }
 
 var taskRoles = []metaItem{
-	{"worker", "Worker", "General-purpose implementation agent"},
-	{"reviewer", "Reviewer", "Reviews and approves work produced by a worker"},
-	{"tester", "Tester", "Writes and runs tests; validates correctness"},
-	{"orchestrator", "Orchestrator", "High-level planning and task coordination"},
-	{"architect", "Architect", "System design and architectural decisions"},
-	{"analyst", "Analyst", "Research, requirements analysis, and reporting"},
+	{Value: "worker", Label: "Worker", Description: "General-purpose implementation agent"},
+	{Value: "reviewer", Label: "Reviewer", Description: "Reviews and approves work produced by a worker"},
+	{Value: "tester", Label: "Tester", Description: "Writes and runs tests; validates correctness"},
+	{Value: "orchestrator", Label: "Orchestrator", Description: "High-level planning and task coordination"},
+	{Value: "architect", Label: "Architect", Description: "System design and architectural decisions"},
+	{Value: "analyst", Label: "Analyst", Description: "Research, requirements analysis, and reporting"},
 }
 
 func (s *Server) handleMetaTaskRoles(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +42,7 @@ func (s *Server) handleMetaTaskRoles(w http.ResponseWriter, r *http.Request) {
 			if label == "" {
 				label = d.Name
 			}
-			items = append(items, metaItem{Value: d.Name, Label: label, Description: d.Description})
+			items = append(items, metaItem{Value: d.Name, Label: label, Description: d.Description, ID: d.ID})
 		}
 		if len(items) > 0 {
 			api.WriteJSON(w, http.StatusOK, items)

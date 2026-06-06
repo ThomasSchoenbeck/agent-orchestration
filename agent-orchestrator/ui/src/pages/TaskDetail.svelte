@@ -36,16 +36,19 @@
     listPRs,
     approvePR,
     rejectPR,
+    getTaskRoles,
   } from "../lib/api.js"
   import MarkdownEditor from "../components/MarkdownEditor.svelte"
   import FileTree from "../components/FileTree.svelte"
   import { formatTimestamp } from "../lib/time.js"
+  import { roleLabel } from "../lib/roles.js"
   import Skeleton from "../components/Skeleton.svelte"
 
   let { taskId } = $props()
 
   // ── State ─────────────────────────────────────────────────────────────────
   let task = $state(null)
+  let roleDefs = $state([])
   let project = $state(null)
   let assignedAgent = $state(null)
   let loading = $state(true)
@@ -252,6 +255,7 @@
             .catch(() => []),
         ])
       task = t
+      roleDefs = await getTaskRoles().catch(() => [])
       transitions = Array.isArray(transitionData) ? transitionData : []
       reviews = Array.isArray(reviewData) ? reviewData : []
       pullRequests = await listPRs(taskId).catch(() => [])
@@ -714,7 +718,7 @@
             <!-- Metadata -->
             <div class="flex flex-wrap gap-4 text-xs text-gray-500">
               <span title="Type">📋 {task.type}</span>
-              <span title="Role">👤 {task.role}</span>
+              <span title="Role">👤 {roleLabel(task.role, roleDefs)}</span>
               <span title="Priority">⭐ {task.priority ?? "—"}</span>
               {#if project}
                 <span title="Project">📁 {project.name}</span>

@@ -11,6 +11,7 @@
     options = [],
     placeholder = 'Search…',
     allowFree = true,
+    labelFor = (v) => v, // map a selected value to its display label (e.g. id → name)
   } = $props()
 
   let query  = $state('')
@@ -70,8 +71,8 @@
   >
     {#each value as v (v)}
       <span class="flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface-600 text-gray-200 text-xs">
-        {v}
-        <button type="button" class="text-gray-400 hover:text-rose-300 leading-none" aria-label={`Remove ${v}`} onclick={() => remove(v)}>×</button>
+        {labelFor(v)}
+        <button type="button" class="text-gray-400 hover:text-rose-300 leading-none" aria-label={`Remove ${labelFor(v)}`} onclick={() => remove(v)}>×</button>
       </span>
     {/each}
     <input

@@ -87,6 +87,34 @@ func (d *Database) DeleteAgentTemplate(ctx context.Context, id string) error {
 	return err
 }
 
+// CountAgentTemplates returns the number of agent templates.
+func (d *Database) CountAgentTemplates(ctx context.Context) (int, error) {
+	var n int
+	err := d.db.QueryRowContext(ctx, `SELECT count(*) FROM agent_templates`).Scan(&n)
+	return n, err
+}
+
+// SeedAgentTemplates inserts templates that don't already exist (idempotent by
+// name). Returns the number inserted.
+func (d *Database) SeedAgentTemplates(ctx context.Context, templates []*AgentTemplate) (int, error) {
+	inserted := 0
+	for _, t := range templates {
+		var exists int
+		if err := d.db.QueryRowContext(ctx,
+			`SELECT count(*) FROM agent_templates WHERE name=?`, t.Name).Scan(&exists); err != nil {
+			return inserted, err
+		}
+		if exists > 0 {
+			continue
+		}
+		if err := d.CreateAgentTemplate(ctx, t); err != nil {
+			return inserted, err
+		}
+		inserted++
+	}
+	return inserted, nil
+}
+
 // --- SQL / scan helpers ---
 
 const agentTemplateSelectSQL = `SELECT id, name, roles, skills, replicas, autostart, enabled, created_at, updated_at

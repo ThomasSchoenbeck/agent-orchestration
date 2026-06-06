@@ -1,332 +1,229 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# Agent Orchestrator — Example Configuration
+# Agent Orchestrator — Example Configuration (every available option)
 #
-# Copy this file to config.yaml and fill in your API keys.
-# All ${ENV_VAR} references are expanded from the process environment at startup,
-# so secrets never need to be written directly into this file.
+# Copy to config.yaml and adjust. ${ENV_VAR} references are expanded from the
+# process environment at startup, so secrets never need to live in this file.
+# Provider / role / template sections are SEEDED INTO THE DATABASE on first run
+# only — after that, manage them via the UI / API.
 #
-# Run with:   ./agent-orchestrator --config config.yaml
+# Run:  ./agent-orchestrator server --config config.yaml
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Server
 # ─────────────────────────────────────────────────────────────────────────────
 server:
-  # TCP port the HTTP server binds to.  Default: 8080
-  port: 8080
-
-  # Network interface to listen on.  "0.0.0.0" = all interfaces.  Default: 0.0.0.0
-  host: "0.0.0.0"
-
-  # Enable TLS (you must supply cert/key files separately).  Default: false
-  tls_enabled: false
+  port: 8080                 # TCP port the HTTP server binds to. Default: 8080
+  host: "0.0.0.0"            # interface to listen on ("0.0.0.0" = all). Default: 0.0.0.0
+  external_host: ""          # publicly-reachable address agents use (defaults to host)
+  tls_enabled: false         # enable TLS (supply cert/key separately). Default: false
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Database
+# Database (main) + separate logs DB
 # ─────────────────────────────────────────────────────────────────────────────
 database:
-  # Database engine.  Currently only "sqlite" is supported.
-  type: sqlite
+  type: sqlite               # only "sqlite" is supported
+  path: ./data/orchestrator.db
 
-  # Path to the SQLite file.  Created automatically on first run.
-  # For Docker: use a named volume path such as /app/data/agent.db
-  path: "./agent.db"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Agent Defaults
-# ─────────────────────────────────────────────────────────────────────────────
-agents:
-  # How often each agent sends a heartbeat to the server (seconds).  Default: 30
-  heartbeat_interval_sec: 30
-
-  # How often each agent polls for a new task (seconds).  Default: 5
-  task_poll_interval_sec: 5
-
-  # A task that hasn't been updated in this many seconds is considered timed out
-  # and is re-queued by the scheduler.  Default: 300
-  task_timeout_sec: 300
-
-  # Maximum number of times an LLM call is retried on failure before the task
-  # is marked failed.  Default: 3
-  max_retries: 3
-
-  # (Optional) Name of a fallback provider to try when the primary one errors.
-  # Must match a name in the providers list below.
-  fallback_provider: "ollama-local"
-
-  # Number of consecutive LLM failures that trip the circuit breaker.
-  # Once open, the circuit stays open for 60 s before switching to half-open.
-  # Default: 5
-  circuit_breaker_threshold: 5
-
-  # ── Startup connection retry ─────────────────────────────────────────────────
-  #
-  # When agents start at the same time as the server they may reach it before it
-  # is listening.  Retry uses exponential backoff: delay doubles after each
-  # failure, from connect_initial_delay_ms up to connect_max_delay_ms.
-  #
-  # Initial backoff after the first registration failure (milliseconds).  Default: 1000
-  connect_initial_delay_ms: 1000
-
-  # Backoff ceiling — delay will not grow beyond this (milliseconds).  Default: 30000
-  connect_max_delay_ms: 30000
-
-  # Maximum number of registration attempts.  0 = retry indefinitely.  Default: 10
-  connect_max_retries: 10
-
-  # ── Agent instances (used by the "agents" subcommand) ───────────────────────
-  #
-  # server_url: orchestrator URL that agents connect to.  Default: http://localhost:8080
-  server_url: "http://localhost:8080"
-
-  # workdir: root directory for agent code checkouts.
-  # Each agent without an explicit workdir gets {workdir}/{agent-name}.
-  workdir: ".agent-work"
-
-  # definitions: list of agent instances to launch with "agent-orchestrator agents".
-  #
-  # workdir resolution (highest → lowest priority):
-  #   1. per-agent workdir  — used as-is
-  #   2. agents.workdir/{agent-name}  — unique sub-dir per agent
-  #   3. .agent-work/{agent-name}  — default when no workdir is set at all
-  #
-  # config: per-agent override for the LLM config path.
-  # When omitted, the same config.yaml is reused (recommended).
-  definitions:
-    - name: worker-1
-      roles: [worker]
-      # workdir not set → .agent-work/worker-1
-
-    - name: worker-2
-      roles: [worker]
-      # workdir: /tmp/worker-2   # uncomment to use a custom path
-
-    - name: reviewer-1
-      roles: [reviewer]
+logs_db:
+  type: sqlite               # high-volume agent/task logs live in a separate file
+  path: ./data/logs.db       # empty → defaults to ./data/logs.db next to the main DB
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LLM Providers
 #
-# type values:
-#   openai_compatible — any OpenAI-compatible API (OpenAI, local llama.cpp, etc.)
-#   anthropic         — Anthropic Messages API
-#   azure             — Azure OpenAI (deployment-based URLs)
-#   ollama            — local Ollama server
+# type: openai_compatible | anthropic | azure | ollama
+# Each provider declares its models under `models:` — that is what binds a model
+# to the roles it serves and sets pricing. Flag one model `default: true` to make
+# it the provider's default (else the first model is used).
 # ─────────────────────────────────────────────────────────────────────────────
 providers:
-
-  # ── OpenAI ──────────────────────────────────────────────────────────────────
+  # ── OpenAI-compatible (OpenAI, local llama.cpp, LM Studio, vLLM, …) ──────────
   - name: openai
     type: openai_compatible
     base_url: "https://api.openai.com/v1"
     api_key: "${OPENAI_API_KEY}"
-    model: "gpt-4o"
+    models:
+      - name: gpt-4o
+        default: true                     # provider's default model
+        roles: [orchestrator, worker]     # roles this model serves
+        input_per_million: 2.50           # USD per 1M input tokens
+        output_per_million: 10.00         # USD per 1M output tokens
+        text_tool_calls: false            # emit tool calls as text (for small models)
+        fold_system_into_user: false      # merge system prompt into the user turn
+        system_prefix: ""                 # optional prefix prepended to the system prompt
+        tool_allowlist: []                # model-level tool allowlist (empty = inherit)
 
   # ── Anthropic (Claude) ───────────────────────────────────────────────────────
   - name: anthropic
     type: anthropic
     base_url: "https://api.anthropic.com"
     api_key: "${ANTHROPIC_API_KEY}"
-    model: "claude-sonnet-4-6"
+    models:
+      - name: claude-sonnet-4-6
+        default: true
+        roles: [reviewer]
+        input_per_million: 3.00
+        output_per_million: 15.00
 
-  # ── Azure OpenAI ─────────────────────────────────────────────────────────────
-  # base_url must be your Azure endpoint (no trailing slash).
-  # deployment is the name you gave to the model deployment in Azure Studio.
+  # ── Azure OpenAI (deployment-based URLs) ─────────────────────────────────────
   - name: azure-gpt4o
     type: azure
-    base_url: "https://my-resource.openai.azure.com"
+    base_url: "https://my-resource.openai.azure.com"   # no trailing slash
     api_key: "${AZURE_OPENAI_API_KEY}"
-    model: "gpt-4o"
-    deployment: "gpt4o-prod"
+    deployment: "gpt4o-prod"              # Azure deployment name
+    models:
+      - name: gpt-4o
+        default: true
+        roles: [worker]
 
-  # ── Ollama (local, no auth) ────────────────────────────────────────────────
+  # ── Ollama (local, no auth) ──────────────────────────────────────────────────
   - name: ollama-local
     type: ollama
     base_url: "http://localhost:11434"
-    model: "llama3.2"
+    models:
+      - name: llama3.2
+        default: true
+        roles: [worker]
+        # local models are free — omit pricing or set to 0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Models
-#
-# Named model configurations that bind a provider + model string together
-# and optionally pre-assign roles.
+# Role Definitions — seeded into the DB with full persona.
+# `capabilities` are the flags the router/authorization act on:
+#   handles_review  — may claim AWAITING_REVIEW tasks
+#   handles_merge   — may claim AWAITING_MERGE tasks
+#   creates_tasks   — may create work packages / plan
+# `allowed_tools` empty → all tools permitted.
 # ─────────────────────────────────────────────────────────────────────────────
-models:
-  - name: gpt-4o
-    provider: openai
-    model: "gpt-4o"
-    roles: [orchestrator, worker]
+role_definitions:
+  - name: orchestrator
+    label: Orchestrator
+    description: Plans work and coordinates agents; merges approved work.
+    provider: openai               # provider name this role routes to
+    model_override: gpt-4o         # specific model string (optional)
+    capabilities: [creates_tasks, handles_merge]
+    allowed_tools: [list_tasks, create_work_package, plan_project, query_context, save_context, task_comment]
+    context_include: []            # context types to inject (empty = all)
+    context_exclude: []            # context types to omit
+    system_prompt: |               # optional persona; Go text/template syntax supported
+      You are the orchestrator for {{.ProjectName}}. Break requirements into
+      work packages and coordinate the worker and reviewer agents.
+    temperature: 0.7
+    max_tokens: 4096
 
-  - name: claude-sonnet
+  - name: reviewer
+    label: Reviewer
+    description: Reviews worker output; suggestions only, no file writes.
     provider: anthropic
-    model: "claude-sonnet-4-6"
-    roles: [reviewer]
+    model_override: claude-sonnet-4-6
+    capabilities: [handles_review]
+    allowed_tools: [read_file, list_files, task_comment]
 
-  - name: llama3
-    provider: ollama-local
-    model: "llama3.2"
+  - name: worker
+    label: Worker
+    description: Implements tasks — code, tests, docs.
+    provider: openai
+    model_override: gpt-4o
+    capabilities: []
+    allowed_tools: [read_file, write_file, list_files, apply_diff, run_tests, task_comment]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent Templates — server-managed, spawn N co-located agents per template.
+# Seeded on first run; manage afterwards on the Agents page.
+# ─────────────────────────────────────────────────────────────────────────────
+agent_templates:
+  - name: worker
     roles: [worker]
+    skills: []                     # specialization tags (see context/skills)
+    replicas: 2                    # desired running instances
+    autostart: false              # relaunch desired replicas on server boot
+  - name: reviewer
+    roles: [reviewer]
+    replicas: 1
+    autostart: false
+  - name: orchestrator
+    roles: [orchestrator]
+    replicas: 1
+    autostart: true
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Role → Model Mapping
-#
-# Maps an agent role to a named model above.
-# All three roles (orchestrator, worker, reviewer) should be mapped.
-# ─────────────────────────────────────────────────────────────────────────────
-roles:
-  orchestrator: gpt-4o       # plans and coordinates multi-agent tasks
-  worker: gpt-4o             # implements tasks (code, writing, research)
-  reviewer: claude-sonnet    # reviews and approves worker output
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Task Type → Role Routing
-#
-# Maps each task type to the role responsible for it.
-# Defaults (applied when omitted):
-#   plan      → orchestrator
-#   implement → worker
-#   review    → reviewer
-#   test      → worker
-# ─────────────────────────────────────────────────────────────────────────────
-routing:
-  plan:      orchestrator
-  implement: worker
-  review:    reviewer
-  test:      worker
-
-# ─────────────────────────────────────────────────────────────────────────────
-# System Prompt Templates (per role)
-#
-# Use {{.TaskType}}, {{.ProjectName}}, {{.Context}}, {{.RecentTasks}}
-# as template variables.
-# ─────────────────────────────────────────────────────────────────────────────
-prompts:
-  orchestrator: |
-    You are a senior software architect orchestrating a development project.
-    Project: {{.ProjectName}}
-    Your job is to break down requirements into concrete work packages and
-    coordinate worker agents to implement them efficiently.
-
-  worker: |
-    You are a skilled software engineer implementing tasks for project: {{.ProjectName}}.
-    Task type: {{.TaskType}}
-    Project context:
-    {{.Context}}
-    Recent work:
-    {{.RecentTasks}}
-    Complete the assigned task thoroughly and submit your result using the
-    submit_task_result tool.
-
-  reviewer: |
-    You are a senior engineer reviewing code and implementations.
-    Project: {{.ProjectName}}
-    Evaluate the work for correctness, completeness, and code quality.
-    Approve if satisfactory; request changes with specific feedback if not.
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Context Rules
-#
-# Controls which context types are injected into each role's system prompt.
-#
-# include values: project_memory | recent_tasks | agent_history
-# exclude overrides include when both are specified.
+# Context Rules — which context types are injected per role.
+# include: types to inject · exclude overrides include when both are set.
 # ─────────────────────────────────────────────────────────────────────────────
 context_rules:
-  orchestrator:
-    include: [project_memory, recent_tasks]
-
   worker:
-    include: [project_memory, recent_tasks, agent_history]
-
+    include: [code, diff, test_results, problems]
+    exclude: [docs, folder_structure]
   reviewer:
-    include: [project_memory, recent_tasks]
-    exclude: [agent_history]
+    include: [diff, code, test_results]
+    exclude: [docs, folder_structure]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Token Pricing  (USD per 1 000 000 tokens)
-#
-# Used by GET /api/metrics/costs to compute cost per LLM call.
-# Keys must exactly match the model string sent to the provider.
+# Token Pricing (USD per 1,000,000 tokens) — fallback for models without
+# per-model pricing above. Keys must match the model string sent to the provider.
 # ─────────────────────────────────────────────────────────────────────────────
 pricing:
-  # OpenAI GPT-4o (as of 2025-05)
   gpt-4o:
     input_per_million: 2.50
     output_per_million: 10.00
-
-  # OpenAI GPT-4o-mini
-  gpt-4o-mini:
-    input_per_million: 0.15
-    output_per_million: 0.60
-
-  # Anthropic Claude Sonnet 4
   claude-sonnet-4-6:
     input_per_million: 3.00
     output_per_million: 15.00
 
-  # Anthropic Claude Haiku 4.5 (fast & cheap)
-  claude-haiku-4-5-20251001:
-    input_per_million: 0.80
-    output_per_million: 4.00
+# ─────────────────────────────────────────────────────────────────────────────
+# Agents (defaults + instances + the server-managed supervisor)
+# ─────────────────────────────────────────────────────────────────────────────
+agents:
+  heartbeat_interval_sec: 30       # agent → server heartbeat cadence. Default: 30
+  task_poll_interval_sec: 5        # how often an agent polls for work. Default: 5
+  task_timeout_sec: 300            # stale-task re-queue threshold. Default: 300
+  max_retries: 3                   # LLM call retries before failing a task. Default: 3
+  fallback_provider: "ollama-local" # provider to try when the primary errors (optional)
+  circuit_breaker_threshold: 5     # consecutive failures before tripping. Default: 5
+  max_managed_agents: 0            # cap on server-spawned agents (0 = unlimited)
 
-  # Local Ollama models are free — omit or set to 0.
-  # llama3.2:
-  #   input_per_million: 0
-  #   output_per_million: 0
+  port_pool_start: 18000           # first port in the agent test-server pool. Default: 18000
+  port_pool_size: 100              # number of ports in the pool. Default: 100
+  merge_supervisor_interval_sec: 10 # AWAITING_MERGE poll cadence. Default: 10
+
+  # Startup connection retry (exponential backoff from initial → max).
+  connect_initial_delay_ms: 1000   # initial backoff after first failure. Default: 1000
+  connect_max_delay_ms: 30000      # backoff ceiling. Default: 30000
+  connect_max_retries: 10          # 0 = retry indefinitely. Default: 10
+
+  # Instances launched by "agent-orchestrator agents --config config.yaml".
+  server_url: "http://localhost:8080"
+  workdir: ".agent-work"           # root for agent checkouts → {workdir}/{name}
+  definitions:
+    - name: worker-1
+      roles: [worker]
+      skills: []                   # optional specialization tags
+      mode: colocated              # "colocated" | "remote". Default: colocated
+      # workdir: /tmp/worker-1     # per-agent override (else {workdir}/{name})
+      # config: ./worker.yaml      # per-agent LLM config override (else reuse this file)
+    - name: reviewer-1
+      roles: [reviewer]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Log retention configuration.
-# These values seed platform_settings at startup. Changes made via the UI
-# (PUT /api/settings/:key) persist and take precedence over config values.
+# Log retention — seeds platform_settings at startup (UI changes take precedence).
 # ─────────────────────────────────────────────────────────────────────────────
 log_retention:
-  agent_default_days: 14      # default for all agent event types
-  task_default_days: 30       # default for all task event types
-  system_default_days: 7      # default for the general logs table
+  agent_default_days: 14
+  task_default_days: 30
+  system_default_days: 7
   cleanup_interval_minutes: 60
-
-  # Per-type overrides (override takes precedence over category default):
-  overrides:
-    agent_poll_task_found: 7
+  overrides:                       # per-event-type overrides (win over the category default)
     agent_llm_call: 7
-    agent_tool_call: 7
     agent_tool_error: 30
-    agent_claim_attempt: 3
-    agent_claim_success: 14
-    agent_claim_failed: 7
-    agent_execute_start: 14
-    agent_context_overflow: 14
-    agent_reasoning_step: 7
-    agent_retry_backoff: 7
-    agent_human_approval_req: 90
-    agent_execute_complete: 30
-    agent_execute_failed: 30
     agent_registered: 90
-    agent_offline: 90
     task_created: 90
     task_completed: 90
-    task_failed: 90
-    task_llm_round: 3
-    task_tool_call: 3
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Storage
-#
-# Server-managed git storage. The storage root holds one bare repo per project
-# and one worktree directory per colocated agent task.
+# Storage — server-managed git (one bare repo per project, one worktree per task).
 # ─────────────────────────────────────────────────────────────────────────────
 storage:
-  # Base directory for all server-managed storage. Run the server from a
-  # dedicated work directory outside the source tree, or set an absolute path.
-  root: ./data
-
-  # Subdirectory under root where bare git repos are stored.
-  # Full path: {root}/{repos_dir}/{project_id}.git
-  repos_dir: repos
-
-  # Subdirectory under root where agent worktrees are checked out.
-  # Full path: {root}/{worktrees_dir}/{task_id}
-  worktrees_dir: worktrees
-
-  # How long to retain worktrees for failed tasks before cleanup (hours).
-  worktree_retention_failed_hours: 168
+  root: ./data                          # base directory for all server-managed storage
+  repos_dir: repos                      # → {root}/{repos_dir}/{project_id}.git
+  worktrees_dir: worktrees              # → {root}/{worktrees_dir}/{task_id}
+  worktree_retention_failed_hours: 168  # retain failed-task worktrees (hours). Default: 168

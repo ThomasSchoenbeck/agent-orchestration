@@ -16,15 +16,6 @@ func testConfig() *config.Config {
 		Providers: []config.ProviderConfig{
 			{Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434"},
 		},
-		Models: []config.ModelConfig{
-			{Name: "qwen-coder", Provider: "ollama", Model: "qwen2.5-coder:7b", Roles: []string{"worker"}},
-			{Name: "o4-mini", Provider: "ollama", Model: "o4-mini", Roles: []string{"orchestrator", "reviewer"}},
-		},
-		Roles: map[string]string{
-			"worker":       "qwen-coder",
-			"orchestrator": "o4-mini",
-			"reviewer":     "o4-mini",
-		},
 		ContextRules: map[string]config.ContextRule{
 			"worker": {
 				Include: []string{"code", "diff", "test_results"},
@@ -42,6 +33,8 @@ func testRegistry(t *testing.T, cfg *config.Config) *llm.Registry {
 	reg := llm.NewRegistry()
 	_ = reg.Register("ollama",
 		llm.NewOllamaProvider("ollama", "http://localhost:11434", "qwen2.5-coder:7b"))
+	// Provider declares the roles it serves (routing resolves via this preference).
+	reg.SetRoles("ollama", "qwen2.5-coder:7b", []string{"worker", "orchestrator", "reviewer"})
 	return reg
 }
 
@@ -83,8 +76,6 @@ func TestRouteByRole_ProviderRolePreferenceFallback(t *testing.T) {
 	// that declares it via role preferences.
 	cfg := &config.Config{
 		Providers: []config.ProviderConfig{},
-		Models:    []config.ModelConfig{},
-		Roles:     map[string]string{},
 	}
 	reg := llm.NewRegistry()
 	p := llm.NewOllamaProvider("local", "http://localhost:11434", "llama3")
@@ -142,8 +133,7 @@ func TestRouteByRole_RoleDefWithoutProviderFallsBackToProviderModels(t *testing.
 		t.Fatalf("CreateRoleDefinition: %v", err)
 	}
 
-	cfg := &config.Config{Providers: []config.ProviderConfig{}, Models: []config.ModelConfig{},
-		Roles: map[string]string{}}
+	cfg := &config.Config{Providers: []config.ProviderConfig{}}
 	reg := llm.NewRegistry()
 	reg.Set("llama.cpp", llm.NewOpenAIProvider("llama.cpp", "http://localhost:7777/v1", "", ""))
 	reg.SetRoles("llama.cpp", "", prov.Roles) // mirror startup provider-role registration
@@ -165,6 +155,45 @@ func TestRouteByRole_RoleDefWithoutProviderFallsBackToProviderModels(t *testing.
 	}
 	if res.Role != "orchestrator" {
 		t.Errorf("role = %q, want orchestrator", res.Role)
+	}
+}
+
+// TestRouteByRole_AcceptsRoleID verifies Phase 2 id-tolerance in the router:
+// RouteByRole resolves a role by its definition id, not only by name.
+func TestRouteByRole_AcceptsRoleID(t *testing.T) {
+	d := openRouterDB(t)
+	ctx := context.Background()
+
+	prov := &db.Provider{
+		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
+		ModelName: "gemma3:4b", Enabled: true,
+		Models:    []db.ProviderModel{{Name: "gemma3:4b", Roles: []string{"worker"}}},
+	}
+	if err := d.CreateProvider(ctx, prov); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	role := &db.RoleDefinition{Name: "worker", Label: "Worker", ProviderID: prov.ID, Enabled: true}
+	if err := d.CreateRoleDefinition(ctx, role); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
+	}
+
+	cfg := &config.Config{Providers: []config.ProviderConfig{}}
+	reg := llm.NewRegistry()
+	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
+	rtr := router.New(cfg, reg)
+	if err := rtr.LoadFromDB(d); err != nil {
+		t.Fatalf("LoadFromDB: %v", err)
+	}
+
+	res, err := rtr.RouteByRole(role.ID) // resolve by id, not name
+	if err != nil {
+		t.Fatalf("RouteByRole(id): %v", err)
+	}
+	if res.Role != "worker" {
+		t.Errorf("role = %q, want worker", res.Role)
+	}
+	if res.Provider == nil {
+		t.Error("expected non-nil provider")
 	}
 }
 
@@ -386,8 +415,6 @@ func setupProviderWithModels(
 
 	cfg := &config.Config{
 		Providers: []config.ProviderConfig{},
-		Models:    []config.ModelConfig{},
-		Roles:     map[string]string{},
 	}
 	reg := llm.NewRegistry()
 	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
@@ -425,8 +452,7 @@ func TestRouterModelLevelTextToolCalls(t *testing.T) {
 		})
 	}
 
-	cfg := &config.Config{Providers: []config.ProviderConfig{}, Models: []config.ModelConfig{},
-		Roles: map[string]string{}}
+	cfg := &config.Config{Providers: []config.ProviderConfig{}}
 	reg := llm.NewRegistry()
 	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
 	rtr := router.New(cfg, reg)
@@ -494,8 +520,7 @@ func TestRouterModelLevelToolAllowlist(t *testing.T) {
 		AllowedTools: []string{"list_tasks", "create_work_package"},
 	})
 
-	cfg := &config.Config{Providers: []config.ProviderConfig{}, Models: []config.ModelConfig{},
-		Roles: map[string]string{}}
+	cfg := &config.Config{Providers: []config.ProviderConfig{}}
 	reg := llm.NewRegistry()
 	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
 	rtr := router.New(cfg, reg)
@@ -541,8 +566,7 @@ func TestRouterProviderLevelFallback(t *testing.T) {
 		Enabled: true,
 	})
 
-	cfg := &config.Config{Providers: []config.ProviderConfig{}, Models: []config.ModelConfig{},
-		Roles: map[string]string{}}
+	cfg := &config.Config{Providers: []config.ProviderConfig{}}
 	reg := llm.NewRegistry()
 	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
 	rtr := router.New(cfg, reg)

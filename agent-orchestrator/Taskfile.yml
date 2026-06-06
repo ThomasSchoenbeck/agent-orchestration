@@ -82,12 +82,13 @@ tasks:
     desc: Run all tests — Go unit tests then Vitest UI tests
     cmds:
       - task: test:server
+      - task: test:go:integration
       - task: test:ui
 
   test:server:
     desc: Run Go tests with race detector
     cmds:
-      - go test -v -race -count=1 ./...
+      - go test -race -count=1 ./...
 
   test:ui:
     desc: Run Vitest unit and component tests (no server required)

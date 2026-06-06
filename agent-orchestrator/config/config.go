@@ -12,16 +12,19 @@ import (
 // Config is the top-level configuration structure.
 type Config struct {
 	Providers    []ProviderConfig          `yaml:"providers"`
-	Models       []ModelConfig             `yaml:"models"`
-	Roles        map[string]string         `yaml:"roles"`        // role → model name
 	ContextRules map[string]ContextRule    `yaml:"context_rules"`
-	Pricing      map[string]ModelPricing   `yaml:"pricing"`      // model → pricing (Phase 4)
+	Pricing      map[string]ModelPricing   `yaml:"pricing"`      // model → pricing fallback
 	Server       ServerConfig              `yaml:"server"`
 	Database     DatabaseConfig            `yaml:"database"`
 	LogsDB       LogsDBConfig              `yaml:"logs_db"`
 	Agents        AgentConfig               `yaml:"agents"`
 	LogRetention  LogRetentionConfig         `yaml:"log_retention"`
 	Storage       StorageConfig              `yaml:"storage"`
+	// RoleDefinitions seed agent role definitions (capabilities, prompt, tools)
+	// into the DB on first run.
+	RoleDefinitions []RoleDefinitionConfig    `yaml:"role_definitions"`
+	// AgentTemplates seed server-managed agent templates into the DB on first run.
+	AgentTemplates  []AgentTemplateConfig     `yaml:"agent_templates"`
 }
 
 // ProviderModelConfig declares one model within a provider: its supported roles,
@@ -29,6 +32,7 @@ type Config struct {
 type ProviderModelConfig struct {
 	Name               string   `yaml:"name"`
 	Roles              []string `yaml:"roles"`
+	Default            bool     `yaml:"default"` // this provider's default model
 	InputPerMillion    float64  `yaml:"input_per_million"`
 	OutputPerMillion   float64  `yaml:"output_per_million"`
 	TextToolCalls      bool     `yaml:"text_tool_calls"`
@@ -37,23 +41,29 @@ type ProviderModelConfig struct {
 	ToolAllowlist      []string `yaml:"tool_allowlist"`
 }
 
-// ProviderConfig defines a single LLM backend.
+// ProviderConfig defines a single LLM backend. Its models are declared in the
+// Models list; the one flagged `default: true` (or the first) is the default.
 type ProviderConfig struct {
 	Name       string                `yaml:"name"`
 	Type       string                `yaml:"type"`       // openai_compatible | anthropic | ollama | azure
 	BaseURL    string                `yaml:"base_url"`
 	APIKey     string                `yaml:"api_key"`
-	Model      string                `yaml:"model"`
 	Deployment string                `yaml:"deployment"` // Azure OpenAI deployment name
 	Models     []ProviderModelConfig `yaml:"models"`     // per-model role and pricing config
 }
 
-// ModelConfig names a provider+model combination and assigns it roles.
-type ModelConfig struct {
-	Name     string   `yaml:"name"`
-	Provider string   `yaml:"provider"`
-	Model    string   `yaml:"model"`
-	Roles    []string `yaml:"roles"`
+// DefaultModel returns the provider's default model name: the one flagged
+// `default: true`, else the first model, else "".
+func (p *ProviderConfig) DefaultModel() string {
+	for _, m := range p.Models {
+		if m.Default {
+			return m.Name
+		}
+	}
+	if len(p.Models) > 0 {
+		return p.Models[0].Name
+	}
+	return ""
 }
 
 // ContextRule specifies which context types to include/exclude for a role.
@@ -145,6 +155,32 @@ type ModelPricing struct {
 	OutputPerMillion float64 `yaml:"output_per_million"`
 }
 
+// RoleDefinitionConfig defines an agent role seeded into the DB on first run:
+// its capabilities, persona, tool allowlist, and which provider/model serves it.
+type RoleDefinitionConfig struct {
+	Name           string   `yaml:"name"`
+	Label          string   `yaml:"label"`
+	Description    string   `yaml:"description"`
+	Provider       string   `yaml:"provider"`       // provider name this role routes to
+	ModelOverride  string   `yaml:"model_override"` // specific model string (optional)
+	Capabilities   []string `yaml:"capabilities"`   // handles_review | handles_merge | creates_tasks | ...
+	AllowedTools   []string `yaml:"allowed_tools"`  // empty → all tools
+	ContextInclude []string `yaml:"context_include"`
+	ContextExclude []string `yaml:"context_exclude"`
+	SystemPrompt   string   `yaml:"system_prompt"`
+	Temperature    float64  `yaml:"temperature"`
+	MaxTokens      int      `yaml:"max_tokens"`
+}
+
+// AgentTemplateConfig defines a server-managed agent template seeded on first run.
+type AgentTemplateConfig struct {
+	Name      string   `yaml:"name"`
+	Roles     []string `yaml:"roles"`
+	Skills    []string `yaml:"skills"`
+	Replicas  int      `yaml:"replicas"`
+	Autostart bool     `yaml:"autostart"`
+}
+
 
 // LogRetentionConfig holds default and per-type retention settings.
 // These values seed the platform_settings table at startup (DB wins on conflict).
@@ -196,23 +232,13 @@ func (c *Config) Validate() error {
 		if p.Type == "" {
 			errs = append(errs, fmt.Sprintf("provider[%d] %q: type is required", i, p.Name))
 		}
-	}
-
-	if len(c.Models) == 0 {
-		errs = append(errs, "at least one model is required")
-	}
-
-	for i, m := range c.Models {
-		if m.Name == "" {
-			errs = append(errs, fmt.Sprintf("model[%d]: name is required", i))
-		}
-		if m.Provider == "" {
-			errs = append(errs, fmt.Sprintf("model[%d] %q: provider is required", i, m.Name))
+		if len(p.Models) == 0 {
+			errs = append(errs, fmt.Sprintf("provider[%d] %q: at least one model is required", i, p.Name))
 		}
 	}
 
-	if len(c.Roles) == 0 {
-		errs = append(errs, "at least one role mapping is required")
+	if len(c.RoleDefinitions) == 0 {
+		errs = append(errs, "at least one role_definitions entry is required")
 	}
 
 	if c.Server.Port == 0 {
@@ -317,29 +343,3 @@ func (c *Config) ProviderByName(name string) (*ProviderConfig, error) {
 	return nil, fmt.Errorf("provider %q not found in config", name)
 }
 
-// ModelByName returns the ModelConfig for the given name, or an error.
-func (c *Config) ModelByName(name string) (*ModelConfig, error) {
-	for i := range c.Models {
-		if c.Models[i].Name == name {
-			return &c.Models[i], nil
-		}
-	}
-	return nil, fmt.Errorf("model %q not found in config", name)
-}
-
-// ProviderForRole resolves role → model name → provider name → ProviderConfig.
-func (c *Config) ProviderForRole(role string) (*ProviderConfig, *ModelConfig, error) {
-	modelName, ok := c.Roles[role]
-	if !ok {
-		return nil, nil, fmt.Errorf("no model mapped to role %q", role)
-	}
-	model, err := c.ModelByName(modelName)
-	if err != nil {
-		return nil, nil, err
-	}
-	provider, err := c.ProviderByName(model.Provider)
-	if err != nil {
-		return nil, nil, err
-	}
-	return provider, model, nil
-}

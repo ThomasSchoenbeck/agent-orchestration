@@ -103,6 +103,80 @@ func TestRenameRoleReferences_CascadesAcrossTables(t *testing.T) {
 	}
 }
 
+// TestGetNextTask_RoleIDMatching verifies id-only matching: an agent and a task
+// that both reference a role by id are matched.
+func TestGetNextTask_RoleIDMatching(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	worker := &db.RoleDefinition{Name: "worker", Label: "Worker", Enabled: true}
+	if err := d.CreateRoleDefinition(ctx, worker); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
+	}
+	task := &db.Task{ProjectID: "p1", Role: worker.ID, Status: db.TaskStatusBacklog}
+	if err := d.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	got, err := d.GetNextTask(ctx, []string{worker.ID})
+	if err != nil {
+		t.Fatalf("GetNextTask: %v", err)
+	}
+	if got == nil || got.ID != task.ID {
+		t.Fatalf("expected task %s matched by role id, got %v", task.ID, got)
+	}
+}
+
+// TestGetNextTask_ReviewRoleIDMatching verifies the review path matches by id:
+// a reviewer agent (by id) claims an AWAITING_REVIEW task whose review_role is
+// the same id.
+func TestGetNextTask_ReviewRoleIDMatching(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	reviewer := &db.RoleDefinition{Name: "reviewer", Label: "Reviewer", Enabled: true, Capabilities: []string{"handles_review"}}
+	if err := d.CreateRoleDefinition(ctx, reviewer); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
+	}
+	task := &db.Task{ProjectID: "p1", Role: "worker", ReviewRole: reviewer.ID, Status: db.TaskStatusAwaitingReview}
+	if err := d.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	got, err := d.GetNextTask(ctx, []string{reviewer.ID})
+	if err != nil {
+		t.Fatalf("GetNextTask: %v", err)
+	}
+	if got == nil || got.ID != task.ID {
+		t.Fatalf("expected review task matched by reviewer id, got %v", got)
+	}
+}
+
+// TestResolveRoleRefs maps names to ids where a definition exists and leaves
+// undefined refs (and ids) unchanged.
+func TestResolveRoleRefs(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	worker := &db.RoleDefinition{Name: "worker", Label: "Worker", Enabled: true}
+	if err := d.CreateRoleDefinition(ctx, worker); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
+	}
+
+	got, err := d.ResolveRoleRefs(ctx, []string{"worker", "adhoc", worker.ID})
+	if err != nil {
+		t.Fatalf("ResolveRoleRefs: %v", err)
+	}
+	if got[0] != worker.ID {
+		t.Errorf("name 'worker' should resolve to id %q, got %q", worker.ID, got[0])
+	}
+	if got[1] != "adhoc" {
+		t.Errorf("undefined role should pass through, got %q", got[1])
+	}
+	if got[2] != worker.ID {
+		t.Errorf("id should pass through unchanged, got %q", got[2])
+	}
+}
+
 func TestRoleIDByName_RoundTrips(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()

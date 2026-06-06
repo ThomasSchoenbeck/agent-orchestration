@@ -174,22 +174,40 @@ func (s *Server) handleRoleSeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var toSeed []*db.RoleDefinition
-	for roleName, modelName := range s.cfg.Roles {
-		label := strings.ToUpper(roleName[:1]) + roleName[1:]
+	for _, rc := range s.cfg.RoleDefinitions {
+		label := rc.Label
+		if label == "" && rc.Name != "" {
+			label = strings.ToUpper(rc.Name[:1]) + rc.Name[1:]
+		}
+		temp := rc.Temperature
+		if temp == 0 {
+			temp = 0.7
+		}
+		maxTok := rc.MaxTokens
+		if maxTok == 0 {
+			maxTok = 4096
+		}
+		tools := rc.AllowedTools
+		if len(tools) == 0 {
+			tools = defaultToolsForRole(rc.Name)
+		}
 		rd := &db.RoleDefinition{
-			Name:        roleName,
-			Label:       label,
-			Enabled:     true,
-			Temperature: 0.7,
-			MaxTokens:   4096,
+			Name:           rc.Name,
+			Label:          label,
+			Description:    rc.Description,
+			Capabilities:   rc.Capabilities,
+			AllowedTools:   tools,
+			ContextInclude: rc.ContextInclude,
+			ContextExclude: rc.ContextExclude,
+			SystemPrompt:   rc.SystemPrompt,
+			ModelOverride:  rc.ModelOverride,
+			Temperature:    temp,
+			MaxTokens:      maxTok,
+			Enabled:        true,
 		}
-		if model, merr := s.cfg.ModelByName(modelName); merr == nil {
-			if prov, ok := provByName[model.Provider]; ok {
-				rd.ProviderID = prov.ID
-				rd.ModelOverride = model.Model
-			}
+		if prov, ok := provByName[rc.Provider]; ok {
+			rd.ProviderID = prov.ID
 		}
-		rd.AllowedTools = defaultToolsForRole(roleName)
 		toSeed = append(toSeed, rd)
 	}
 

@@ -297,31 +297,32 @@ func focusSatisfied(focus []string, skillSet map[string]bool) bool {
 // carry the handles_review capability, plus whether any carries handles_merge.
 // Capabilities are resolved in Go from the role definitions rather than via a
 // fragile SQL LIKE on the JSON column.
-func (d *Database) capabilityRoles(ctx context.Context, roleNames []string) (reviewerRoles []string, hasMerge bool, err error) {
-	if len(roleNames) == 0 {
+func (d *Database) capabilityRoles(ctx context.Context, roleIDs []string) (reviewerRoles []string, hasMerge bool, err error) {
+	if len(roleIDs) == 0 {
 		return nil, false, nil
 	}
-	ph := strings.Repeat("?,", len(roleNames))
+	// id-only matching: the agent's roles are role-definition ids.
+	ph := strings.Repeat("?,", len(roleIDs))
 	ph = ph[:len(ph)-1]
-	args := make([]interface{}, len(roleNames))
-	for i, r := range roleNames {
+	args := make([]interface{}, len(roleIDs))
+	for i, r := range roleIDs {
 		args[i] = r
 	}
 	rows, qerr := d.db.QueryContext(ctx,
-		"SELECT name, capabilities FROM agent_role_definitions WHERE enabled=1 AND name IN ("+ph+")", args...)
+		"SELECT id, capabilities FROM agent_role_definitions WHERE enabled=1 AND id IN ("+ph+")", args...)
 	if qerr != nil {
 		return nil, false, qerr
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var name, capsJSON string
-		if serr := rows.Scan(&name, &capsJSON); serr != nil {
+		var id, capsJSON string
+		if serr := rows.Scan(&id, &capsJSON); serr != nil {
 			return nil, false, serr
 		}
 		for _, c := range unmarshalJSONStringSlice(capsJSON) {
 			switch c {
 			case "handles_review":
-				reviewerRoles = append(reviewerRoles, name)
+				reviewerRoles = append(reviewerRoles, id)
 			case "handles_merge":
 				hasMerge = true
 			}
@@ -331,27 +332,27 @@ func (d *Database) capabilityRoles(ctx context.Context, roleNames []string) (rev
 }
 
 // defaultReviewRole resolves the review role for a newly created task when none
-// is supplied: the first enabled role with the handles_review capability, or the
-// literal "reviewer" as a fallback when no such role exists yet.
+// is supplied: the id of the first enabled role with the handles_review
+// capability, or "" when no such role exists (id-only matching).
 func (d *Database) defaultReviewRole(ctx context.Context) string {
 	rows, err := d.db.QueryContext(ctx,
-		"SELECT name, capabilities FROM agent_role_definitions WHERE enabled=1 ORDER BY name")
+		"SELECT id, capabilities FROM agent_role_definitions WHERE enabled=1 ORDER BY name")
 	if err != nil {
-		return "reviewer"
+		return ""
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var name, capsJSON string
-		if serr := rows.Scan(&name, &capsJSON); serr != nil {
-			return "reviewer"
+		var id, capsJSON string
+		if serr := rows.Scan(&id, &capsJSON); serr != nil {
+			return ""
 		}
 		for _, c := range unmarshalJSONStringSlice(capsJSON) {
 			if c == "handles_review" {
-				return name
+				return id
 			}
 		}
 	}
-	return "reviewer"
+	return ""
 }
 
 // RequeueTimedOutTasks re-queues execution-state tasks that have not been updated for timeoutSec seconds.

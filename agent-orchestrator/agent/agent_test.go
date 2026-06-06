@@ -289,6 +289,7 @@ func TestAgent_PollLoop_PicksUpTask(t *testing.T) {
 	cfg.Agents.TaskPollIntervalSec = 1
 
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{
 		name:     "mock",
 		response: llm.ChatResponse{Content: "done", StopReason: "end_turn"},

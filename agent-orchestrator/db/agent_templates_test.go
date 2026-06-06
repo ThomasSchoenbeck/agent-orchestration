@@ -7,6 +7,35 @@ import (
 	"agent-orchestrator/db"
 )
 
+func TestSeedAgentTemplates_Idempotent(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	tpls := []*db.AgentTemplate{
+		{Name: "worker", Roles: []string{"worker"}, Replicas: 2, Enabled: true},
+		{Name: "reviewer", Roles: []string{"reviewer"}, Replicas: 1, Enabled: true},
+	}
+	n, err := d.SeedAgentTemplates(ctx, tpls)
+	if err != nil {
+		t.Fatalf("SeedAgentTemplates: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected 2 seeded, got %d", n)
+	}
+	// Re-seeding (same names) inserts nothing.
+	n2, err := d.SeedAgentTemplates(ctx, tpls)
+	if err != nil {
+		t.Fatalf("SeedAgentTemplates (2nd): %v", err)
+	}
+	if n2 != 0 {
+		t.Errorf("expected 0 on re-seed, got %d", n2)
+	}
+	count, _ := d.CountAgentTemplates(ctx)
+	if count != 2 {
+		t.Errorf("expected 2 templates total, got %d", count)
+	}
+}
+
 func TestAgentTemplate_CRUDRoundTrip(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()

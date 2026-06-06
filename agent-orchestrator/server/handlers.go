@@ -652,10 +652,15 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 				"project_id and role are required")
 			return
 		}
+		// Phase 3 (id migration): store role refs as ids where a definition exists.
+		role, reviewRole := req.Role, req.ReviewRole
+		if resolved, rerr := s.db.ResolveRoleRefs(r.Context(), []string{req.Role, req.ReviewRole}); rerr == nil {
+			role, reviewRole = resolved[0], resolved[1]
+		}
 		t := &db.Task{
 			ProjectID:  req.ProjectID,
-			Role:       req.Role,
-			ReviewRole: req.ReviewRole,
+			Role:       role,
+			ReviewRole: reviewRole,
 			Focus:      req.Focus,
 			Priority:   req.Priority,
 			Payload:    req.Payload,
@@ -1003,6 +1008,12 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	if len(req.Roles) == 0 {
 		api.WriteError(w, http.StatusBadRequest, api.ErrCodeInvalidInput, "at least one role is required")
 		return
+	}
+
+	// Phase 3 (id migration): store role refs as ids where a role definition
+	// exists; names without a definition pass through unchanged.
+	if resolved, rerr := s.db.ResolveRoleRefs(r.Context(), req.Roles); rerr == nil {
+		req.Roles = resolved
 	}
 
 	// Normalise mode.
@@ -1513,13 +1524,36 @@ func (s *Server) handleProviderSeed(w http.ResponseWriter, r *http.Request) {
 		if _, ok := existingNames[pcfg.Name]; ok {
 			continue
 		}
+		var models []db.ProviderModel
+		roleSet := map[string]bool{}
+		for _, m := range pcfg.Models {
+			models = append(models, db.ProviderModel{
+				Name:               m.Name,
+				Roles:              m.Roles,
+				InputPerMillion:    m.InputPerMillion,
+				OutputPerMillion:   m.OutputPerMillion,
+				TextToolCalls:      m.TextToolCalls,
+				FoldSystemIntoUser: m.FoldSystemIntoUser,
+				SystemPrefix:       m.SystemPrefix,
+				ToolAllowlist:      m.ToolAllowlist,
+			})
+			for _, role := range m.Roles {
+				roleSet[role] = true
+			}
+		}
+		roles := make([]string, 0, len(roleSet))
+		for role := range roleSet {
+			roles = append(roles, role)
+		}
 		toSeed = append(toSeed, &db.Provider{
 			Name:      pcfg.Name,
 			Type:      pcfg.Type,
 			BaseURL:   pcfg.BaseURL,
 			APIKey:    pcfg.APIKey,
-			ModelName: pcfg.Model,
+			ModelName: pcfg.DefaultModel(),
 			Enabled:   true,
+			Roles:     roles,
+			Models:    models,
 		})
 	}
 

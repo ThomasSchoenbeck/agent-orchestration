@@ -1,134 +1,82 @@
-# Agent Orchestrator - Example Configuration
-# Copy this file, fill in your API keys, and run:
-#   ./agent-orchestrator server --config config.yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+# Agent Orchestrator — Default local configuration
+#
+# A ready-to-run setup: one local OpenAI-compatible provider whose single model
+# serves all three roles, the role definitions themselves, and a few agent
+# templates. Everything below is seeded into the database on first run only;
+# afterwards the UI / API is the source of truth.
+#
+# Run:  ./agent-orchestrator server --config config.yaml
+# See config.example.yaml for every available option, fully documented.
+# ═══════════════════════════════════════════════════════════════════════════════
 
+# ── LLM provider (local, OpenAI-compatible e.g. llama.cpp / LM Studio) ─────────
 providers:
-  # Uncomment and fill in your OpenAI-compatible company API
-  # - name: company-api
-  #   type: openai_compatible
-  #   base_url: https://api.company.com/v1
-  #   api_key: ${COMPANY_API_KEY}
+  - name: local
+    type: openai_compatible
+    base_url: http://localhost:7777/v1
+    api_key: ""                          # local servers need no key
+    models:
+      - name: gemma-4-E4B-it-Q8_0.gguf
+        default: true                    # this provider's default model
+        roles: [orchestrator, reviewer, worker]
+        input_per_million: 0.05
+        output_per_million: 0.10
+        text_tool_calls: true            # small models: emit tool calls as text
 
-  # Local Ollama (no API key needed)
-  - name: ollama-local
-    type: ollama
-    base_url: http://localhost:11434
+# ── Role definitions (capabilities drive review / merge routing) ──────────────
+role_definitions:
+  - name: orchestrator
+    label: Orchestrator
+    description: Plans work and coordinates agents; merges approved work.
+    provider: local
+    model_override: gemma-4-E4B-it-Q8_0.gguf
+    capabilities: [creates_tasks, handles_merge]
+    allowed_tools: [list_tasks, create_work_package, plan_project, query_context, save_context, task_comment]
 
-  # Anthropic Claude
-  # - name: claude
-  #   type: anthropic
-  #   api_key: ${ANTHROPIC_API_KEY}
+  - name: reviewer
+    label: Reviewer
+    description: Reviews worker output; suggestions only, no file writes.
+    provider: local
+    model_override: gemma-4-E4B-it-Q8_0.gguf
+    capabilities: [handles_review]
+    allowed_tools: [read_file, list_files, task_comment]
 
-models:
-  # Orchestrator / reviewer model (fast, smart)
-  # - name: o4-mini
-  #   provider: company-api
-  #   model: o4-mini
-  #   roles: [orchestrator, reviewer, chat_brain]
+  - name: worker
+    label: Worker
+    description: Implements tasks — code, tests, docs.
+    provider: local
+    model_override: gemma-4-E4B-it-Q8_0.gguf
+    capabilities: []
+    allowed_tools: [read_file, write_file, list_files, apply_diff, run_tests, task_comment]
 
-  # Worker model (local coder)
-  - name: qwen-coder
-    provider: ollama-local
-    model: qwen2.5-coder:7b
+# ── Server-managed agent templates (spawn N co-located agents per role) ───────
+agent_templates:
+  - name: orchestrator
+    roles: [orchestrator]
+    replicas: 1
+    autostart: false
+  - name: reviewer
+    roles: [reviewer]
+    replicas: 1
+    autostart: false
+  - name: worker
     roles: [worker]
+    replicas: 2
+    autostart: false
 
-roles:
-  # orchestrator: o4-mini
-  worker: qwen-coder
-  # reviewer: o4-mini
-  # chat_brain: o4-mini
-  # embedder: qwen-coder
-
-routing:
-  plan: orchestrator
-  implement: worker
-  review: reviewer
-  test: worker
-
-prompts:
-  implement: |
-    You are a senior coding agent responsible for implementing work packages.
-
-    Task: {task_description}
-    Repo Path: {repo_path}
-    Context: {context}
-
-    Use tool calls to:
-    1. Read relevant files
-    2. Implement the feature
-    3. Run tests
-    4. Report results
-
-  review: |
-    You are a senior code reviewer.
-    Review the implementation for correctness, testing, and alignment with requirements.
-
-    Return JSON with:
-    - approved: boolean
-    - issues: array of issues
-    - suggestions: array of improvement suggestions
-
-context_rules:
-  implement:
-    include: [code, diff, test_results, problems]
-    exclude: [docs, folder_structure]
-  review:
-    include: [diff, code, test_results]
-    exclude: [docs, folder_structure]
-
+# ── Core ──────────────────────────────────────────────────────────────────────
 server:
   port: 8080
   host: "0.0.0.0"
-  tls_enabled: false
 
 database:
   type: sqlite
   path: ./data/orchestrator.db
 
-# Optional: store agent/task/system logs in a separate SQLite file.
-# When omitted, logs default to ./data/logs.db (next to the main database).
-# logs_db:
-#   path: ./data/logs.db
-
 agents:
   heartbeat_interval_sec: 30
   task_poll_interval_sec: 5
   task_timeout_sec: 300
-
-  # Startup connection retry — exponential backoff from initial to max delay.
-  # Agents use these when the server may not be ready yet (e.g. started together).
-  connect_initial_delay_ms: 1000  # initial backoff after first failure (doubles each retry)
-  connect_max_delay_ms: 30000     # backoff ceiling
-  connect_max_retries: 10         # 0 = retry indefinitely
-
-  # Agent instances launched by "agent-orchestrator agents --config config.yaml"
   server_url: "http://localhost:8080"
   workdir: ".agent-work"
-  definitions:
-    - name: worker-1
-      roles: [worker]
-
-    - name: worker-2
-      roles: [worker]
-      workdir: ./tmp/worker-2
-
-    - name: reviewer-1
-      roles: [reviewer]
-
-  # Port pool for agent test/build servers.
-  # Each colocated agent is assigned a unique port from this range when it
-  # claims an execution-state task. Released when the agent exits the state.
-  # port_pool_start: 18000   # first port in the pool (default 18000)
-  # port_pool_size: 100      # number of ports available (default 100)
-
-  # How often the merge supervisor polls for AWAITING_MERGE tasks (seconds).
-  # merge_supervisor_interval_sec: 10
-
-# Server-managed git storage (bare repos + agent worktrees).
-# The storage root holds one bare repo per project and one worktree directory
-# per colocated agent task. Defaults shown below.
-# storage:
-#   root: ./data                          # base directory for all server-managed storage
-#   repos_dir: repos                      # subdirectory for bare git repos  → {root}/{repos_dir}/{id}.git
-#   worktrees_dir: worktrees              # subdirectory for agent worktrees → {root}/{worktrees_dir}/{task_id}
-#   worktree_retention_failed_hours: 168  # retain failed-task worktrees for this many hours (default 168 = 7 days)

@@ -24,6 +24,7 @@ type Router struct {
 
 	mu          sync.RWMutex
 	rolesByName map[string]*cachedRole
+	rolesByID   map[string]*cachedRole // Phase 2: resolve a role ref by id too
 }
 
 // cachedRole holds a DB-backed role definition and the resolved provider name.
@@ -48,6 +49,7 @@ func New(cfg *config.Config, registry *llm.Registry) *Router {
 		registry:    registry,
 		ctxBuild:    NewContextBuilder(cfg),
 		rolesByName: make(map[string]*cachedRole),
+		rolesByID:   make(map[string]*cachedRole),
 	}
 }
 
@@ -87,6 +89,7 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rolesByName = make(map[string]*cachedRole)
+	r.rolesByID = make(map[string]*cachedRole)
 
 	for _, role := range roles {
 		if !role.Enabled {
@@ -123,6 +126,9 @@ func (r *Router) LoadFromDB(database *db.Database) error {
 			cr.roleToolAllowlist = role.AllowedTools
 		}
 		r.rolesByName[role.Name] = cr
+		if role.ID != "" {
+			r.rolesByID[role.ID] = cr
+		}
 	}
 
 	// Register model-level role entries in the registry for each provider.
@@ -153,6 +159,9 @@ func (r *Router) ReloadFromDB(database *db.Database) {
 func (r *Router) RouteByRole(role string) (*RouteResult, error) {
 	r.mu.RLock()
 	cr, ok := r.rolesByName[role]
+	if !ok {
+		cr, ok = r.rolesByID[role] // Phase 2: accept a role ref by id too
+	}
 	r.mu.RUnlock()
 
 	if ok {
@@ -163,13 +172,6 @@ func (r *Router) RouteByRole(role string) (*RouteResult, error) {
 		// (e.g. no ProviderID assigned to the role). Fall through to the
 		// fallbacks below — a provider may still declare support for this
 		// role via its roles/model list.
-	}
-
-	// Config fallback.
-	if modelName, hasCfg := r.cfg.Roles[role]; hasCfg {
-		if res, err := r.resolveModel(role, modelName); err == nil {
-			return res, nil
-		}
 	}
 
 	// Provider role-preference fallback: find any registered provider that
@@ -286,20 +288,3 @@ func modelForRole(models []db.ProviderModel, role string) string {
 	return ""
 }
 
-// resolveModel looks up a model by name and returns its provider.
-func (r *Router) resolveModel(role, modelName string) (*RouteResult, error) {
-	model, err := r.cfg.ModelByName(modelName)
-	if err != nil {
-		return nil, fmt.Errorf("role %q: %w", role, err)
-	}
-	provider, err := r.registry.Get(model.Provider)
-	if err != nil {
-		return nil, fmt.Errorf("role %q model %q: provider %q not in registry: %w",
-			role, modelName, model.Provider, err)
-	}
-	return &RouteResult{
-		Provider: provider,
-		Model:    model.Model,
-		Role:     role,
-	}, nil
-}

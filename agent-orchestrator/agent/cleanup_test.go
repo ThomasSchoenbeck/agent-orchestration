@@ -100,6 +100,7 @@ func runCleanupAgent(t *testing.T, slug string, llmErr error) string {
 	cfg.Agents.TaskPollIntervalSec = 1
 
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{
 		name:     "mock",
 		response: llm.ChatResponse{Content: "done", StopReason: "end_turn"},

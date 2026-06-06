@@ -11,6 +11,7 @@ vi.mock('../lib/api.js', () => ({
   getAgentStats: vi.fn(),
   getAgentLogs:  vi.fn(),
   listTasks:     vi.fn(),
+  getTaskRoles:  vi.fn(),
 }))
 
 vi.mock('../lib/time.js', () => ({
@@ -22,7 +23,7 @@ vi.mock('../lib/stores.js', () => ({
   router: { go: vi.fn(), push: vi.fn(), subscribe: (fn) => { fn({ page: 'agents', params: ['a1'] }); return () => {} } },
 }))
 
-import { getAgent, getAgentStats, getAgentLogs, listTasks } from '../lib/api.js'
+import { getAgent, getAgentStats, getAgentLogs, listTasks, getTaskRoles } from '../lib/api.js'
 
 const AGENT = {
   id: 'a1', name: 'worker-1', status: 'online', mode: 'remote',
@@ -60,6 +61,7 @@ beforeEach(() => {
   getAgentStats.mockResolvedValue(STATS)
   getAgentLogs.mockResolvedValue(LOGS)
   listTasks.mockResolvedValue(TASKS)
+  getTaskRoles.mockResolvedValue([])
 })
 
 describe('AgentDetail — rendering', () => {

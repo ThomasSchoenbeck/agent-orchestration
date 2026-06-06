@@ -1,14 +1,16 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
-  import { getAgent, getAgentStats, getAgentLogs, listTasks } from '../lib/api.js'
+  import { getAgent, getAgentStats, getAgentLogs, listTasks, getTaskRoles } from '../lib/api.js'
   import { formatTimestamp } from '../lib/time.js'
   import { toasts, router } from '../lib/stores.js'
+  import { roleLabel } from '../lib/roles.js'
   import Skeleton from '../components/Skeleton.svelte'
 
   let { agentId } = $props()
 
   // ── State ─────────────────────────────────────────────────────────────────
   let agent    = $state(null)
+  let roleDefs = $state([])
   let stats    = $state(null)
   let logs     = $state([])
   let tasks    = $state([])
@@ -40,16 +42,18 @@
   async function load() {
     loading = true
     try {
-      const [a, s, l, t] = await Promise.all([
+      const [a, s, l, t, rd] = await Promise.all([
         getAgent(agentId).catch(() => null),
         getAgentStats(agentId).catch(() => null),
         getAgentLogs(agentId).catch(() => []),
         listTasks({ agent_id: agentId, limit: 100 }).catch(() => []),
+        getTaskRoles().catch(() => []),
       ])
       agent = a
       stats = s
       logs  = Array.isArray(l) ? l : (l?.logs ?? [])
       tasks = Array.isArray(t) ? t : (t?.tasks ?? [])
+      roleDefs = Array.isArray(rd) ? rd : []
     } catch (e) {
       toasts.error('Failed to load agent: ' + e.message)
     } finally {
@@ -106,7 +110,7 @@
       <h1 class="text-xl font-semibold text-gray-100">{agent.name}</h1>
       <span class="text-xs px-1.5 py-0.5 rounded bg-surface-700 text-gray-400">{agent.mode}</span>
       {#each (agent.roles ?? []) as role}
-        <span class="text-xs px-1.5 py-0.5 rounded bg-surface-700 text-blue-400">{role}</span>
+        <span class="text-xs px-1.5 py-0.5 rounded bg-surface-700 text-blue-400">{roleLabel(role, roleDefs)}</span>
       {/each}
       <span class="text-xs {statusText[agent.status] ?? 'text-gray-500'} ml-auto">{agent.status}</span>
     {:else if loading}
@@ -229,7 +233,7 @@
                 <tr class="border-t border-surface-700 hover:bg-surface-700/20">
                   <td class="px-3 py-1 text-gray-500">{task.id.slice(0, 8)}…</td>
                   <td class="px-3 py-1 text-gray-400">{task.type}</td>
-                  <td class="px-3 py-1 text-gray-400">{task.role}</td>
+                  <td class="px-3 py-1 text-gray-400">{roleLabel(task.role, roleDefs)}</td>
                   <td class="px-3 py-1 {taskStatusColor[task.status] ?? 'text-gray-400'}">{task.status}</td>
                   <td class="px-3 py-1 text-gray-500">{fmtDuration(durationMs)}</td>
                   <td class="px-3 py-1 text-gray-600">{formatTimestamp(task.created_at)}</td>

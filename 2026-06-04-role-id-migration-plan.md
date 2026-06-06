@@ -7,9 +7,9 @@ contract migration so the app keeps working (and is testable) after every phase.
 Progress: `[x]` done · `[ ]` pending · `[~]` in progress
 
 - [x] Phase 1 — Foundation: id↔name resolvers + safe rename (cascade) + unlock UI (tests green)
-- [ ] Phase 2 — Migrate readers (routing/matching) to resolve via id
-- [ ] Phase 3 — Migrate writers (CLI, registration, config seed, task create) to id
-- [ ] Phase 4 — Contract: store ids in reference fields, drop name-based fallback
+- [~] Phase 2 — id-tolerant matching (accept name OR id) — implemented, pending test run
+- [x] Phase 3 — Writers store ids (register + task create) + UI id→name display (tests green)
+- [x] Phase 4 — Contract: pure id-only matching, tolerance removed (tests green)
 
 > Run `cd agent-orchestrator && go test ./...` and `cd agent-orchestrator/ui && pnpm test`
 > at the end of EVERY phase before starting the next.
@@ -55,20 +55,47 @@ local single-writer DB; Phase 4 removes the need entirely.
 
 ---
 
-## [ ] Phase 2 — Migrate readers to id
-Introduce id-based resolution in the routing/matching layer while storage stays
-name-based (resolve name→id at the boundary). Switch `router.rolesByName` to a
-canonical id map; `RouteByRole` resolves name→id→definition. Keep name lookups as
-a thin shim. **Verify:** existing router/registry/GetNextTask tests still pass.
+## [~] Phase 2 — id-tolerant matching (accept name OR id) — implemented
+**Revised approach (vs original):** readers can't move to id without writers
+moving too (matching compares two ref sets). So instead of switching readers to
+id, Phase 2 makes matching *tolerant* — a role referenced by name or id matches
+interchangeably. This breaks nothing and unblocks switching writers in Phase 3.
+**Done:** `db.ExpandRoleRefs(ctx, refs)` (ref → both name+id); `GetNextTask`
+expands the agent's roles for the `role IN (...)` clause; `capabilityRoles`
+matches by name-or-id and emits both forms (review path); router gains a
+`rolesByID` index and `RouteByRole` resolves by id too.
+**Files:** `db/role_rename.go`, `db/tasks.go`, `router/router.go`; tests:
+`db/role_rename_test.go`, `router/router_test.go`.
+**Verify:** `go test ./...` — existing name-based tests still pass + new id tests.
 
-## [ ] Phase 3 — Migrate writers to id
-Agent registration, `--roles`, task create, provider/template editors, config seed
-write/accept role ids (names resolved at the edge). Backfill: ensure every
-referenced role name has a role-definition row (migration). **Verify:** end-to-end
-agent pickup test with id-based roles.
+## [x] Phase 3 — Writers store ids + UI display mapping — DONE (tests green)
+**Scope (kept tight):** resolve role refs → ids only at the two matching-relevant
+write boundaries — **agent registration** and **task creation** (`db.ResolveRoleRefs`).
+Provider/template role lists stay as names (still tolerated + displayed directly),
+so only agent/task role displays needed id→name mapping.
+**Done — backend:** `db.ResolveRoleRefs`; wired into `handleAgentRegister` +
+`handleTasks` POST; `metaItem.ID` added so `/api/meta/task-roles` carries the id.
+**Done — UI:** `lib/roles.js` `roleLabel(ref, defs)` (id|name → name, fallback to
+ref); `MultiSelect` gains a `labelFor` prop for chip display; role displays mapped
+in `Agents` (chips + live-edit MultiSelect), `AgentDetail`, `Tasks`, `TaskDetail`.
+**Files:** `db/role_rename.go`, `server/handlers.go`, `server/meta.go`,
+`ui/src/lib/roles.js`, `ui/src/components/MultiSelect.svelte`,
+`ui/src/pages/{Agents,AgentDetail,Tasks,TaskDetail}.svelte`; tests:
+`db/role_rename_test.go`, `ui/src/__tests__/{roleLabel,MultiSelect}.test.js`,
+`AgentDetail.test.js` (mock).
+**Verify:** `go test ./...` + `pnpm test`.
 
-## [ ] Phase 4 — Contract
-Store ids in `providers.roles`/`models[].roles`, `agents.roles`/`start_roles`,
-`agent_templates.roles`, `tasks.role`/`review_role` (migration converts existing
-name data → ids). Remove name-based fallbacks and the rename cascade (no longer
-needed — refs are ids). **Verify:** full suite + manual smoke.
+## [x] Phase 4 — Contract: pure id-only matching — DONE (tests green)
+**Decision (user):** go fully id-only and wipe old dummy data (config rework will
+seed basic roles out of the box).
+**Done:** removed `ExpandRoleRefs` (the name↔id bridge); `GetNextTask` matches the
+agent's role ids directly; `capabilityRoles` matches by id and emits ids;
+`defaultReviewRole` returns a role **id** (or "" when none). `roleLabel` (id→name
+display) and the router's name+id resolution stay (needed for hardcoded
+"orchestrator" routing and human/CLI input). Rewrote the routing test suite to be
+id-based (`getnexttask_routing_test.go`, `role_rename_test.go`).
+**Invariant now enforced:** a role must have a definition (with an id) to be
+matched — ad-hoc/undefined role names no longer route. Existing name-based dummy
+data must be recreated (re-register agents, recreate tasks) or the DB reset.
+**Files:** `db/tasks.go`, `db/role_rename.go`, tests.
+**Verify:** `go test ./...` green.

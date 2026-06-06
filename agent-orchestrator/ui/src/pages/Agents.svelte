@@ -4,6 +4,7 @@
            updateAgent, stopAgent, resetAgent, getSkillsMeta } from '../lib/api.js'
   import { formatTimestamp } from '../lib/time.js'
   import { toasts, router } from '../lib/stores.js'
+  import { roleLabel } from '../lib/roles.js'
   import Skeleton from '../components/Skeleton.svelte'
   import AgentTemplatesPanel from '../components/AgentTemplatesPanel.svelte'
   import MultiSelect from '../components/MultiSelect.svelte'
@@ -111,8 +112,8 @@
     await Promise.all([loadAgents(), fetchLogs()])
   }
 
-  function resolveRole(roleName) {
-    return roles.find(r => r.name === roleName)
+  function resolveRole(roleRef) {
+    return roles.find(r => r.name === roleRef || r.id === roleRef)
   }
 
   // ── Lifecycle controls (Feature 7) ──────────────────────────────────────────
@@ -300,7 +301,7 @@
             <div class="flex flex-wrap gap-1 items-center">
               {#each (a.roles ?? []) as role}
                 {@const def = resolveRole(role)}
-                <span class="text-xs px-1.5 py-0.5 rounded-full {def ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}">{role}</span>
+                <span class="text-xs px-1.5 py-0.5 rounded-full {def ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}">{roleLabel(role, roles)}</span>
               {/each}
               {#each (a.skills ?? []) as sk}
                 <span class="text-xs px-1.5 py-0.5 rounded-full bg-teal-900 text-teal-300">{sk}</span>
@@ -327,7 +328,7 @@
 
             {#if editingAgentId === a.id}
               <div class="mt-2 flex flex-col gap-2" onclick={(e) => e.stopPropagation()}>
-                <MultiSelect bind:value={editBuf.roles} options={roles} placeholder="live roles" />
+                <MultiSelect bind:value={editBuf.roles} options={roles} placeholder="live roles" labelFor={(v) => roleLabel(v, roles)} />
                 <MultiSelect bind:value={editBuf.skills} options={availSkills} placeholder="live skills" />
                 <div class="flex gap-2">
                   <button class="text-[11px] text-gray-400 hover:text-gray-200" onclick={() => editingAgentId = ''}>Cancel</button>

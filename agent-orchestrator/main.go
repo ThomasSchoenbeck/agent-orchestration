@@ -117,13 +117,38 @@ func runServer(args []string) error {
 	if count, _ := database.CountProviders(startCtx); count == 0 && len(cfg.Providers) > 0 {
 		var toSeed []*db.Provider
 		for _, pcfg := range cfg.Providers {
+			// Map per-model config (roles + pricing + behavioral flags) and a
+			// coarse provider-level role list (the union of all model roles).
+			var models []db.ProviderModel
+			roleSet := map[string]bool{}
+			for _, m := range pcfg.Models {
+				models = append(models, db.ProviderModel{
+					Name:               m.Name,
+					Roles:              m.Roles,
+					InputPerMillion:    m.InputPerMillion,
+					OutputPerMillion:   m.OutputPerMillion,
+					TextToolCalls:      m.TextToolCalls,
+					FoldSystemIntoUser: m.FoldSystemIntoUser,
+					SystemPrefix:       m.SystemPrefix,
+					ToolAllowlist:      m.ToolAllowlist,
+				})
+				for _, r := range m.Roles {
+					roleSet[r] = true
+				}
+			}
+			roles := make([]string, 0, len(roleSet))
+			for r := range roleSet {
+				roles = append(roles, r)
+			}
 			toSeed = append(toSeed, &db.Provider{
 				Name:      pcfg.Name,
 				Type:      pcfg.Type,
 				BaseURL:   pcfg.BaseURL,
 				APIKey:    pcfg.APIKey,
-				ModelName: pcfg.Model,
+				ModelName: pcfg.DefaultModel(),
 				Enabled:   true,
+				Roles:     roles,
+				Models:    models,
 			})
 		}
 		if n, serr := database.SeedProviders(startCtx, toSeed); serr != nil {
@@ -159,28 +184,43 @@ func runServer(args []string) error {
 	}
 	defer llmReg.CloseAll()
 
-	// Seed role definitions from config on first run.
-	if count, _ := database.CountRoleDefinitions(startCtx); count == 0 && len(cfg.Roles) > 0 {
+	// Seed rich role definitions from config (preferred) on first run.
+	if count, _ := database.CountRoleDefinitions(startCtx); count == 0 && len(cfg.RoleDefinitions) > 0 {
 		dbProvs, _ := database.ListProviders(startCtx)
 		provByName := make(map[string]*db.Provider, len(dbProvs))
 		for _, p := range dbProvs {
 			provByName[p.Name] = p
 		}
 		var rolesToSeed []*db.RoleDefinition
-		for roleName, modelName := range cfg.Roles {
-			label := strings.ToUpper(roleName[:1]) + roleName[1:]
-			rd := &db.RoleDefinition{
-				Name:        roleName,
-				Label:       label,
-				Enabled:     true,
-				Temperature: 0.7,
-				MaxTokens:   4096,
+		for _, rc := range cfg.RoleDefinitions {
+			label := rc.Label
+			if label == "" && rc.Name != "" {
+				label = strings.ToUpper(rc.Name[:1]) + rc.Name[1:]
 			}
-			if model, merr := cfg.ModelByName(modelName); merr == nil {
-				if prov, ok := provByName[model.Provider]; ok {
-					rd.ProviderID = prov.ID
-					rd.ModelOverride = model.Model
-				}
+			temp := rc.Temperature
+			if temp == 0 {
+				temp = 0.7
+			}
+			maxTok := rc.MaxTokens
+			if maxTok == 0 {
+				maxTok = 4096
+			}
+			rd := &db.RoleDefinition{
+				Name:           rc.Name,
+				Label:          label,
+				Description:    rc.Description,
+				Capabilities:   rc.Capabilities,
+				AllowedTools:   rc.AllowedTools,
+				ContextInclude: rc.ContextInclude,
+				ContextExclude: rc.ContextExclude,
+				SystemPrompt:   rc.SystemPrompt,
+				ModelOverride:  rc.ModelOverride,
+				Temperature:    temp,
+				MaxTokens:      maxTok,
+				Enabled:        true,
+			}
+			if prov, ok := provByName[rc.Provider]; ok {
+				rd.ProviderID = prov.ID
 			}
 			rolesToSeed = append(rolesToSeed, rd)
 		}
@@ -207,6 +247,30 @@ func runServer(args []string) error {
 		log.Printf("warning: seed skill definitions: %v", serr)
 	} else if n > 0 {
 		log.Printf("seeded %d skill definition(s)", n)
+	}
+
+	// Seed agent templates from config on first run (idempotent by name).
+	if count, _ := database.CountAgentTemplates(startCtx); count == 0 && len(cfg.AgentTemplates) > 0 {
+		var tplsToSeed []*db.AgentTemplate
+		for _, tc := range cfg.AgentTemplates {
+			replicas := tc.Replicas
+			if replicas == 0 {
+				replicas = 1
+			}
+			tplsToSeed = append(tplsToSeed, &db.AgentTemplate{
+				Name:      tc.Name,
+				Roles:     tc.Roles,
+				Skills:    tc.Skills,
+				Replicas:  replicas,
+				Autostart: tc.Autostart,
+				Enabled:   true,
+			})
+		}
+		if n, serr := database.SeedAgentTemplates(startCtx, tplsToSeed); serr != nil {
+			log.Printf("warning: seed agent templates: %v", serr)
+		} else if n > 0 {
+			log.Printf("seeded %d agent template(s) from config", n)
+		}
 	}
 
 	// Seed default platform settings (debug_mode, autorefresh_ms).

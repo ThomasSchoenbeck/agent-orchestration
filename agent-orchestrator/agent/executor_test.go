@@ -44,16 +44,13 @@ func (m *mockLLMProvider) Rerank(_ context.Context, _ llm.RerankRequest) (llm.Re
 func (m *mockLLMProvider) Name() string  { return m.name }
 func (m *mockLLMProvider) Close() error  { return nil }
 
-// buildExecutorConfig returns a minimal config wiring "worker" → "mock-model" → "mock".
+// buildExecutorConfig returns a minimal config. Role routing is wired on the
+// registry via SetRoles (see mockWorkerRegistry) rather than legacy config maps.
 func buildExecutorConfig() *config.Config {
 	return &config.Config{
 		Providers: []config.ProviderConfig{
 			{Name: "mock", Type: "ollama", BaseURL: "http://localhost:11434"},
 		},
-		Models: []config.ModelConfig{
-			{Name: "mock-model", Provider: "mock", Model: "mock-v1", Roles: []string{"worker"}},
-		},
-		Roles:    map[string]string{"worker": "mock-model"},
 		Server:   config.ServerConfig{Port: 8080},
 		Database: config.DatabaseConfig{Path: ":memory:"},
 		Agents: config.AgentConfig{
@@ -90,6 +87,7 @@ func TestExecutor_SubmitsResult(t *testing.T) {
 	// Build a registry with the mock provider.
 	cfg := buildExecutorConfig()
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	provider := &mockLLMProvider{
 		name: "mock",
 		response: llm.ChatResponse{
@@ -143,6 +141,7 @@ func TestExecutor_SubmitsResult(t *testing.T) {
 func TestExecutor_RouterFallback(t *testing.T) {
 	cfg := buildExecutorConfig()
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	provider := &mockLLMProvider{
 		name: "mock",
 		response: llm.ChatResponse{
@@ -254,6 +253,7 @@ func TestRouter_LoadFromDB_ProviderResolution(t *testing.T) {
 	// Build registry and register the mock provider.
 	cfg := buildExecutorConfig()
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	mockProv := &mockLLMProvider{name: "mock"}
 	_ = reg.Register("mock", mockProv)
 
@@ -298,6 +298,7 @@ func TestRouter_LoadFromDB_DisabledRoleSkipped(t *testing.T) {
 
 	cfg := buildExecutorConfig()
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{name: "mock"})
 
 	rtr := router.New(cfg, reg)
@@ -390,6 +391,7 @@ func TestAgent_FullTaskExecution(t *testing.T) {
 	cfg.Agents.TaskPollIntervalSec = 1
 
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{
 		name: "mock",
 		response: llm.ChatResponse{
@@ -443,6 +445,7 @@ func TestAgent_LLMFailure_MarksTaskFailed(t *testing.T) {
 	cfg.Agents.TaskPollIntervalSec = 1
 
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{
 		name:    "mock",
 		chatErr: errors.New("simulated LLM error"),
@@ -529,6 +532,7 @@ func TestExecutor_PostsCompletionComment(t *testing.T) {
 
 	cfg := buildExecutorConfig()
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{
 		name: "mock",
 		response: llm.ChatResponse{
@@ -630,6 +634,7 @@ func TestExecutor_SubmitsForReviewOnSuccess(t *testing.T) {
 
 	cfg := buildExecutorConfig()
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{
 		name: "mock",
 		response: llm.ChatResponse{
@@ -687,12 +692,10 @@ func TestExecutor_SubmitsReviewOnReviewingTask(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	// Wire both worker and reviewer to the mock provider so the review role resolves.
 	cfg := buildExecutorConfig()
-	cfg.Models[0].Roles = []string{"worker", "reviewer"}
-	cfg.Roles["reviewer"] = "mock-model"
 
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{
 		name: "mock",
 		response: llm.ChatResponse{
@@ -701,6 +704,8 @@ func TestExecutor_SubmitsReviewOnReviewingTask(t *testing.T) {
 			TokensUsed: 10,
 		},
 	})
+	// Wire both worker and reviewer to the mock provider so the review role resolves.
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	rtr := router.New(cfg, reg)
 	client := agent.NewServerClient(srv.URL)
 	exec := agent.NewExecutor(rtr, tools.NewRegistry(), client, "review-agent")
@@ -745,6 +750,7 @@ func TestExecutor_UppercaseStatusOnFailure(t *testing.T) {
 
 	cfg := buildExecutorConfig()
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{
 		name:    "mock",
 		chatErr: errors.New("simulated LLM error"),
@@ -801,6 +807,7 @@ func TestExecutor_PushFailureSetsTaskFailed(t *testing.T) {
 
 	cfg := buildExecutorConfig()
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{
 		name: "mock",
 		response: llm.ChatResponse{
@@ -858,6 +865,7 @@ func TestExecutor_InjectsRepoPath(t *testing.T) {
 
 	cfg := buildExecutorConfig()
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{
 		name: "mock",
 		response: llm.ChatResponse{
@@ -947,6 +955,7 @@ func TestExecutor_LogsErrorToServer(t *testing.T) {
 
 	cfg := buildExecutorConfig()
 	reg := llm.NewRegistry()
+	reg.SetRoles("mock", "mock-v1", []string{"worker", "reviewer"})
 	_ = reg.Register("mock", &mockLLMProvider{
 		name:    "mock",
 		chatErr: errors.New("simulated LLM error"),
