@@ -2,11 +2,30 @@ package llm
 
 import (
 	"fmt"
+	"net/http"
 	"sync"
+	"time"
 
 	"agent-orchestrator/config"
 	"agent-orchestrator/db"
 )
+
+// providerTimeout resolves the HTTP request timeout for a provider. An explicit
+// value (seconds, > 0) always wins. Otherwise local-style servers (ollama,
+// openai_compatible — commonly llama.cpp/LM Studio on CPU) get a generous
+// default since they can be slow on large-context requests; cloud providers get
+// a shorter one.
+func providerTimeout(provType string, explicitSec int) time.Duration {
+	if explicitSec > 0 {
+		return time.Duration(explicitSec) * time.Second
+	}
+	switch provType {
+	case "ollama", "openai_compatible":
+		return 300 * time.Second
+	default:
+		return 120 * time.Second
+	}
+}
 
 // roleEntry holds the provider name and the specific model name to use for a role.
 type roleEntry struct {
@@ -67,20 +86,57 @@ func (r *Registry) List() []string {
 	return names
 }
 
+// ResilienceConfig configures the retry/circuit-breaker/failover wrapping
+// applied to every provider via WrapResilience.
+type ResilienceConfig struct {
+	MaxRetries       int
+	Backoff          time.Duration
+	BreakerThreshold int
+	BreakerReset     time.Duration
+	FallbackProvider string // provider name; "" disables failover
+}
+
+// WrapResilience re-wraps every registered provider as
+// Failover(CircuitBreaker(Retry(raw)), CircuitBreaker(Retry(fallbackRaw))).
+// It operates on the providers currently registered (assumed raw), so callers
+// should register raw providers first and call this once afterwards. The
+// fallback provider itself is wrapped with retry+breaker but not self-failover.
+func (r *Registry) WrapResilience(cfg ResilienceConfig) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	wrapped := make(map[string]LLMProvider, len(r.providers))
+	for name, p := range r.providers {
+		wrapped[name] = NewCircuitBreaker(
+			NewRetryProvider(p, cfg.MaxRetries, cfg.Backoff),
+			cfg.BreakerThreshold, cfg.BreakerReset)
+	}
+	for name := range r.providers {
+		w := wrapped[name]
+		if cfg.FallbackProvider != "" && cfg.FallbackProvider != name {
+			if fbw, ok := wrapped[cfg.FallbackProvider]; ok {
+				w = NewFailoverProvider(name, w, fbw)
+			}
+		}
+		r.providers[name] = w
+	}
+}
+
 // InitFromConfig initialises providers from the configuration file.
 func (r *Registry) InitFromConfig(cfg *config.Config) error {
 	for _, pcfg := range cfg.Providers {
 		model := pcfg.DefaultModel()
+		client := &http.Client{Timeout: providerTimeout(pcfg.Type, pcfg.RequestTimeoutSec)}
 		var provider LLMProvider
 		switch pcfg.Type {
 		case "openai_compatible":
-			provider = NewOpenAIProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, model)
+			provider = NewOpenAIProviderWithClient(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, model, client)
 		case "ollama":
-			provider = NewOllamaProvider(pcfg.Name, pcfg.BaseURL, model)
+			provider = NewOllamaProviderWithClient(pcfg.Name, pcfg.BaseURL, model, client)
 		case "anthropic":
-			provider = NewAnthropicProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, model)
+			provider = NewAnthropicProviderWithClient(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, model, client)
 		case "azure":
-			provider = NewAzureOpenAIProvider(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, model, pcfg.Deployment)
+			provider = NewAzureOpenAIProviderWithClient(pcfg.Name, pcfg.BaseURL, pcfg.APIKey, model, pcfg.Deployment, client)
 		default:
 			// Skip unknown providers with a warning; they'll be added in later phases.
 			continue
@@ -183,18 +239,36 @@ func (r *Registry) GetForRole(role string) (LLMProvider, string, error) {
 // requiring a database import. extra is provider-specific config
 // (e.g. {"deployment": "my-dep"} for Azure).
 func NewFromSpec(name, provType, baseURL, apiKey, model string, extra map[string]interface{}) (LLMProvider, error) {
+	client := &http.Client{Timeout: providerTimeout(provType, timeoutSecFromExtra(extra))}
 	switch provType {
 	case "openai_compatible":
-		return NewOpenAIProvider(name, baseURL, apiKey, model), nil
+		return NewOpenAIProviderWithClient(name, baseURL, apiKey, model, client), nil
 	case "ollama":
-		return NewOllamaProvider(name, baseURL, model), nil
+		return NewOllamaProviderWithClient(name, baseURL, model, client), nil
 	case "anthropic":
-		return NewAnthropicProvider(name, baseURL, apiKey, model), nil
+		return NewAnthropicProviderWithClient(name, baseURL, apiKey, model, client), nil
 	case "azure":
 		deployment, _ := extra["deployment"].(string)
-		return NewAzureOpenAIProvider(name, baseURL, apiKey, model, deployment), nil
+		return NewAzureOpenAIProviderWithClient(name, baseURL, apiKey, model, deployment, client), nil
 	default:
 		return nil, fmt.Errorf("unknown provider type %q", provType)
+	}
+}
+
+// timeoutSecFromExtra reads an optional "request_timeout_sec" from a provider's
+// extra config map. Accepts the JSON-decoded float64 as well as int. Returns 0
+// when absent or unparseable (callers fall back to the per-type default).
+func timeoutSecFromExtra(extra map[string]interface{}) int {
+	if extra == nil {
+		return 0
+	}
+	switch n := extra["request_timeout_sec"].(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		return 0
 	}
 }
 

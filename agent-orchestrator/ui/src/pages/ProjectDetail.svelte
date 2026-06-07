@@ -9,7 +9,7 @@
     listRequirements, createRequirement, updateRequirement, deleteRequirement,
     listFeatures, createFeature, updateFeature, deleteFeature,
     initRepo, listBranches, deleteBranch, commitFiles, listCommits,
-    resyncProjectScope,
+    resyncProjectScope, createComment,
   } from '../lib/api.js'
   import { roleLabel } from '../lib/roles.js'
   import MarkdownEditor from '../components/MarkdownEditor.svelte'
@@ -232,6 +232,7 @@
   const statusColors = {
     BACKLOG:           'bg-blue-900 text-blue-300',
     UNQUEUED:          'bg-gray-700 text-gray-300',
+    AWAITING_INPUT:    'bg-amber-900 text-amber-300',
     DEVELOPING:        'bg-orange-900 text-orange-300',
     AWAITING_REVIEW:   'bg-yellow-900 text-yellow-300',
     REVIEWING:         'bg-purple-900 text-purple-300',
@@ -446,6 +447,23 @@
       await loadTasks()
     } catch (e) {
       toasts.error('Update failed: ' + e.message)
+    }
+  }
+
+  // Answer drafts for AWAITING_INPUT tasks, keyed by task id.
+  let answerDrafts = $state({})
+
+  async function answerAndResume(id) {
+    const text = (answerDrafts[id] || '').trim()
+    if (!text) return
+    try {
+      await createComment(id, { body: text, author_type: 'user' })
+      await queueTask(id)
+      answerDrafts[id] = ''
+      await loadTasks()
+      toasts.success('Answer posted — task resumed')
+    } catch (e) {
+      toasts.error('Answer failed: ' + e.message)
     }
   }
 
@@ -1074,6 +1092,20 @@
                   {#if t.payload?.description}
                     <p class="text-xs text-gray-400 mt-1 line-clamp-2">{t.payload.description}</p>
                   {/if}
+                  {#if t.status === 'AWAITING_INPUT'}
+                    <div class="mt-2 flex items-center gap-2" onclick={(e) => e.stopPropagation()}>
+                      <input
+                        class="flex-1 bg-surface-700 border border-amber-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-accent"
+                        placeholder="Answer the agent's question…"
+                        bind:value={answerDrafts[t.id]}
+                        onkeydown={(e) => { if (e.key === 'Enter') answerAndResume(t.id) }}
+                      />
+                      <button
+                        class="text-xs px-2 py-1 bg-accent hover:bg-accent-hover text-white rounded transition-colors"
+                        onclick={() => answerAndResume(t.id)}
+                      >Answer &amp; resume</button>
+                    </div>
+                  {/if}
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
                   <select
@@ -1092,11 +1124,11 @@
                       class="text-xs text-orange-400 hover:text-orange-300 transition-colors"
                       onclick={(e) => { e.stopPropagation(); unqueueTaskAction(t.id) }}
                     >Unqueue</button>
-                  {:else if t.status === 'UNQUEUED' || t.status === 'FAILED'}
+                  {:else if t.status === 'UNQUEUED' || t.status === 'FAILED' || t.status === 'AWAITING_INPUT'}
                     <button
                       class="text-xs text-yellow-400 hover:text-yellow-300 transition-colors"
                       onclick={(e) => { e.stopPropagation(); queueTaskAction(t.id) }}
-                    >Queue</button>
+                    >{t.status === 'AWAITING_INPUT' ? 'Resume' : 'Queue'}</button>
                   {/if}
                   <button
                     class="text-xs text-red-400 hover:text-red-300 transition-colors"

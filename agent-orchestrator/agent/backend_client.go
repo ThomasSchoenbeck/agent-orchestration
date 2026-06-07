@@ -174,3 +174,23 @@ func (c *ServerClient) ListRoles(ctx context.Context) ([]*db.RoleDefinition, err
 	}
 	return roles, nil
 }
+
+// ListSettings fetches all platform settings (key/value) over HTTP. Used to read
+// the UI-configurable LLM resilience settings.
+func (c *ServerClient) ListSettings(ctx context.Context) ([]*db.Setting, error) {
+	var settings []*db.Setting
+	if err := c.get(ctx, "/api/settings", &settings); err != nil {
+		return nil, err
+	}
+	return settings, nil
+}
+
+// ListTaskComments fetches a task's comments (oldest first). Used to feed the
+// agent any human/orchestrator answers when a parked task resumes.
+func (c *ServerClient) ListTaskComments(ctx context.Context, taskID string) ([]*db.TaskComment, error) {
+	var comments []*db.TaskComment
+	if err := c.get(ctx, "/api/tasks/"+taskID+"/comments", &comments); err != nil {
+		return nil, err
+	}
+	return comments, nil
+}

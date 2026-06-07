@@ -451,6 +451,14 @@ func buildAgent(name string, roles, skills []string, serverURL, configPath, work
 				llmReg.Remove(existing)
 			}
 		}
+		// Wrap providers with retry/circuit-breaker/failover using the
+		// UI-configurable resilience settings (best effort: defaults on error).
+		if settings, serr := client.ListSettings(context.Background()); serr == nil {
+			llmReg.WrapResilience(agent.ResilienceFromSettings(settings))
+		} else {
+			log.Printf("agent %q: could not load resilience settings (%v); using defaults", name, serr)
+			llmReg.WrapResilience(agent.ResilienceFromSettings(nil))
+		}
 		return rtr.LoadFromData(provs, roleDefs)
 	}
 

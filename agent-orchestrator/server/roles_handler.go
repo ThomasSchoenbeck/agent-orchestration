@@ -22,11 +22,11 @@ import (
 func defaultToolsForRole(name string) []string {
 	switch name {
 	case "worker":
-		return []string{"read_file", "write_file", "list_files", "apply_diff", "run_tests", "task_comment"}
+		return []string{"read_file", "write_file", "list_files", "apply_diff", "run_tests", "task_comment", "request_input"}
 	case "reviewer":
-		return []string{"read_file", "list_files", "task_comment"}
+		return []string{"read_file", "list_files", "task_comment", "request_input"}
 	case "orchestrator":
-		return []string{"list_tasks", "create_work_package", "plan_project", "bootstrap_project", "sync_scope", "complete_project", "query_context", "save_context", "task_comment"}
+		return []string{"list_tasks", "create_work_package", "plan_project", "bootstrap_project", "sync_scope", "complete_project", "query_context", "save_context", "task_comment", "request_input"}
 	default:
 		return nil
 	}

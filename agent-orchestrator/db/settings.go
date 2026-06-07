@@ -104,12 +104,27 @@ func (d *Database) SeedResyncPrompt(ctx context.Context, configPrompt string) er
 		"Task description handed to the orchestrator on project scope re-sync")
 }
 
+// Resilience setting keys, consumed by agents to wrap LLM providers with
+// retry / circuit-breaker / failover behaviour.
+const (
+	SettingKeyMaxRetries       = "llm.max_retries"
+	SettingKeyRetryBackoffMs   = "llm.retry_backoff_ms"
+	SettingKeyBreakerThreshold = "llm.circuit_breaker_threshold"
+	SettingKeyBreakerResetSec  = "llm.circuit_breaker_reset_sec"
+	SettingKeyFallbackProvider = "llm.fallback_provider"
+)
+
 // SeedDefaultPlatformSettings inserts the default platform settings
 // if they don't already exist. Called at server startup.
 func (d *Database) SeedDefaultPlatformSettings(ctx context.Context) error {
 	defaults := []struct{ key, value, description string }{
 		{"platform.debug_mode", "false", "Emit verbose debug events (agent_heartbeat, agent_poll_query, agent_poll_no_task)"},
 		{"platform.charts.autorefresh_ms", "5000", "Chart/log auto-refresh interval in milliseconds"},
+		{SettingKeyMaxRetries, "3", "LLM call retries before failing (agent retries the same call with backoff)"},
+		{SettingKeyRetryBackoffMs, "1000", "Base backoff between LLM retries in milliseconds (grows linearly per attempt)"},
+		{SettingKeyBreakerThreshold, "5", "Consecutive provider failures before the circuit breaker opens"},
+		{SettingKeyBreakerResetSec, "30", "Seconds the circuit stays open before a probe request is allowed"},
+		{SettingKeyFallbackProvider, "", "Provider name to fail over to when the primary keeps failing (empty = none)"},
 	}
 	for _, s := range defaults {
 		if err := d.SeedSetting(ctx, s.key, s.value, s.description); err != nil {

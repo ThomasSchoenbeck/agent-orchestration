@@ -49,6 +49,9 @@ providers:
     type: openai_compatible
     base_url: "https://api.openai.com/v1"
     api_key: "${OPENAI_API_KEY}"
+    # request_timeout_sec: 300            # HTTP timeout per LLM call. 0/omitted →
+    #                                     # 300s for local (ollama/openai_compatible),
+    #                                     # 120s for cloud. Raise for slow local models.
     models:
       - name: gpt-4o
         default: true                     # provider's default model

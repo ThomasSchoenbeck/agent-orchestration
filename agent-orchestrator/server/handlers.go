@@ -1247,12 +1247,27 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 		s.recordPoll(agentID, roles, taskFoundID)
 		if s.isDebugMode(r.Context()) {
 			eventType := db.EventAgentPollQuery
+			result := "found task " + taskFoundID
 			if task == nil {
 				eventType = db.EventAgentPollNoTask
+				result = "no matching task"
 			}
+			// Record exactly what the agent matched on so debug mode shows why a
+			// poll did or did not find work (roles/skills mismatch is the usual cause).
+			meta, _ := json.Marshal(map[string]interface{}{
+				"roles":       roles,
+				"match_roles": s.db.ExpandRoleMatch(r.Context(), roles),
+				"skills":      agentRec.Skills,
+				"result":      result,
+				"task_id":     taskFoundID,
+			})
 			_ = s.db.CreateAgentLog(r.Context(), &db.AgentLog{
-				AgentID:   agentID,
-				EventType: eventType,
+				AgentID:     agentID,
+				AgentName:   agentRec.Name,
+				EventType:   eventType,
+				TaskID:      taskFoundID,
+				Description: "Polled roles=[" + strings.Join(roles, ",") + "] skills=[" + strings.Join(agentRec.Skills, ",") + "] → " + result,
+				Metadata:    string(meta),
 			})
 		}
 		if task == nil {

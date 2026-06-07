@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -36,6 +37,73 @@ func TestCreateWorkPackage_ResolvesRoleNameToID(t *testing.T) {
 	}
 	if tasks[0].Role != workerID {
 		t.Errorf("task role = %q, want resolved id %q (agents match on id)", tasks[0].Role, workerID)
+	}
+}
+
+func TestPoll_ClaimsTaskWhenRoleStoredAsName(t *testing.T) {
+	srv, database := newTestServer(t)
+	seedRole(t, database, "worker")
+	pid := newProject(t, database)
+
+	// Task role stored as the NAME "worker" (e.g. a legacy/pre-migration row).
+	task := &db.Task{ProjectID: pid, Role: "worker", Status: db.TaskStatusBacklog}
+	if err := database.CreateTask(context.Background(), task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	// Register an agent — its roles are resolved to ids on registration.
+	aw := do(t, srv, http.MethodPost, "/api/agents/register", map[string]interface{}{
+		"name": "worker-1", "roles": []string{"worker"},
+	})
+	if aw.Code != http.StatusOK && aw.Code != http.StatusCreated {
+		t.Fatalf("register: got %d (%s)", aw.Code, aw.Body.String())
+	}
+	var reg map[string]string
+	_ = json.Unmarshal(aw.Body.Bytes(), &reg)
+	agentID := reg["agent_id"]
+	if agentID == "" {
+		t.Fatalf("no agent_id in register response: %s", aw.Body.String())
+	}
+
+	// Poll: the name-vs-id mismatch must not prevent the claim.
+	pw := do(t, srv, http.MethodGet, "/api/agents/"+agentID+"/tasks/next", nil)
+	if pw.Code != http.StatusOK {
+		t.Fatalf("poll: expected 200, got %d (%s)", pw.Code, pw.Body.String())
+	}
+
+	got, _ := database.GetTask(context.Background(), task.ID)
+	if got.AssignedAgentID != agentID {
+		t.Errorf("task not claimed: AssignedAgentID=%q want %q (status=%s)", got.AssignedAgentID, agentID, got.Status)
+	}
+}
+
+func TestPoll_SkipsAwaitingInputTask(t *testing.T) {
+	srv, database := newTestServer(t)
+	seedRole(t, database, "worker")
+	pid := newProject(t, database)
+
+	// A parked AWAITING_INPUT task must not be handed out to an agent.
+	task := &db.Task{ProjectID: pid, Role: "worker", Status: db.TaskStatusAwaitingInput}
+	if err := database.CreateTask(context.Background(), task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	aw := do(t, srv, http.MethodPost, "/api/agents/register", map[string]interface{}{
+		"name": "worker-1", "roles": []string{"worker"},
+	})
+	var reg map[string]string
+	_ = json.Unmarshal(aw.Body.Bytes(), &reg)
+	agentID := reg["agent_id"]
+
+	pw := do(t, srv, http.MethodGet, "/api/agents/"+agentID+"/tasks/next", nil)
+	if pw.Code != http.StatusOK {
+		t.Fatalf("poll: expected 200, got %d", pw.Code)
+	}
+
+	got, _ := database.GetTask(context.Background(), task.ID)
+	if got.AssignedAgentID != "" || got.Status != db.TaskStatusAwaitingInput {
+		t.Errorf("AWAITING_INPUT task should not be claimed: agent=%q status=%s",
+			got.AssignedAgentID, got.Status)
 	}
 }
 

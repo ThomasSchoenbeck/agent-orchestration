@@ -228,14 +228,18 @@ func (d *Database) GetNextTaskWithSkills(ctx context.Context, roles, skills []st
 	var clauses []string
 	var args []interface{}
 
-	// Normal work: task.role matches one of the agent's roles. A BACKLOG/
-	// AWAITING_REVISION task with any uncompleted dependency is withheld until
-	// its prerequisites are COMPLETED (Feature 4 dependency gating).
-	clauses = append(clauses, "(status IN ('BACKLOG','AWAITING_REVISION') AND role IN ("+ph(len(roles))+")"+
+	// Normal work: task.role matches one of the agent's roles. The match set is
+	// expanded to include both the id and name form of each role so a task whose
+	// role was stored as a name still matches an agent whose roles are stored as
+	// ids (and vice versa) during the id migration. A BACKLOG/AWAITING_REVISION
+	// task with any uncompleted dependency is withheld until its prerequisites are
+	// COMPLETED (Feature 4 dependency gating).
+	matchRoles := d.ExpandRoleMatch(ctx, roles)
+	clauses = append(clauses, "(status IN ('BACKLOG','AWAITING_REVISION') AND role IN ("+ph(len(matchRoles))+")"+
 		" AND NOT EXISTS (SELECT 1 FROM task_dependencies d"+
 		" JOIN tasks dep ON dep.id = d.depends_on_id"+
 		" WHERE d.task_id = tasks.id AND dep.status != 'COMPLETED'))")
-	for _, r := range roles {
+	for _, r := range matchRoles {
 		args = append(args, r)
 	}
 
@@ -280,6 +284,48 @@ func (d *Database) GetNextTaskWithSkills(ctx context.Context, roles, skills []st
 		}
 	}
 	return nil, nil
+}
+
+// ExpandRoleMatch returns the given role refs plus, for any ref that matches a
+// role definition by id or name, both that definition's id and name. This makes
+// task-role matching tolerant of refs stored as either ids or names during the
+// id migration. The original refs are always retained (so unknown roles still
+// match themselves). Result order is unspecified.
+func (d *Database) ExpandRoleMatch(ctx context.Context, refs []string) []string {
+	set := make(map[string]bool, len(refs)*2)
+	for _, r := range refs {
+		if r != "" {
+			set[r] = true
+		}
+	}
+	if len(refs) > 0 {
+		ph := strings.Repeat("?,", len(refs))
+		ph = ph[:len(ph)-1]
+		args := make([]interface{}, 0, len(refs)*2)
+		for _, r := range refs {
+			args = append(args, r)
+		}
+		for _, r := range refs {
+			args = append(args, r)
+		}
+		rows, err := d.db.QueryContext(ctx,
+			"SELECT id, name FROM agent_role_definitions WHERE id IN ("+ph+") OR name IN ("+ph+")", args...)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var id, name string
+				if rows.Scan(&id, &name) == nil {
+					set[id] = true
+					set[name] = true
+				}
+			}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	return out
 }
 
 // focusSatisfied reports whether every focus tag is present in skillSet. An

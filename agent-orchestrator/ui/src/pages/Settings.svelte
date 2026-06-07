@@ -274,6 +274,61 @@
       </div>
     </section>
 
+    <!-- LLM Resilience -->
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-gray-200 mb-1">LLM Resilience</h2>
+      <p class="text-xs text-gray-400 mb-4">How agents handle failing LLM calls. Applied on the agent's next provider sync.</p>
+
+      <div class="flex flex-col gap-3">
+        {#each [
+          { key: 'llm.max_retries', label: 'Max retries', desc: 'Extra attempts for a failing LLM call before the round fails.', def: '3' },
+          { key: 'llm.retry_backoff_ms', label: 'Retry backoff (ms)', desc: 'Base wait between retries; grows linearly per attempt.', def: '1000' },
+          { key: 'llm.circuit_breaker_threshold', label: 'Breaker threshold', desc: 'Consecutive provider failures before the circuit opens.', def: '5' },
+          { key: 'llm.circuit_breaker_reset_sec', label: 'Breaker reset (s)', desc: 'Seconds the circuit stays open before a probe is allowed.', def: '30' },
+        ] as f}
+          <div class="flex items-center justify-between p-3 bg-surface-800 rounded border border-surface-600">
+            <div>
+              <div class="text-sm text-gray-200 font-medium">{f.label}</div>
+              <div class="text-xs text-gray-500 mt-0.5">{f.desc}</div>
+            </div>
+            <div class="flex items-center gap-2 ml-4 shrink-0">
+              <input
+                type="number" min="0"
+                class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 w-24 focus:outline-none focus:border-accent"
+                value={settingVal(f.key) || f.def}
+                oninput={(e) => { const s = settings[f.key]; if (s) s.value = e.currentTarget.value }}
+              />
+              <button
+                class="px-3 py-1 bg-accent hover:bg-accent-hover text-white text-xs rounded transition-colors disabled:opacity-40"
+                disabled={saving}
+                onclick={() => savePlatform(f.key, settingVal(f.key) || f.def)}
+              >Save</button>
+            </div>
+          </div>
+        {/each}
+
+        <div class="flex items-center justify-between p-3 bg-surface-800 rounded border border-surface-600">
+          <div>
+            <div class="text-sm text-gray-200 font-medium">Fallback provider</div>
+            <div class="text-xs text-gray-500 mt-0.5">Provider name to fail over to when the primary keeps failing (empty = none).</div>
+          </div>
+          <div class="flex items-center gap-2 ml-4 shrink-0">
+            <input
+              type="text"
+              class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 w-40 focus:outline-none focus:border-accent"
+              value={settingVal('llm.fallback_provider')}
+              oninput={(e) => { const s = settings['llm.fallback_provider']; if (s) s.value = e.currentTarget.value }}
+            />
+            <button
+              class="px-3 py-1 bg-accent hover:bg-accent-hover text-white text-xs rounded transition-colors disabled:opacity-40"
+              disabled={saving}
+              onclick={() => savePlatform('llm.fallback_provider', settingVal('llm.fallback_provider'))}
+            >Save</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Agent Log Retention -->
     <section class="mb-8">
       <h2 class="text-base font-semibold text-gray-200 mb-1">Agent Log Retention</h2>

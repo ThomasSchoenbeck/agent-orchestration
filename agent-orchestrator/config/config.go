@@ -62,6 +62,9 @@ type ProviderConfig struct {
 	APIKey     string                `yaml:"api_key"`
 	Deployment string                `yaml:"deployment"` // Azure OpenAI deployment name
 	Models     []ProviderModelConfig `yaml:"models"`     // per-model role and pricing config
+	// RequestTimeoutSec overrides the HTTP request timeout (seconds). 0 → per-type
+	// default (300s for local ollama/openai_compatible servers, 120s for cloud).
+	RequestTimeoutSec int `yaml:"request_timeout_sec"`
 }
 
 // DefaultModel returns the provider's default model name: the one flagged

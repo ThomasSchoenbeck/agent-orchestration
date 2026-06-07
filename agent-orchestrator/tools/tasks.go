@@ -15,6 +15,7 @@ func RegisterTaskTools(reg *Registry, backend ToolBackend) error {
 		listTasksTool(backend),
 		submitTaskResultTool(backend),
 		getNextTaskTool(backend),
+		requestInputTool(),
 	}
 	for _, t := range tools {
 		if err := reg.Register(t); err != nil {
@@ -100,6 +101,26 @@ func submitTaskResultTool(backend ToolBackend) Definition {
 				"task_id": taskID,
 				"status":  status,
 			}, nil
+		},
+	}
+}
+
+// requestInputTool lets an agent pause the task to ask a human or the
+// orchestrator for missing information. The executor intercepts this call: it
+// posts the question as a task comment and parks the task in AWAITING_INPUT
+// (the Handler here is a no-op fallback and is normally not invoked).
+func requestInputTool() Definition {
+	return Definition{
+		Name: "request_input",
+		Description: "Pause this task and ask a human or the orchestrator for missing information or a decision " +
+			"you cannot resolve yourself. Use this instead of guessing or giving up. The task is parked until " +
+			"someone answers; you will see their reply when it resumes.",
+		Parameters: map[string]Param{
+			"question": {Type: "string", Description: "The specific question or decision you need answered to proceed"},
+		},
+		Required: []string{"question"},
+		Handler: func(_ context.Context, args map[string]interface{}) (interface{}, error) {
+			return map[string]interface{}{"question": strArgOpt(args, "question"), "status": "awaiting_input"}, nil
 		},
 	}
 }

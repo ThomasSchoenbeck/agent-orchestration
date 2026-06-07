@@ -103,7 +103,7 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		tlog.Warn("failed to post start comment: %v", err)
 	}
 
-	result, _, stats, execErr := e.execute(ctx, task)
+	result, runStatus, stats, execErr := e.execute(ctx, task)
 	if execErr != nil {
 		result = map[string]interface{}{"error": execErr.Error()}
 		tlog.ErrorCtx(ctx, "task failed: %v", execErr)
@@ -117,6 +117,16 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		Cost:         stats.cost,
 		DurationMs:   durationMs,
 		Model:        stats.model,
+	}
+
+	// Agent asked for help: park the task in AWAITING_INPUT (the question was
+	// already posted as a comment). It resumes when answered and re-queued.
+	if execErr == nil && runStatus == db.TaskStatusAwaitingInput {
+		if err := e.client.SubmitTaskResult(ctx, task.ID, result, db.TaskStatusAwaitingInput, metrics); err != nil {
+			tlog.ErrorCtx(ctx, "failed to submit awaiting-input result: %v", err)
+		}
+		tlog.InfoCtx(ctx, "task parked awaiting input (tokens=%d duration=%dms)", stats.totalTokens, durationMs)
+		return
 	}
 
 	// Review tasks (claimed from AWAITING_REVIEW, now in REVIEWING) post a review
@@ -368,6 +378,11 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			userMsg = pc + "\n\n" + userMsg
 		}
 	}
+	// Inject prior task comments (e.g. an answer to a previous request_input) so a
+	// resumed task sees the human/orchestrator reply.
+	if cc := e.commentsContext(ctx, task.ID); cc != "" {
+		userMsg = cc + "\n\n" + userMsg
+	}
 
 	// Some models (e.g. Gemma via llama.cpp) have no system role in their chat
 	// template; injecting one breaks tool-call argument generation. Fold the
@@ -500,6 +515,25 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			return map[string]interface{}{
 				"output": resp.Content,
 			}, db.TaskStatusCompleted, stats, nil
+		}
+
+		// request_input is terminal: the agent is asking a human/orchestrator for
+		// help. Post the question as a comment and park the task (not failed) so it
+		// can be answered and re-queued. Handled before normal tool execution.
+		for _, tc := range resp.ToolCalls {
+			if tc.Name == "request_input" {
+				question, _ := tc.Arguments["question"].(string)
+				if strings.TrimSpace(question) == "" {
+					question = "The agent requested input but did not specify a question."
+				}
+				body := "**Agent needs input**\n\n" + question +
+					"\n\n_Reply with a comment, then re-queue the task to resume._"
+				if cErr := e.client.PostComment(ctx, task.ID, body, e.agentID); cErr != nil {
+					tlog.Warn("failed to post request_input comment: %v", cErr)
+				}
+				tlog.InfoCtx(ctx, "agent requested input; parking task as AWAITING_INPUT")
+				return map[string]interface{}{"question": question}, db.TaskStatusAwaitingInput, stats, nil
+			}
 		}
 
 		// Execute each tool call and collect results.
@@ -637,11 +671,11 @@ func parseTextToolCalls(content string) []llm.ToolCall {
 func defaultToolsForRole(role string) []string {
 	switch role {
 	case "worker":
-		return []string{"read_file", "write_file", "list_files", "apply_diff", "run_tests", "task_comment"}
+		return []string{"read_file", "write_file", "list_files", "apply_diff", "run_tests", "task_comment", "request_input"}
 	case "reviewer":
-		return []string{"read_file", "list_files", "task_comment"}
+		return []string{"read_file", "list_files", "task_comment", "request_input"}
 	case "orchestrator":
-		return []string{"list_tasks", "create_work_package", "plan_project", "bootstrap_project", "sync_scope", "complete_project", "query_context", "save_context", "task_comment"}
+		return []string{"list_tasks", "create_work_package", "plan_project", "bootstrap_project", "sync_scope", "complete_project", "query_context", "save_context", "task_comment", "request_input"}
 	default:
 		return nil // unknown role: send all tools
 	}
@@ -752,6 +786,31 @@ func (e *Executor) planningContext(ctx context.Context, projectID string) string
 			sb.WriteString(strings.Join(names, ", "))
 			sb.WriteString("\n\n")
 		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// commentsContext fetches a task's comments and formats them for the prompt so a
+// resumed task (e.g. after request_input) sees prior questions and answers.
+// Returns "" when there are none or on error (non-fatal).
+func (e *Executor) commentsContext(ctx context.Context, taskID string) string {
+	if e.client == nil || taskID == "" {
+		return ""
+	}
+	comments, err := e.client.ListTaskComments(ctx, taskID)
+	if err != nil || len(comments) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Conversation on this task (oldest first):\n")
+	for _, c := range comments {
+		who := c.AuthorType
+		if c.AuthorName != "" {
+			who = c.AuthorName
+		} else if c.AuthorRole != "" {
+			who = c.AuthorRole
+		}
+		sb.WriteString("- [" + who + "] " + strings.TrimSpace(c.Body) + "\n")
 	}
 	return strings.TrimSpace(sb.String())
 }

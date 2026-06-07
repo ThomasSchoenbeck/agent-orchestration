@@ -32,7 +32,8 @@ type Project struct {
 // the db package importing workflow).
 const (
 	TaskStatusBacklog          = "BACKLOG"
-	TaskStatusUnqueued         = "UNQUEUED" // parked: not claimable until re-queued to BACKLOG
+	TaskStatusUnqueued         = "UNQUEUED"       // parked: not claimable until re-queued to BACKLOG
+	TaskStatusAwaitingInput    = "AWAITING_INPUT" // agent asked for help; parked until a human/orchestrator answers
 	TaskStatusDeveloping       = "DEVELOPING"
 	TaskStatusAwaitingReview   = "AWAITING_REVIEW"
 	TaskStatusReviewing        = "REVIEWING"

@@ -39,6 +39,7 @@ func (s *Server) registerAgentRoutes() {
 	am.HandleFunc("/api/skills/", s.handleSkillDetail)
 	am.HandleFunc("/api/roles", s.handleRoles)
 	am.HandleFunc("/api/roles/", s.handleRoleDetail)
+	am.HandleFunc("/api/settings", s.handleSettings)
 
 	// Provider config WITH secrets — agent-only, behind the gate.
 	am.HandleFunc("/api/internal/providers", s.handleInternalProviders)
