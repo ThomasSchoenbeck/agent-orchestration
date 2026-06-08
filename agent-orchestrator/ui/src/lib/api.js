@@ -145,7 +145,22 @@ export const deleteTaskLogs = (taskId) =>
 // ── Metrics ──────────────────────────────────────────────────────────────────
 export const getMetrics = () => get('/api/metrics')
 export const getMetricsCosts = () => get('/api/metrics/costs')
-export const getCostBreakdown = (groupBy) => get(`/api/metrics/costs?group_by=${encodeURIComponent(groupBy)}`)
+
+// Build a query string from an object, skipping empty/undefined values.
+const qs = (params) => {
+  const sp = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') sp.append(k, v)
+  }
+  const s = sp.toString()
+  return s ? `?${s}` : ''
+}
+
+// Cost breakdown grouped by a dimension, optionally narrowed by filters
+// ({ from, to, model, agent_role, source, provider }).
+export const getCostBreakdown = (groupBy, filters = {}) =>
+  get(`/api/metrics/costs${qs({ group_by: groupBy, ...filters })}`)
+export const getCostFilterOptions = () => get('/api/metrics/costs/options')
 export const getTaskCost = (taskId) => get(`/api/tasks/${taskId}/cost`)
 
 // ── Meta (enumerations) ──────────────────────────────────────────────────────

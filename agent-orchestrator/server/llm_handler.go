@@ -3,8 +3,11 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"time"
 
 	"agent-orchestrator/api"
+	"agent-orchestrator/db"
 	"agent-orchestrator/llm"
 	"agent-orchestrator/logging"
 )
@@ -137,16 +140,41 @@ func (s *Server) handleMetricsTokens(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, http.StatusOK, tokens)
 }
 
+// parseCostFilter reads the optional cost-filter query params shared by the
+// breakdown endpoint. Dates are "YYYY-MM-DD"; "to" is treated as inclusive of
+// the whole day (converted to an exclusive next-day bound).
+func parseCostFilter(q url.Values) db.CostFilter {
+	f := db.CostFilter{
+		Model:      q.Get("model"),
+		AgentRole:  q.Get("agent_role"),
+		Source:     q.Get("source"),
+		ProviderID: q.Get("provider"),
+	}
+	if v := q.Get("from"); v != "" {
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			f.From = &t
+		}
+	}
+	if v := q.Get("to"); v != "" {
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			next := t.AddDate(0, 0, 1)
+			f.To = &next
+		}
+	}
+	return f
+}
+
 // handleMetricsCosts handles GET /api/metrics/costs
 func (s *Server) handleMetricsCosts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		api.WriteError(w, http.StatusMethodNotAllowed, api.ErrCodeInvalidInput, "method not allowed")
 		return
 	}
-	// F6: ?group_by=source|agent_role|agent_id|provider|model|project|day returns
-	// the unified cost ledger broken down by that dimension.
+	// F6: ?group_by=source|agent_role|agent_id|task|chat|provider|model|project|day
+	// returns the unified cost ledger broken down by that dimension. Optional
+	// filter params (from, to, model, agent_role, source, provider) narrow it.
 	if gb := r.URL.Query().Get("group_by"); gb != "" {
-		buckets, err := s.db.CostBreakdown(r.Context(), gb)
+		buckets, err := s.db.CostBreakdown(r.Context(), gb, parseCostFilter(r.URL.Query()))
 		if err != nil {
 			api.WriteError(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to collect cost breakdown: "+err.Error())
 			return
@@ -165,4 +193,19 @@ func (s *Server) handleMetricsCosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.WriteJSON(w, http.StatusOK, costs)
+}
+
+// handleMetricsCostOptions handles GET /api/metrics/costs/options — the
+// distinct filter values and date bounds for the cost detail page.
+func (s *Server) handleMetricsCostOptions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		api.WriteError(w, http.StatusMethodNotAllowed, api.ErrCodeInvalidInput, "method not allowed")
+		return
+	}
+	opts, err := s.db.CostFilterOptions(r.Context())
+	if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, api.ErrCodeInternal, "failed to collect cost filter options: "+err.Error())
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, opts)
 }

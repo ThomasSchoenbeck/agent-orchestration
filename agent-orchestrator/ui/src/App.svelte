@@ -9,6 +9,7 @@
   import Roles         from './pages/Roles.svelte'
   import Skills        from './pages/Skills.svelte'
   import Providers     from './pages/Providers.svelte'
+  import CostDetail    from './pages/CostDetail.svelte'
   import Logs          from './pages/Logs.svelte'
   import Chat          from './pages/Chat.svelte'
   import Settings      from './pages/Settings.svelte'
@@ -74,6 +75,8 @@
       <Skills />
     {:else if $router.page === 'providers'}
       <Providers />
+    {:else if $router.page === 'costs'}
+      <CostDetail />
     {:else if $router.page === 'logs'}
       <Logs />
     {:else if $router.page === 'chat'}

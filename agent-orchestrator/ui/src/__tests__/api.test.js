@@ -19,6 +19,7 @@ import {
   listBranches,
   deleteBranch,
   getCostBreakdown,
+  getCostFilterOptions,
   resyncProjectScope,
 } from '../lib/api.js'
 
@@ -319,6 +320,20 @@ describe('cost breakdown', () => {
     const res = await getCostBreakdown('agent_role')
     expect(fetch).toHaveBeenCalledWith('/api/metrics/costs?group_by=agent_role', expect.anything())
     expect(res[0].key).toBe('agent')
+  })
+
+  it('appends non-empty filters and skips empty ones', async () => {
+    stubFetch([])
+    await getCostBreakdown('task', { from: '2026-01-01', to: '', model: 'gpt-4', agent_role: '', source: 'agent', provider: '' })
+    const [url] = fetch.mock.calls[0]
+    expect(url).toBe('/api/metrics/costs?group_by=task&from=2026-01-01&model=gpt-4&source=agent')
+  })
+
+  it('GET /api/metrics/costs/options', async () => {
+    stubFetch({ models: ['gpt-4'], agent_roles: ['worker'], sources: ['agent'], providers: ['p1'], min_date: '2026-01-01', max_date: '2026-06-01' })
+    const res = await getCostFilterOptions()
+    expect(fetch).toHaveBeenCalledWith('/api/metrics/costs/options', expect.anything())
+    expect(res.models).toEqual(['gpt-4'])
   })
 })
 

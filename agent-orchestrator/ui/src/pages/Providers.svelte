@@ -4,7 +4,7 @@
     listProviders, createProvider, updateProvider, deleteProvider,
     testProvider, getMetrics, getCostBreakdown, listRoles,
   } from '../lib/api.js'
-  import { toasts } from '../lib/stores.js'
+  import { toasts, router } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -689,7 +689,10 @@
   <!-- Cost breakdown (F6): distinguish cost by agent vs chat, agent type, etc. -->
   <div class="mb-8">
     <div class="flex items-center justify-between mb-3">
-      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Cost breakdown</h2>
+      <div class="flex items-center gap-3">
+        <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Cost breakdown</h2>
+        <button class="text-xs text-accent hover:underline" onclick={() => router.go('costs')}>View details →</button>
+      </div>
       <select
         class="bg-surface-700 border border-surface-600 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none"
         bind:value={breakdownGroup}

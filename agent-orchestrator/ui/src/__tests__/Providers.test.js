@@ -63,6 +63,16 @@ describe('Providers — cost breakdown (F6)', () => {
   })
 })
 
+describe('Providers — cost detail link', () => {
+  it('navigates to #/costs when "View details" is clicked', async () => {
+    render(Providers)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByText('View details →')).toBeInTheDocument())
+    await user.click(screen.getByText('View details →'))
+    expect(window.location.hash).toBe('#/costs')
+  })
+})
+
 describe('Providers — cost (merged into Metrics section)', () => {
   it('renders total cost from the metrics summary, currency-formatted', async () => {
     getMetrics.mockResolvedValue({ total_cost: 0.1234, total_tokens: 500 })

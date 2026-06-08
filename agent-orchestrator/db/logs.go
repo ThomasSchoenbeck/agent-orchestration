@@ -128,28 +128,82 @@ var costBreakdownColumns = map[string]string{
 	"source":     "source",
 	"agent_role": "agent_role",
 	"agent_id":   "agent_id",
+	"task":       "task_id",
+	"chat":       "conversation_id",
 	"provider":   "provider_id",
 	"model":      "model",
 	"project":    "project_id",
-	"day":        "date(created_at)",
+	// substr(...,1,10) takes the leading "YYYY-MM-DD"; the modernc/sqlite driver
+	// stores time.Time in Go's String() layout, which SQLite's date() cannot parse.
+	"day": "substr(created_at, 1, 10)",
+}
+
+// CostFilter narrows a cost breakdown to a subset of the metrics ledger.
+// Zero-value fields are ignored, so the filter is fully optional and
+// combinable. AgentRole is the "task type" dimension in the current model
+// (tasks.type was retired in Feature 3; the role is recorded on each metric).
+type CostFilter struct {
+	From       *time.Time // inclusive lower bound on created_at
+	To         *time.Time // exclusive upper bound on created_at
+	Model      string
+	AgentRole  string
+	Source     string
+	ProviderID string
+}
+
+// where builds the SQL WHERE fragment (with leading " WHERE ") and bound args
+// for the non-empty filter fields. Values are always bound, never interpolated.
+func (f CostFilter) where() (string, []interface{}) {
+	var conds []string
+	var args []interface{}
+	if f.From != nil {
+		conds = append(conds, "created_at >= ?")
+		args = append(args, f.From.UTC())
+	}
+	if f.To != nil {
+		conds = append(conds, "created_at < ?")
+		args = append(args, f.To.UTC())
+	}
+	if f.Model != "" {
+		conds = append(conds, "model = ?")
+		args = append(args, f.Model)
+	}
+	if f.AgentRole != "" {
+		conds = append(conds, "agent_role = ?")
+		args = append(args, f.AgentRole)
+	}
+	if f.Source != "" {
+		conds = append(conds, "source = ?")
+		args = append(args, f.Source)
+	}
+	if f.ProviderID != "" {
+		conds = append(conds, "provider_id = ?")
+		args = append(args, f.ProviderID)
+	}
+	if len(conds) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
 // CostBreakdown aggregates token usage and cost from the metrics ledger grouped
-// by the given dimension (defaults to "source" for an unknown value).
-func (d *Database) CostBreakdown(ctx context.Context, groupBy string) ([]*CostBucket, error) {
+// by the given dimension (defaults to "source" for an unknown value) and
+// narrowed by the optional filter.
+func (d *Database) CostBreakdown(ctx context.Context, groupBy string, f CostFilter) ([]*CostBucket, error) {
 	col, ok := costBreakdownColumns[groupBy]
 	if !ok {
 		col = "source"
 	}
+	whereSQL, args := f.where()
 	rows, err := d.db.QueryContext(ctx, fmt.Sprintf(
 		`SELECT COALESCE(%s, '') AS k,
 		        COALESCE(SUM(input_tokens), 0),
 		        COALESCE(SUM(output_tokens), 0),
 		        COALESCE(SUM(cost), 0),
 		        COUNT(*)
-		 FROM metrics
+		 FROM metrics%s
 		 GROUP BY k
-		 ORDER BY SUM(cost) DESC`, col))
+		 ORDER BY SUM(cost) DESC`, col, whereSQL), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +217,57 @@ func (d *Database) CostBreakdown(ctx context.Context, groupBy string) ([]*CostBu
 		out = append(out, &b)
 	}
 	return out, rows.Err()
+}
+
+// CostFilterOptions enumerates the distinct values available for each filter
+// dimension plus the min/max metric dates, so the UI can populate its controls.
+type CostFilterOptions struct {
+	Models     []string `json:"models"`
+	AgentRoles []string `json:"agent_roles"`
+	Sources    []string `json:"sources"`
+	Providers  []string `json:"providers"`
+	MinDate    string   `json:"min_date"`
+	MaxDate    string   `json:"max_date"`
+}
+
+// CostFilterOptions returns the selectable filter values from the metrics ledger.
+func (d *Database) CostFilterOptions(ctx context.Context) (*CostFilterOptions, error) {
+	opts := &CostFilterOptions{
+		Models: []string{}, AgentRoles: []string{}, Sources: []string{}, Providers: []string{},
+	}
+	cols := map[string]*[]string{
+		"model":       &opts.Models,
+		"agent_role":  &opts.AgentRoles,
+		"source":      &opts.Sources,
+		"provider_id": &opts.Providers,
+	}
+	for col, dst := range cols {
+		rows, err := d.db.QueryContext(ctx, fmt.Sprintf(
+			`SELECT DISTINCT %s FROM metrics WHERE %s <> '' AND %s IS NOT NULL ORDER BY %s`,
+			col, col, col, col))
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var v string
+			if err := rows.Scan(&v); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			*dst = append(*dst, v)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	row := d.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MIN(substr(created_at, 1, 10)), ''), COALESCE(MAX(substr(created_at, 1, 10)), '') FROM metrics`)
+	if err := row.Scan(&opts.MinDate, &opts.MaxDate); err != nil {
+		return nil, err
+	}
+	return opts, nil
 }
 
 // TaskCostSummary is the response payload for GET /api/tasks/{id}/cost.

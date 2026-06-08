@@ -75,6 +75,7 @@ func (s *Server) registerHandlers() {
 	s.mux.HandleFunc("/api/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/api/metrics/tokens", s.handleMetricsTokens)
 	s.mux.HandleFunc("/api/metrics/costs", s.handleMetricsCosts)
+	s.mux.HandleFunc("/api/metrics/costs/options", s.handleMetricsCostOptions)
 
 	// WebSocket chat
 	s.mux.HandleFunc("/ws/chat", s.handleWSChat)

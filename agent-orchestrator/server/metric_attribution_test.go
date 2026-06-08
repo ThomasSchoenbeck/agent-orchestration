@@ -35,7 +35,7 @@ func TestTaskResult_RecordsAgentMetricWithAttribution(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	bySource, err := database.CostBreakdown(ctx, "source")
+	bySource, err := database.CostBreakdown(ctx, "source", db.CostFilter{})
 	if err != nil {
 		t.Fatalf("CostBreakdown(source): %v", err)
 	}
@@ -49,7 +49,7 @@ func TestTaskResult_RecordsAgentMetricWithAttribution(t *testing.T) {
 		t.Fatalf("expected 1 agent metric, got %+v", bySource)
 	}
 
-	byRole, _ := database.CostBreakdown(ctx, "agent_role")
+	byRole, _ := database.CostBreakdown(ctx, "agent_role", db.CostFilter{})
 	hasWorker := false
 	for _, b := range byRole {
 		if b.Key == "worker" {
