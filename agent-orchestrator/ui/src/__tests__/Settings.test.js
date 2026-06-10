@@ -18,6 +18,10 @@ vi.mock('../lib/api.js', () => ({
   createChecklistTemplate:  vi.fn(),
   updateChecklistTemplate:  vi.fn(),
   deleteChecklistTemplate:  vi.fn(),
+  getTaskTypes:             vi.fn(),
+  createTaskType:           vi.fn(),
+  updateTaskType:           vi.fn(),
+  deleteTaskType:           vi.fn(),
 }))
 
 // Import after vi.mock so we get the mocked versions
@@ -25,7 +29,14 @@ import {
   listSettings,
   updateSetting,
   listChecklistTemplates,
+  getTaskTypes,
+  createTaskType,
 } from '../lib/api.js'
+
+const TASK_TYPES = [
+  { id: 'tt-normal', key: 'normal', label: 'Normal', branch_template: 'feature/{slug}', is_default: true, sort_order: 0 },
+  { id: 'tt-bug', key: 'bug', label: 'Bug', branch_template: 'bug/{slug}', is_default: false, sort_order: 1 },
+]
 
 // Minimal settings list
 const SETTINGS = [
@@ -38,6 +49,8 @@ beforeEach(() => {
   listSettings.mockResolvedValue(SETTINGS)
   listChecklistTemplates.mockResolvedValue([])
   updateSetting.mockResolvedValue({ key: 'updated', value: 'ok' })
+  getTaskTypes.mockResolvedValue(TASK_TYPES)
+  createTaskType.mockResolvedValue({ id: 'tt-new' })
 })
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
@@ -126,5 +139,33 @@ describe('Settings — effective retention', () => {
     await waitFor(() => screen.getByText('Task Log Retention'))
     const cells = screen.getAllByText(/30 \(default\)/)
     expect(cells.length).toBeGreaterThan(0)
+  })
+})
+
+describe('Settings — Task Types panel (B4/T9)', () => {
+  it('lists task types with their branch templates', async () => {
+    render(Settings)
+    await waitFor(() => screen.getByText('Task Types'))
+    expect(screen.getByText('Normal')).toBeInTheDocument()
+    expect(screen.getByText('Bug')).toBeInTheDocument()
+    expect(screen.getByText('feature/{slug}')).toBeInTheDocument()
+  })
+
+  it('creates a task type from the add form', async () => {
+    const user = userEvent.setup()
+    render(Settings)
+    await waitFor(() => screen.getByText('Task Types'))
+
+    await user.type(screen.getByPlaceholderText('key (e.g. bug)'), 'hotfix')
+    await user.type(screen.getByPlaceholderText('Label'), 'Hotfix')
+    // userEvent treats "{" as a special-key prefix; "{{" types a literal "{".
+    await user.type(screen.getByPlaceholderText('bug/{slug}'), 'hotfix/{{slug}')
+    await user.click(screen.getByText('Add task type'))
+
+    await waitFor(() => {
+      expect(createTaskType).toHaveBeenCalledWith(
+        expect.objectContaining({ key: 'hotfix', label: 'Hotfix', branch_template: 'hotfix/{slug}' }),
+      )
+    })
   })
 })

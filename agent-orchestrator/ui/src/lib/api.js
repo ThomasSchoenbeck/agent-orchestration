@@ -167,6 +167,12 @@ export const getTaskCost = (taskId) => get(`/api/tasks/${taskId}/cost`)
 export const getTaskRoles = () => get('/api/meta/task-roles')
 export const getMetaTools = () => get('/api/meta/tools')
 
+// ── Task types (configurable branch templates) ───────────────────────────────
+export const getTaskTypes   = ()       => get('/api/task-types')
+export const createTaskType = (data)   => post('/api/task-types', data)
+export const updateTaskType = (id, d)  => put(`/api/task-types/${id}`, d)
+export const deleteTaskType = (id)     => del(`/api/task-types/${id}`)
+
 // ── Conversations ───────────────────────────────────────────────────────────
 export const listConversations = (params = {}) => {
   const qs = new URLSearchParams(params).toString()

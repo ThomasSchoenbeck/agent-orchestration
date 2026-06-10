@@ -1,10 +1,11 @@
 package db_test
 
 // Feature 3 / Task 9: capability-driven GetNextTask routing, id-based.
-//   - AWAITING_REVIEW is claimable only by an agent whose role id matches the
-//     task's review_role AND carries handles_review.
+//   - AWAITING_REVIEW is claimable by an agent carrying handles_review when the
+//     task's review_role is unset ("any reviewer") OR matches one of the agent's
+//     review roles (id/name-expanded). (B2/B4)
 //   - AWAITING_MERGE is claimable by any agent role carrying handles_merge.
-//   - CreateTask resolves a default review_role to a role id.
+//   - CreateTask leaves an unset review_role empty (no auto default reviewer).
 
 import (
 	"context"
@@ -114,29 +115,72 @@ func TestGetNextTask_MergeRoutingByCapability(t *testing.T) {
 	}
 }
 
-func TestCreateTask_ResolvesDefaultReviewRole(t *testing.T) {
+// TestCreateTask_EmptyReviewRoleStaysEmpty: the auto default reviewer was removed
+// (B2/B4). An unset review_role is left empty — meaning "any review-capable
+// agent" — rather than being resolved to a specific reviewer at creation.
+func TestCreateTask_EmptyReviewRoleStaysEmpty(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	reviewer := seedRole(t, d, "reviewer", []string{"handles_review"})
+	seedRole(t, d, "reviewer", []string{"handles_review"})
 
-	task := &db.Task{ProjectID: "p1", Role: "worker"}
-	if err := d.CreateTask(ctx, task); err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	if task.ReviewRole != reviewer.ID {
-		t.Errorf("default ReviewRole = %q, want reviewer id %q", task.ReviewRole, reviewer.ID)
-	}
-}
-
-func TestCreateTask_DefaultReviewRoleFallback(t *testing.T) {
-	d := openTestDB(t)
-	ctx := context.Background()
-	// No review-capable role seeded → default review_role resolves to empty.
 	task := &db.Task{ProjectID: "p1", Role: "worker"}
 	if err := d.CreateTask(ctx, task); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	if task.ReviewRole != "" {
-		t.Errorf("fallback ReviewRole = %q, want empty", task.ReviewRole)
+		t.Errorf("ReviewRole = %q, want empty (any reviewer)", task.ReviewRole)
+	}
+}
+
+// TestGetNextTask_EmptyReviewRoleClaimableByAnyReviewer: an AWAITING_REVIEW task
+// with an unset review_role is claimable by any handles_review agent, and not by
+// a non-review agent (B2/B4 "any reviewer" default).
+func TestGetNextTask_EmptyReviewRoleClaimableByAnyReviewer(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	reviewer := seedRole(t, d, "reviewer", []string{"handles_review"})
+	worker := seedRole(t, d, "worker", nil)
+
+	task := &db.Task{ProjectID: "p1", Role: worker.ID, ReviewRole: "", Status: db.TaskStatusAwaitingReview}
+	if err := d.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	got, err := d.GetNextTask(ctx, []string{reviewer.ID})
+	if err != nil {
+		t.Fatalf("GetNextTask reviewer: %v", err)
+	}
+	if got == nil || got.ID != task.ID {
+		t.Fatalf("any reviewer should claim an empty-review_role task, got %v", got)
+	}
+
+	none, err := d.GetNextTask(ctx, []string{worker.ID})
+	if err != nil {
+		t.Fatalf("GetNextTask worker: %v", err)
+	}
+	if none != nil {
+		t.Errorf("non-review agent must not claim an AWAITING_REVIEW task, got %v", none)
+	}
+}
+
+// TestGetNextTask_ReviewRoleNameMatchesIDReviewer: a review_role stored as a NAME
+// (legacy/pre-migration) is still claimable by a reviewer agent whose roles are
+// ids, via id/name expansion of the review clause (B2 — the bug fix).
+func TestGetNextTask_ReviewRoleNameMatchesIDReviewer(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	reviewer := seedRole(t, d, "reviewer", []string{"handles_review"})
+
+	task := &db.Task{ProjectID: "p1", Role: "worker", ReviewRole: "reviewer", Status: db.TaskStatusAwaitingReview}
+	if err := d.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	got, err := d.GetNextTask(ctx, []string{reviewer.ID})
+	if err != nil {
+		t.Fatalf("GetNextTask: %v", err)
+	}
+	if got == nil || got.ID != task.ID {
+		t.Fatalf("reviewer (id) should claim a task whose review_role is the name form, got %v", got)
 	}
 }

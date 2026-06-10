@@ -43,6 +43,33 @@ func writeTemp(t *testing.T, content string) string {
 	return path
 }
 
+func TestLoad_TaskTypes(t *testing.T) {
+	yaml := minimalValidYAML + `
+task_types:
+  - key: normal
+    label: Normal
+    branch_template: "feature/{slug}"
+    default: true
+  - key: bug
+    label: Bug
+    branch_template: "bug/{slug}"
+`
+	cfg, err := config.Load(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.TaskTypes) != 2 {
+		t.Fatalf("TaskTypes len = %d, want 2", len(cfg.TaskTypes))
+	}
+	if cfg.TaskTypes[0].Key != "normal" || !cfg.TaskTypes[0].Default ||
+		cfg.TaskTypes[0].BranchTemplate != "feature/{slug}" {
+		t.Errorf("TaskTypes[0] = %+v", cfg.TaskTypes[0])
+	}
+	if cfg.TaskTypes[1].Key != "bug" || cfg.TaskTypes[1].Default {
+		t.Errorf("TaskTypes[1] = %+v", cfg.TaskTypes[1])
+	}
+}
+
 func TestLoad_Valid(t *testing.T) {
 	path := writeTemp(t, minimalValidYAML)
 	cfg, err := config.Load(path)

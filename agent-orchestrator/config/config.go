@@ -28,6 +28,19 @@ type Config struct {
 	AgentTemplates  []AgentTemplateConfig     `yaml:"agent_templates"`
 	// Orchestrator holds orchestrator-role behaviour seeded into platform settings.
 	Orchestrator    OrchestratorConfig         `yaml:"orchestrator"`
+	// TaskTypes seed configurable task types (branch-name templates) into the DB
+	// on first run. The Settings page is the source of truth afterwards.
+	TaskTypes       []TaskTypeConfig           `yaml:"task_types"`
+}
+
+// TaskTypeConfig defines one task type seeded on first run: a unique key, a
+// display label, the per-type branch-name template, and whether it is the
+// default applied when a task has no explicit type.
+type TaskTypeConfig struct {
+	Key            string `yaml:"key"`
+	Label          string `yaml:"label"`
+	BranchTemplate string `yaml:"branch_template"`
+	Default        bool   `yaml:"default"`
 }
 
 // OrchestratorConfig configures the orchestrator role's built-in behaviour.
@@ -47,6 +60,7 @@ type ProviderModelConfig struct {
 	Default            bool     `yaml:"default"` // this provider's default model
 	InputPerMillion    float64  `yaml:"input_per_million"`
 	OutputPerMillion   float64  `yaml:"output_per_million"`
+	ContextWindow      int      `yaml:"context_window"` // max context tokens (for context-size display)
 	TextToolCalls      bool     `yaml:"text_tool_calls"`
 	FoldSystemIntoUser bool     `yaml:"fold_system_into_user"`
 	SystemPrefix       string   `yaml:"system_prefix"`

@@ -114,10 +114,14 @@ func (s *Server) openPRForApprovedReview(ctx context.Context, task *db.Task, aut
 	if title == "" {
 		title = "Task " + task.ID
 	}
+	branch := task.Branch
+	if branch == "" {
+		branch = fmt.Sprintf("task/%s", task.ID)
+	}
 	pr := &db.PullRequest{
 		TaskID:     task.ID,
 		ProjectID:  task.ProjectID,
-		Branch:     fmt.Sprintf("task/%s", task.ID),
+		Branch:     branch,
 		Base:       "main",
 		Title:      title,
 		Body:       body,

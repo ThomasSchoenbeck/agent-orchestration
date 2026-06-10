@@ -17,10 +17,10 @@ func TestReviewerChangesRequestedTransition(t *testing.T) {
 	projectID, slug := makeProject(t, srv.BaseURL, "review-test-1")
 	taskID := makeTask(t, srv.BaseURL, projectID)
 	workerID := registerAgent(t, srv.BaseURL, "worker-r1", []string{"worker"})
-	claimTask(t, srv.BaseURL, taskID, workerID)
+	branch := claimTask(t, srv.BaseURL, taskID, workerID)
 
 	_, clonePath := cloneRepo(t, srv.BaseURL+"/git/"+slug+".git")
-	commitHash := commitAndPush(t, clonePath, "main.go", "package main", "task/"+taskID)
+	commitHash := commitAndPush(t, clonePath, "main.go", "package main", branch)
 
 	// Reviewer claims the AWAITING_REVIEW task → REVIEWING.
 	reviewerID := registerAgent(t, srv.BaseURL, "reviewer-r1", []string{"reviewer"})
@@ -72,10 +72,10 @@ func TestSecondPushAfterRevisionUpdatesSHA(t *testing.T) {
 	projectID, slug := makeProject(t, srv.BaseURL, "review-test-2")
 	taskID := makeTask(t, srv.BaseURL, projectID)
 	workerID := registerAgent(t, srv.BaseURL, "worker-r2", []string{"worker"})
-	claimTask(t, srv.BaseURL, taskID, workerID)
+	branch := claimTask(t, srv.BaseURL, taskID, workerID)
 
 	_, clonePath := cloneRepo(t, srv.BaseURL+"/git/"+slug+".git")
-	firstHash := commitAndPush(t, clonePath, "main.go", "package main", "task/"+taskID)
+	firstHash := commitAndPush(t, clonePath, "main.go", "package main", branch)
 
 	reviewerID := registerAgent(t, srv.BaseURL, "reviewer-r2", []string{"reviewer"})
 	claimTask(t, srv.BaseURL, taskID, reviewerID)
@@ -95,7 +95,7 @@ func TestSecondPushAfterRevisionUpdatesSHA(t *testing.T) {
 	}
 
 	// Second push — different content.
-	secondHash := commitAndPush(t, clonePath, "main.go", "package main // v2", "task/"+taskID)
+	secondHash := commitAndPush(t, clonePath, "main.go", "package main // v2", branch)
 	if secondHash == firstHash {
 		t.Fatal("second commit hash must differ from first")
 	}

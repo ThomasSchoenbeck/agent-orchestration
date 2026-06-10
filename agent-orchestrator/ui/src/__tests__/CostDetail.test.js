@@ -9,9 +9,10 @@ import CostDetail from '../pages/CostDetail.svelte'
 vi.mock('../lib/api.js', () => ({
   getCostBreakdown:     vi.fn(),
   getCostFilterOptions: vi.fn(),
+  listAgents:           vi.fn(),
 }))
 
-import { getCostBreakdown, getCostFilterOptions } from '../lib/api.js'
+import { getCostBreakdown, getCostFilterOptions, listAgents } from '../lib/api.js'
 
 const OPTIONS = {
   models:      ['gpt-4', 'claude'],
@@ -27,6 +28,7 @@ beforeEach(() => {
   getCostBreakdown.mockResolvedValue([
     { key: 'a1', input_tokens: 100, output_tokens: 20, cost: 0.12, count: 3 },
   ])
+  listAgents.mockResolvedValue([]) // default: no name mapping (rows show ids)
 })
 
 describe('CostDetail — rendering', () => {
@@ -38,10 +40,28 @@ describe('CostDetail — rendering', () => {
     expect(screen.getAllByText('~$0.1200').length).toBeGreaterThan(0)
   })
 
+  it('shows input and output cost separately', async () => {
+    getCostBreakdown.mockResolvedValue([
+      { key: 'a1', input_tokens: 100, output_tokens: 20, cost: 0.12, input_cost: 0.05, output_cost: 0.07, count: 3 },
+    ])
+    render(CostDetail)
+    await waitFor(() => screen.getByText('Cost detail'))
+    expect(await screen.findByText(/~\$0\.0500 \/ ~\$0\.0700/)).toBeInTheDocument()
+  })
+
   it('loads the initial breakdown grouped by agent_id', async () => {
     render(CostDetail)
     await waitFor(() => expect(getCostBreakdown).toHaveBeenCalled())
     expect(getCostBreakdown.mock.calls[0][0]).toBe('agent_id')
+  })
+
+  it('shows the agent name (id in tooltip) for agent_id grouping', async () => {
+    listAgents.mockResolvedValue([{ id: 'a1', name: 'worker-1' }])
+    render(CostDetail)
+    const nameEl = await screen.findByText('worker-1')
+    expect(nameEl).toBeInTheDocument()
+    // The id is preserved in the row's title tooltip.
+    expect(nameEl.closest('[title]')).toHaveAttribute('title', 'a1')
   })
 
   it('populates filter options from getCostFilterOptions', async () => {

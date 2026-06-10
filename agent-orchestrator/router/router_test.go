@@ -197,6 +197,45 @@ func TestRouteByRole_AcceptsRoleID(t *testing.T) {
 	}
 }
 
+// TestRoleName_ResolvesRefToName verifies that RoleName maps a role id (and a
+// role name) to the human-readable role name, and falls back to the ref itself
+// when the role is unknown. This backs B3: agent logs show role names, not ids.
+func TestRoleName_ResolvesRefToName(t *testing.T) {
+	d := openRouterDB(t)
+	ctx := context.Background()
+
+	prov := &db.Provider{
+		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
+		ModelName: "gemma3:4b", Enabled: true,
+		Models:    []db.ProviderModel{{Name: "gemma3:4b", Roles: []string{"worker"}}},
+	}
+	if err := d.CreateProvider(ctx, prov); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	role := &db.RoleDefinition{Name: "worker", Label: "Worker", ProviderID: prov.ID, Enabled: true}
+	if err := d.CreateRoleDefinition(ctx, role); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
+	}
+
+	cfg := &config.Config{Providers: []config.ProviderConfig{}}
+	reg := llm.NewRegistry()
+	reg.Set("ollama", llm.NewOllamaProvider("ollama", "http://localhost:11434", "gemma3:4b"))
+	rtr := router.New(cfg, reg)
+	if err := rtr.LoadFromDB(d); err != nil {
+		t.Fatalf("LoadFromDB: %v", err)
+	}
+
+	if got := rtr.RoleName(role.ID); got != "worker" {
+		t.Errorf("RoleName(id) = %q, want worker", got)
+	}
+	if got := rtr.RoleName("worker"); got != "worker" {
+		t.Errorf("RoleName(name) = %q, want worker", got)
+	}
+	if got := rtr.RoleName("nonexistent"); got != "nonexistent" {
+		t.Errorf("RoleName(unknown) = %q, want nonexistent (fallback)", got)
+	}
+}
+
 // --- ContextBuilder tests ---
 
 func TestBuildContext_FiltersByInclude(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"agent-orchestrator/api"
+	"agent-orchestrator/branchname"
 	"agent-orchestrator/db"
 )
 
@@ -37,7 +38,13 @@ func (s *Server) prepareClaimResponse(ctx context.Context, task *db.Task, agentI
 	}
 	resp.AssignedPort = task.AssignedPort
 
-	branchName := fmt.Sprintf("task/%s", task.ID)
+	// Generate the human-readable branch once, at the start of work, and persist
+	// it (immutable thereafter). Re-claims reuse the stored branch.
+	branchName := task.Branch
+	if branchName == "" {
+		branchName = s.resolveTaskBranch(ctx, task)
+		task.Branch = branchName
+	}
 	task.AssignedAgentID = agentID
 
 	s.provisionWorkspace(ctx, task, branchName, resp)
@@ -50,6 +57,44 @@ func (s *Server) prepareClaimResponse(ctx context.Context, task *db.Task, agentI
 	}
 
 	return resp
+}
+
+// resolveTaskBranch builds the human-readable branch an agent will work on, from
+// the task type's template, ensuring it is unique within the project.
+func (s *Server) resolveTaskBranch(ctx context.Context, task *db.Task) string {
+	var template, typeKey string
+	if tt := s.taskTypeFor(ctx, task); tt != nil {
+		template = tt.BranchTemplate
+		typeKey = tt.Key
+	}
+	title, _ := task.Payload["title"].(string)
+	branch := branchname.Generate(template, title, task.ID, typeKey)
+
+	// Uniqueness within the project: if another task already owns this branch,
+	// append a short id suffix so the git-hook lookup stays 1:1.
+	if existing, err := s.db.GetTaskByBranch(ctx, task.ProjectID, branch); err == nil &&
+		existing != nil && existing.ID != task.ID {
+		short := task.ID
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		branch = branch + "-" + short
+	}
+	return branch
+}
+
+// taskTypeFor returns the task's configured type, falling back to the default
+// task type, or nil when none is defined.
+func (s *Server) taskTypeFor(ctx context.Context, task *db.Task) *db.TaskType {
+	if task.TaskTypeID != "" {
+		if tt, err := s.db.GetTaskType(ctx, task.TaskTypeID); err == nil {
+			return tt
+		}
+	}
+	if tt, err := s.db.GetDefaultTaskType(ctx); err == nil {
+		return tt
+	}
+	return nil
 }
 
 // provisionWorkspace builds the RepoURL and Branch that the agent will use to

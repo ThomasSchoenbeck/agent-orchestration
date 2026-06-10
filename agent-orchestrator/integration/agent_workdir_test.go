@@ -5,7 +5,7 @@
 // the repo into {workdir}/{taskID} — its "local workspace path" — and push
 // from there. This test verifies:
 //
-//  1. ClaimTaskResponse.Branch is set to "task/{taskID}".
+//  1. ClaimTaskResponse.Branch is set to the generated human-readable branch.
 //  2. ClaimTaskResponse.WorktreePath is empty (remote mode — no server-side worktree).
 //  3. agent.LocalWorkspacePath(taskID) == filepath.Join(workdir, taskID).
 //  4. Cloning + pushing from that path advances the task to AWAITING_REVIEW.
@@ -44,10 +44,9 @@ func TestAgentRemoteWorkdir(t *testing.T) {
 
 	// --- Assert remote-mode contract ---
 
-	// Branch must be "task/{taskID}".
-	wantBranch := "task/" + taskID
-	if claimResp.Branch != wantBranch {
-		t.Errorf("Branch = %q, want %q", claimResp.Branch, wantBranch)
+	// Branch must be set to the generated human-readable branch.
+	if claimResp.Branch == "" {
+		t.Errorf("Branch is empty, want a generated branch name")
 	}
 
 	// WorktreePath must be empty — server does NOT provision a worktree for remote agents.

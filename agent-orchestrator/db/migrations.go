@@ -399,6 +399,19 @@ CREATE INDEX IF NOT EXISTS idx_requirements_project  ON project_requirements(pro
 CREATE INDEX IF NOT EXISTS idx_features_project      ON project_features(project_id, position);
 CREATE INDEX IF NOT EXISTS idx_task_links_task        ON task_project_links(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_links_target      ON task_project_links(kind, target_id);
+
+-- Task types (configurable): each drives the branch-name template for its tasks.
+-- Seeded from config on first run; the Settings page is the source of truth after.
+CREATE TABLE IF NOT EXISTS task_types (
+    id              TEXT PRIMARY KEY,
+    key             TEXT NOT NULL UNIQUE,
+    label           TEXT NOT NULL DEFAULT '',
+    branch_template TEXT NOT NULL DEFAULT '',
+    is_default      INTEGER NOT NULL DEFAULT 0,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 	_, err := d.db.Exec(schema)
@@ -580,6 +593,25 @@ func (d *Database) applyColumnMigrations() error {
 		{
 			name: "add_project_id_to_metrics",
 			sql:  "ALTER TABLE metrics ADD COLUMN project_id TEXT NOT NULL DEFAULT ''",
+		},
+		// Task types + human-readable branches: a task references its type and
+		// stores the generated branch name (resolved at claim time).
+		{
+			name: "add_task_type_id_to_tasks",
+			sql:  "ALTER TABLE tasks ADD COLUMN task_type_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			name: "add_branch_to_tasks",
+			sql:  "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
+		},
+		// Cost split: per-side cost so the breakdown can show input vs output cost.
+		{
+			name: "add_input_cost_to_metrics",
+			sql:  "ALTER TABLE metrics ADD COLUMN input_cost REAL NOT NULL DEFAULT 0",
+		},
+		{
+			name: "add_output_cost_to_metrics",
+			sql:  "ALTER TABLE metrics ADD COLUMN output_cost REAL NOT NULL DEFAULT 0",
 		},
 	}
 

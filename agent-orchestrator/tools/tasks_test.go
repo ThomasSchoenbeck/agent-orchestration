@@ -124,7 +124,23 @@ func TestListTasks_MissingProjectID(t *testing.T) {
 
 func TestSubmitTaskResult_Completed(t *testing.T) {
 	d, reg, projectID := openTaskToolDB(t)
-	task := seedTask(t, d, projectID, db.TaskStatusDeveloping)
+	// Only a creates_tasks (planner) role may complete directly via the result
+	// endpoint; code tasks are redirected to review (B1). Use a planner role so
+	// this test exercises the genuine direct-complete path.
+	planner := &db.RoleDefinition{
+		Name: "planner", Label: "Planner",
+		Capabilities: []string{"creates_tasks"}, Enabled: true,
+	}
+	if err := d.CreateRoleDefinition(context.Background(), planner); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
+	}
+	task := &db.Task{
+		ProjectID: projectID, Role: planner.ID, Status: db.TaskStatusDeveloping,
+		Priority: 5, Payload: map[string]interface{}{"title": "test task"},
+	}
+	if err := d.CreateTask(context.Background(), task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
 
 	result := callTool(t, reg, "submit_task_result", map[string]interface{}{
 		"task_id": task.ID,

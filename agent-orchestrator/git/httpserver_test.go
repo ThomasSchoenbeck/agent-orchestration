@@ -86,8 +86,9 @@ func TestHTTPHandler_PushAndReadBack(t *testing.T) {
 		t.Fatalf("CommitFile seed: %v", err)
 	}
 
-	var pushedBranch, pushedSHA string
-	postReceive := func(branch, sha string) {
+	var pushedSlug, pushedBranch, pushedSHA string
+	postReceive := func(slug, branch, sha string) {
+		pushedSlug = slug
 		pushedBranch = branch
 		pushedSHA = sha
 	}
@@ -133,6 +134,9 @@ func TestHTTPHandler_PushAndReadBack(t *testing.T) {
 	}
 
 	// Post-receive hook should have fired.
+	if pushedSlug != "srv" {
+		t.Errorf("postReceive slug = %q, want srv", pushedSlug)
+	}
 	if pushedBranch != "main" {
 		t.Errorf("postReceive branch = %q, want main", pushedBranch)
 	}

@@ -36,9 +36,9 @@ func TestSerialMergeOverlappingFiles(t *testing.T) {
 	// --- Task A (shared.go v1) ---
 	taskA := makeTask(t, srv.BaseURL, projectID)
 	workerA := registerAgent(t, srv.BaseURL, "worker-serial-a", []string{"worker"})
-	claimTask(t, srv.BaseURL, taskA, workerA)
+	branchA := claimTask(t, srv.BaseURL, taskA, workerA)
 	_, cloneA := cloneRepo(t, srv.BaseURL+"/git/"+slug+".git")
-	hashA := commitAndPush(t, cloneA, "shared.go", "package shared // v1", "task/"+taskA)
+	hashA := commitAndPush(t, cloneA, "shared.go", "package shared // v1", branchA)
 
 	reviewerA := registerAgent(t, srv.BaseURL, "reviewer-serial-a", []string{"reviewer"})
 	claimTask(t, srv.BaseURL, taskA, reviewerA)
@@ -52,9 +52,9 @@ func TestSerialMergeOverlappingFiles(t *testing.T) {
 	// --- Task B (shared.go v2) ---
 	taskB := makeTask(t, srv.BaseURL, projectID)
 	workerB := registerAgent(t, srv.BaseURL, "worker-serial-b", []string{"worker"})
-	claimTask(t, srv.BaseURL, taskB, workerB)
+	branchB := claimTask(t, srv.BaseURL, taskB, workerB)
 	_, cloneB := cloneRepo(t, srv.BaseURL+"/git/"+slug+".git")
-	hashB := commitAndPush(t, cloneB, "shared.go", "package shared // v2", "task/"+taskB)
+	hashB := commitAndPush(t, cloneB, "shared.go", "package shared // v2", branchB)
 
 	reviewerB := registerAgent(t, srv.BaseURL, "reviewer-serial-b", []string{"reviewer"})
 	claimTask(t, srv.BaseURL, taskB, reviewerB)

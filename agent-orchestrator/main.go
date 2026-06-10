@@ -133,6 +133,7 @@ func runServer(args []string) error {
 					Roles:              m.Roles,
 					InputPerMillion:    m.InputPerMillion,
 					OutputPerMillion:   m.OutputPerMillion,
+					ContextWindow:      m.ContextWindow,
 					TextToolCalls:      m.TextToolCalls,
 					FoldSystemIntoUser: m.FoldSystemIntoUser,
 					SystemPrefix:       m.SystemPrefix,
@@ -245,6 +246,32 @@ func runServer(args []string) error {
 			log.Printf("warning: seed default role definitions: %v", serr)
 		} else if n > 0 {
 			log.Printf("seeded %d default role definition(s)", n)
+		}
+	}
+
+	// Seed task types from config (preferred) on first run, else the built-in set.
+	if count, _ := database.CountTaskTypes(startCtx); count == 0 && len(cfg.TaskTypes) > 0 {
+		var toSeed []*db.TaskType
+		for i, tc := range cfg.TaskTypes {
+			toSeed = append(toSeed, &db.TaskType{
+				Key:            tc.Key,
+				Label:          tc.Label,
+				BranchTemplate: tc.BranchTemplate,
+				IsDefault:      tc.Default,
+				SortOrder:      i,
+			})
+		}
+		if n, serr := database.SeedTaskTypes(startCtx, toSeed); serr != nil {
+			log.Printf("warning: seed task types: %v", serr)
+		} else if n > 0 {
+			log.Printf("seeded %d task type(s) from config", n)
+		}
+	}
+	if count, _ := database.CountTaskTypes(startCtx); count == 0 {
+		if n, serr := database.SeedTaskTypes(startCtx, db.DefaultTaskTypes()); serr != nil {
+			log.Printf("warning: seed default task types: %v", serr)
+		} else if n > 0 {
+			log.Printf("seeded %d default task type(s)", n)
 		}
 	}
 

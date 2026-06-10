@@ -108,6 +108,40 @@ func TestAnthropicProvider_Chat_TextResponse(t *testing.T) {
 	}
 }
 
+func TestAnthropicProvider_Chat_ContextTokensIncludesCache(t *testing.T) {
+	body := map[string]interface{}{
+		"id": "msg", "type": "message", "role": "assistant",
+		"content":     []map[string]interface{}{{"type": "text", "text": "ok"}},
+		"model":       "claude-3-sonnet-20240229",
+		"stop_reason": "end_turn",
+		"usage": map[string]interface{}{
+			"input_tokens":                10,
+			"output_tokens":               5,
+			"cache_read_input_tokens":     100,
+			"cache_creation_input_tokens": 20,
+		},
+	}
+	raw, _ := json.Marshal(body)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(raw)
+	}))
+	defer srv.Close()
+
+	p := NewAnthropicProviderWithClient("claude", srv.URL, "key", "claude-3-sonnet-20240229", srv.Client())
+	resp, err := p.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "Hi"}}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if resp.InputTokens != 10 {
+		t.Errorf("InputTokens = %d, want 10", resp.InputTokens)
+	}
+	// ContextTokens = input + cache_read + cache_creation = 10 + 100 + 20.
+	if resp.ContextTokens != 130 {
+		t.Errorf("ContextTokens = %d, want 130", resp.ContextTokens)
+	}
+}
+
 func TestAnthropicProvider_Chat_SystemMessage(t *testing.T) {
 	var receivedBody map[string]interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

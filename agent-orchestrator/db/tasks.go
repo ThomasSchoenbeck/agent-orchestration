@@ -20,18 +20,17 @@ func (d *Database) CreateTask(ctx context.Context, t *Task) error {
 	if t.Status == "" {
 		t.Status = TaskStatusBacklog
 	}
-	// Resolve the review role if not explicitly set (Feature 3): the first
-	// enabled role with handles_review, or "reviewer" as a fallback.
-	if t.ReviewRole == "" {
-		t.ReviewRole = d.defaultReviewRole(ctx)
-	}
+	// An empty review_role means "any review-capable agent" (B2/B4): reviews are
+	// routed to any role with handles_review. A specific review_role restricts the
+	// review to that role. No default reviewer is auto-assigned here.
 
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO tasks
-		 (id, project_id, role, review_role, focus, status, priority, assigned_agent_id, payload, attempts, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, project_id, role, review_role, focus, status, priority, assigned_agent_id, payload, attempts, task_type_id, branch, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.ProjectID, t.Role, t.ReviewRole, marshalJSONArray(t.Focus), t.Status, t.Priority,
 		nullableStr(t.AssignedAgentID), marshalJSON(t.Payload), t.Attempts,
+		t.TaskTypeID, t.Branch,
 		t.CreatedAt, t.UpdatedAt,
 	)
 	if err == nil {
@@ -46,6 +45,18 @@ func (d *Database) GetTask(ctx context.Context, id string) (*Task, error) {
 	t, err := scanTask(row)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("task %q not found", id)
+	}
+	return t, err
+}
+
+// GetTaskByBranch returns the task in the given project whose persisted branch
+// matches branchName. The git post-receive hook uses this to resolve a push back
+// to its task now that branches are human-readable rather than "task/<id>".
+func (d *Database) GetTaskByBranch(ctx context.Context, projectID, branchName string) (*Task, error) {
+	row := d.db.QueryRowContext(ctx, taskSelectSQL+` WHERE project_id=? AND branch=?`, projectID, branchName)
+	t, err := scanTask(row)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("no task for branch %q in project %q", branchName, projectID)
 	}
 	return t, err
 }
@@ -111,12 +122,12 @@ func (d *Database) UpdateTask(ctx context.Context, t *Task) error {
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE tasks SET status=?, priority=?, assigned_agent_id=?, payload=?,
 		 result=?, attempts=?, branch_head_sha=?, worktree_path=?, assigned_port=?,
-		 role=?, review_role=?, focus=?, updated_at=?, started_at=?, completed_at=?
+		 role=?, review_role=?, focus=?, task_type_id=?, branch=?, updated_at=?, started_at=?, completed_at=?
 		 WHERE id=?`,
 		t.Status, t.Priority, nullableStr(t.AssignedAgentID),
 		marshalJSON(t.Payload), nullableJSON(t.Result), t.Attempts,
 		t.BranchHeadSHA, t.WorktreePath, nullableInt(t.AssignedPort),
-		t.Role, t.ReviewRole, marshalJSONArray(t.Focus), t.UpdatedAt, nullableTime(t.StartedAt), nullableTime(t.CompletedAt),
+		t.Role, t.ReviewRole, marshalJSONArray(t.Focus), t.TaskTypeID, t.Branch, t.UpdatedAt, nullableTime(t.StartedAt), nullableTime(t.CompletedAt),
 		t.ID,
 	)
 	if err == nil {
@@ -243,10 +254,15 @@ func (d *Database) GetNextTaskWithSkills(ctx context.Context, roles, skills []st
 		args = append(args, r)
 	}
 
-	// Review: task.review_role matches an agent role that has handles_review.
+	// Review (B2/B4): an agent with handles_review claims an AWAITING_REVIEW task
+	// when the task's review_role is unset ("any reviewer") OR matches one of the
+	// agent's review-capable roles. The match set is id/name-expanded so a
+	// review_role stored as a name still matches an agent whose roles are ids
+	// (and vice versa) — mirroring the normal-work clause.
 	if len(reviewerRoles) > 0 {
-		clauses = append(clauses, "(status='AWAITING_REVIEW' AND review_role IN ("+ph(len(reviewerRoles))+"))")
-		for _, r := range reviewerRoles {
+		expanded := d.ExpandRoleMatch(ctx, reviewerRoles)
+		clauses = append(clauses, "(status='AWAITING_REVIEW' AND (review_role='' OR review_role IS NULL OR review_role IN ("+ph(len(expanded))+")))")
+		for _, r := range expanded {
 			args = append(args, r)
 		}
 	}
@@ -377,30 +393,6 @@ func (d *Database) capabilityRoles(ctx context.Context, roleIDs []string) (revie
 	return reviewerRoles, hasMerge, rows.Err()
 }
 
-// defaultReviewRole resolves the review role for a newly created task when none
-// is supplied: the id of the first enabled role with the handles_review
-// capability, or "" when no such role exists (id-only matching).
-func (d *Database) defaultReviewRole(ctx context.Context) string {
-	rows, err := d.db.QueryContext(ctx,
-		"SELECT id, capabilities FROM agent_role_definitions WHERE enabled=1 ORDER BY name")
-	if err != nil {
-		return ""
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, capsJSON string
-		if serr := rows.Scan(&id, &capsJSON); serr != nil {
-			return ""
-		}
-		for _, c := range unmarshalJSONStringSlice(capsJSON) {
-			if c == "handles_review" {
-				return id
-			}
-		}
-	}
-	return ""
-}
-
 // RequeueTimedOutTasks re-queues execution-state tasks that have not been updated for timeoutSec seconds.
 // A timed-out REVIEWING task returns to AWAITING_REVIEW (so only review-capable
 // agents pick it back up); DEVELOPING and MERGING tasks return to BACKLOG.
@@ -428,7 +420,8 @@ const taskSelectSQL = `SELECT id, project_id, role, status, priority,
     COALESCE(worktree_path,''), COALESCE(assigned_port,0),
     created_at, updated_at,
     COALESCE(started_at,''), COALESCE(completed_at,''),
-    COALESCE(review_role,''), COALESCE(focus,'[]')
+    COALESCE(review_role,''), COALESCE(focus,'[]'),
+    COALESCE(task_type_id,''), COALESCE(branch,'')
     FROM tasks`
 
 func scanTask(row *sql.Row) (*Task, error) {
@@ -447,6 +440,7 @@ func scanTask(row *sql.Row) (*Task, error) {
 		&worktreePath, &assignedPort,
 		&createdAt, &updatedAt, &startedAt, &completedAt,
 		&t.ReviewRole, &focusJSON,
+		&t.TaskTypeID, &t.Branch,
 	)
 	if err != nil {
 		return nil, err
@@ -498,6 +492,7 @@ func scanTasks(rows *sql.Rows) ([]*Task, error) {
 			&worktreePath, &assignedPort,
 			&createdAt, &updatedAt, &startedAt, &completedAt,
 			&t.ReviewRole, &focusJSON,
+			&t.TaskTypeID, &t.Branch,
 		); err != nil {
 			return nil, err
 		}

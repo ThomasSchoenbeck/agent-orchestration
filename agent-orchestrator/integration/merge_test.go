@@ -28,10 +28,10 @@ func TestFullLifecycleCompleted(t *testing.T) {
 
 	taskID := makeTask(t, srv.BaseURL, projectID)
 	workerID := registerAgent(t, srv.BaseURL, "worker-lc", []string{"worker"})
-	claimTask(t, srv.BaseURL, taskID, workerID)
+	branch := claimTask(t, srv.BaseURL, taskID, workerID)
 
 	_, clonePath := cloneRepo(t, srv.BaseURL+"/git/"+slug+".git")
-	commitHash := commitAndPush(t, clonePath, "app.go", "package app", "task/"+taskID)
+	commitHash := commitAndPush(t, clonePath, "app.go", "package app", branch)
 
 	// Reviewer approves → AWAITING_MERGE.
 	reviewerID := registerAgent(t, srv.BaseURL, "reviewer-lc", []string{"reviewer"})

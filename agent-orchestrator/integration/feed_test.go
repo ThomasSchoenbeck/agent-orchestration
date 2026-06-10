@@ -21,10 +21,10 @@ func TestCommentsThreadUnderReview(t *testing.T) {
 	projectID, slug := makeProject(t, srv.BaseURL, "feed-test")
 	taskID := makeTask(t, srv.BaseURL, projectID)
 	workerID := registerAgent(t, srv.BaseURL, "worker-f1", []string{"worker"})
-	claimTask(t, srv.BaseURL, taskID, workerID)
+	branch := claimTask(t, srv.BaseURL, taskID, workerID)
 
 	_, clonePath := cloneRepo(t, srv.BaseURL+"/git/"+slug+".git")
-	commitHash := commitAndPush(t, clonePath, "main.go", "package main", "task/"+taskID)
+	commitHash := commitAndPush(t, clonePath, "main.go", "package main", branch)
 
 	reviewerID := registerAgent(t, srv.BaseURL, "reviewer-f1", []string{"reviewer"})
 	claimTask(t, srv.BaseURL, taskID, reviewerID)

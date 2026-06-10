@@ -75,7 +75,10 @@ func (ms *MergeSupervisor) processTask(ctx context.Context, task *db.Task) {
 	}
 
 	repoPath := ms.paths.RepoPath(project.ID)
-	branchName := fmt.Sprintf("task/%s", task.ID)
+	branchName := task.Branch
+	if branchName == "" {
+		branchName = fmt.Sprintf("task/%s", task.ID)
+	}
 
 	// Detect changed files for this branch.
 	changed, err := git.ChangedFiles(repoPath, branchName, "main")

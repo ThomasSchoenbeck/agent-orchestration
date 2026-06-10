@@ -102,12 +102,12 @@ func (d *Database) CreateMetric(ctx context.Context, m *Metric) error {
 	}
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO metrics
-		 (id, task_id, agent_id, model, tokens_used, input_tokens, output_tokens, cost, duration_ms, success, created_at,
+		 (id, task_id, agent_id, model, tokens_used, input_tokens, output_tokens, cost, input_cost, output_cost, duration_ms, success, created_at,
 		  source, provider_id, agent_role, conversation_id, project_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, nullableStr(m.TaskID), nullableStr(m.AgentID), m.Model,
 		m.TokensUsed, m.InputTokens, m.OutputTokens,
-		m.Cost, m.DurationMs, success, m.CreatedAt,
+		m.Cost, m.InputCost, m.OutputCost, m.DurationMs, success, m.CreatedAt,
 		m.Source, m.ProviderID, m.AgentRole, m.ConversationID, m.ProjectID,
 	)
 	return err
@@ -119,6 +119,8 @@ type CostBucket struct {
 	InputTokens  int     `json:"input_tokens"`
 	OutputTokens int     `json:"output_tokens"`
 	Cost         float64 `json:"cost"`
+	InputCost    float64 `json:"input_cost"`
+	OutputCost   float64 `json:"output_cost"`
 	Count        int     `json:"count"`
 }
 
@@ -200,6 +202,8 @@ func (d *Database) CostBreakdown(ctx context.Context, groupBy string, f CostFilt
 		        COALESCE(SUM(input_tokens), 0),
 		        COALESCE(SUM(output_tokens), 0),
 		        COALESCE(SUM(cost), 0),
+		        COALESCE(SUM(input_cost), 0),
+		        COALESCE(SUM(output_cost), 0),
 		        COUNT(*)
 		 FROM metrics%s
 		 GROUP BY k
@@ -211,7 +215,7 @@ func (d *Database) CostBreakdown(ctx context.Context, groupBy string, f CostFilt
 	var out []*CostBucket
 	for rows.Next() {
 		var b CostBucket
-		if err := rows.Scan(&b.Key, &b.InputTokens, &b.OutputTokens, &b.Cost, &b.Count); err != nil {
+		if err := rows.Scan(&b.Key, &b.InputTokens, &b.OutputTokens, &b.Cost, &b.InputCost, &b.OutputCost, &b.Count); err != nil {
 			return nil, err
 		}
 		out = append(out, &b)

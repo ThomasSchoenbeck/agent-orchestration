@@ -58,6 +58,38 @@ func TestCostBreakdown_BySourceAndRole(t *testing.T) {
 	}
 }
 
+func TestCostBreakdown_InputOutputCostSplit(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	mk := func(m *db.Metric) {
+		if err := d.CreateMetric(ctx, m); err != nil {
+			t.Fatalf("CreateMetric: %v", err)
+		}
+	}
+	mk(&db.Metric{Source: "agent", AgentID: "a1", InputCost: 0.03, OutputCost: 0.07, Cost: 0.10})
+	mk(&db.Metric{Source: "agent", AgentID: "a1", InputCost: 0.01, OutputCost: 0.02, Cost: 0.03})
+
+	byAgent, err := d.CostBreakdown(ctx, "agent_id", db.CostFilter{})
+	if err != nil {
+		t.Fatalf("CostBreakdown: %v", err)
+	}
+	var a1 *db.CostBucket
+	for _, b := range byAgent {
+		if b.Key == "a1" {
+			a1 = b
+		}
+	}
+	if a1 == nil {
+		t.Fatal("expected an a1 bucket")
+	}
+	if a1.InputCost < 0.0399 || a1.InputCost > 0.0401 {
+		t.Errorf("input_cost = %f, want ~0.04", a1.InputCost)
+	}
+	if a1.OutputCost < 0.0899 || a1.OutputCost > 0.0901 {
+		t.Errorf("output_cost = %f, want ~0.09", a1.OutputCost)
+	}
+}
+
 func TestCostBreakdown_Filters(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()

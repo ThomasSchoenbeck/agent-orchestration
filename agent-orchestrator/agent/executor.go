@@ -88,17 +88,41 @@ func (e *Executor) CanExecute(roles []string) bool {
 	return false
 }
 
+// contextWindowFor returns the configured max context window for modelName among
+// the route's provider models, or 0 when unknown.
+func contextWindowFor(models []db.ProviderModel, modelName string) int {
+	for _, m := range models {
+		if m.Name == modelName {
+			return m.ContextWindow
+		}
+	}
+	return 0
+}
+
+// roleName resolves a role ref (id or name) to its human-readable role name for
+// log output, falling back to the ref when the router can't resolve it.
+func (e *Executor) roleName(ref string) string {
+	if e.rtr == nil {
+		return ref
+	}
+	return e.rtr.RoleName(ref)
+}
+
 // Run executes a claimed task and submits the result.
 func (e *Executor) Run(ctx context.Context, task *db.Task) {
 	// Tag logs with both task and project so they appear in project-scoped views.
 	tlog := e.log.ForTask(task.ID).ForProject(task.ProjectID)
 	start := time.Now()
-	tlog.InfoCtx(ctx, "starting task (role=%s)", task.Role)
+	tlog.InfoCtx(ctx, "starting task (role=%s)", e.roleName(task.Role))
 
-	// Notify the user which branch this agent is working on.
-	branchName := fmt.Sprintf("task/%s", task.ID)
+	// Notify the user which branch this agent is working on. The branch is
+	// provided by the claim response (human-readable); fall back to task/<id>.
+	branchName := task.Branch
+	if branchName == "" {
+		branchName = fmt.Sprintf("task/%s", task.ID)
+	}
 	startComment := fmt.Sprintf("Agent picked up task (role=%s).\n\nWorking on branch `%s`.",
-		task.Role, branchName)
+		e.roleName(task.Role), branchName)
 	if err := e.client.PostComment(ctx, task.ID, startComment, e.agentID); err != nil {
 		tlog.Warn("failed to post start comment: %v", err)
 	}
@@ -343,10 +367,10 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 	// Resolve the provider for this task. For a review the reviewing agent's role
 	// is task.ReviewRole, not the task's own implementation role.
 	effRole := effectiveRole(task)
-	tlog.InfoCtx(ctx, "routing task role=%q", effRole)
+	tlog.InfoCtx(ctx, "routing task role=%q", e.roleName(effRole))
 	route, err := e.rtr.RouteByRole(effRole)
 	if err != nil {
-		tlog.ErrorCtx(ctx, "routing failed (role=%s): %v", effRole, err)
+		tlog.ErrorCtx(ctx, "routing failed (role=%s): %v", e.roleName(effRole), err)
 		return nil, db.TaskStatusFailed, stats, fmt.Errorf("route task (role=%s): %w", effRole, err)
 	}
 	if route.Provider == nil {
@@ -482,12 +506,27 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			resp.ToolCalls = parseTextToolCalls(resp.Content)
 		}
 
+		// Per-message context size: used (prompt incl. cached) and the model's max.
+		contextUsed := resp.ContextTokens
+		if contextUsed == 0 {
+			contextUsed = resp.InputTokens
+		}
+		contextMax := contextWindowFor(route.ProviderModels, route.Model)
+		ctxStr := fmt.Sprintf("%d", contextUsed)
+		if contextMax > 0 {
+			ctxStr = fmt.Sprintf("%d/%d", contextUsed, contextMax)
+		}
+
 		// Log the full response.
 		respMeta := map[string]interface{}{
-			"round":       round,
-			"stop_reason": resp.StopReason,
-			"tokens":      resp.TokensUsed,
-			"content":     resp.Content,
+			"round":          round,
+			"stop_reason":    resp.StopReason,
+			"tokens":         resp.TokensUsed,
+			"input_tokens":   resp.InputTokens,
+			"output_tokens":  resp.OutputTokens,
+			"context_tokens": contextUsed,
+			"context_max":    contextMax,
+			"content":        resp.Content,
 		}
 		if len(resp.ToolCalls) > 0 {
 			calls := make([]map[string]interface{}, len(resp.ToolCalls))
@@ -497,8 +536,8 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			respMeta["tool_calls"] = calls
 		}
 		tlog.LogWithMeta(ctx, "info",
-			fmt.Sprintf("LLM response round=%d stop=%s tool_calls=%d tokens=%d",
-				round, resp.StopReason, len(resp.ToolCalls), resp.TokensUsed),
+			fmt.Sprintf("LLM response round=%d stop=%s tool_calls=%d · in %d / out %d · ctx %s",
+				round, resp.StopReason, len(resp.ToolCalls), resp.InputTokens, resp.OutputTokens, ctxStr),
 			respMeta)
 
 		// Append assistant turn — include ToolCalls so the model can correlate
@@ -735,7 +774,10 @@ func (e *Executor) commitTaskWork(ctx context.Context, task *db.Task) (bool, err
 		tlog.InfoCtx(ctx, "worktree clean — no new commit")
 		return false, nil
 	}
-	branch := fmt.Sprintf("task/%s", task.ID)
+	branch := task.Branch
+	if branch == "" {
+		branch = fmt.Sprintf("task/%s", task.ID)
+	}
 	tlog.InfoCtx(ctx, "pushed branch %q commit=%s", branch, sha[:12])
 	body := fmt.Sprintf("Branch `%s` pushed to project repo. Commit: `%s`", branch, sha[:12])
 	if err := e.client.PostComment(ctx, task.ID, body, e.agentID); err != nil {

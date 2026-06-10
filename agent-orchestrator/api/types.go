@@ -37,7 +37,8 @@ type CreateTaskRequest struct {
 	ProjectID  string                 `json:"project_id"`
 	Role       string                 `json:"role"`
 	ReviewRole string                 `json:"review_role,omitempty"`
-	Focus      []string               `json:"focus,omitempty"` // optional required skills (Feature 6)
+	TaskTypeID string                 `json:"task_type_id,omitempty"` // empty → default task type
+	Focus      []string               `json:"focus,omitempty"`        // optional required skills (Feature 6)
 	Priority   int                    `json:"priority"`
 	Payload    map[string]interface{} `json:"payload"`
 }

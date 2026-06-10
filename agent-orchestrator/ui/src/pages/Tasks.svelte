@@ -9,6 +9,7 @@
     queueTask,
     unqueueTask,
     getTaskRoles,
+    getTaskTypes,
     listAllTaskLogs,
     deleteAllTaskLogs,
     listSettings,
@@ -26,6 +27,7 @@
   let tasks = $state([])
   let projects = $state([])
   let taskRoles = $state([])
+  let taskTypes = $state([])
   let loading = $state(false)
   let showForm = $state(false)
   let filterStatus = $state("")
@@ -55,6 +57,7 @@
     project_id: "",
     role: "worker",
     review_role: "",
+    task_type_id: "",
     title: "",
     description: "",
     priority: 5,
@@ -206,14 +209,20 @@
       if (filterProject) params.project_id = filterProject
       if (filterRequirement) params.requirement_id = filterRequirement
       if (filterFeature) params.feature_id = filterFeature
-      const [tr, pr, tr2] = await Promise.all([
+      const [tr, pr, tr2, tt] = await Promise.all([
         listTasks(params),
         listProjects(),
         getTaskRoles(),
+        getTaskTypes().catch(() => []),
       ])
       tasks = Array.isArray(tr) ? tr : (tr.tasks ?? [])
       projects = Array.isArray(pr) ? pr : (pr.projects ?? [])
       taskRoles = Array.isArray(tr2) ? tr2 : []
+      taskTypes = Array.isArray(tt) ? tt : []
+      if (!form.task_type_id) {
+        const def = taskTypes.find((x) => x.is_default) ?? taskTypes[0]
+        if (def) form.task_type_id = def.id
+      }
     } catch (e) {
       toasts.error("Failed to load: " + e.message)
     } finally {
@@ -353,6 +362,7 @@
         project_id: form.project_id,
         role: form.role.trim(),
         ...(form.review_role ? { review_role: form.review_role } : {}),
+        ...(form.task_type_id ? { task_type_id: form.task_type_id } : {}),
         ...(formFocus.size ? { focus: [...formFocus] } : {}),
         priority: Number(form.priority),
         payload: { title: form.title.trim(), description: form.description.trim() },
@@ -362,7 +372,12 @@
       for (const id of formLinkedFeats) ops.push(addTaskLink(created.id, "feature", id))
       if (ops.length) await Promise.all(ops)
       toasts.success("Task created")
-      form = { project_id: "", role: "worker", review_role: "", title: "", description: "", priority: 5 }
+      const defType = taskTypes.find((x) => x.is_default) ?? taskTypes[0]
+      form = {
+        project_id: "", role: "worker", review_role: "",
+        task_type_id: defType ? defType.id : "",
+        title: "", description: "", priority: 5,
+      }
       formFocus = new Set()
       formLinkedReqs = new Set()
       formLinkedFeats = new Set()
@@ -571,11 +586,22 @@
               class="bg-surface-700 border border-surface-500 rounded px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-accent"
               bind:value={form.review_role}
             >
-              <option value="">Review: auto</option>
+              <option value="">Review: any reviewer</option>
               {#each taskRoles as tr}<option value={tr.value} title={tr.description}
                   >Review: {tr.label}</option
                 >{/each}
             </select>
+            {#if taskTypes.length > 0}
+              <select
+                aria-label="Task type"
+                class="bg-surface-700 border border-surface-500 rounded px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-accent"
+                bind:value={form.task_type_id}
+              >
+                {#each taskTypes as tt}<option value={tt.id} title={tt.branch_template}
+                    >Type: {tt.label}</option
+                  >{/each}
+              </select>
+            {/if}
           </div>
           {#if availSkills.length > 0}
             <div class="flex items-center gap-2 flex-wrap">

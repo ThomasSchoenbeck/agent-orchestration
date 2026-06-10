@@ -30,25 +30,25 @@ func firstPRID(t *testing.T, srv *gitTestServer, taskID string) string {
 
 // setupApprovedPR drives a task to AWAITING_MERGE with an open PR: the worker
 // pushes app.go on its branch, the reviewer approves, which opens the PR.
-// Returns (projectID, slug, taskID, prID).
-func setupApprovedPR(t *testing.T, srv *gitTestServer, name string) (string, string, string, string) {
+// Returns (projectID, slug, taskID, branch, prID).
+func setupApprovedPR(t *testing.T, srv *gitTestServer, name string) (string, string, string, string, string) {
 	t.Helper()
 	projectID, slug := makeProject(t, srv.BaseURL, name)
 	seedMainBranch(t, srv.BaseURL, slug)
 
 	taskID := makeTask(t, srv.BaseURL, projectID)
 	workerID := registerAgent(t, srv.BaseURL, name+"-worker", []string{"worker"})
-	claimTask(t, srv.BaseURL, taskID, workerID)
+	branch := claimTask(t, srv.BaseURL, taskID, workerID)
 
 	_, clonePath := cloneRepo(t, srv.BaseURL+"/git/"+slug+".git")
-	commitAndPush(t, clonePath, "app.go", "package app", "task/"+taskID)
+	commitAndPush(t, clonePath, "app.go", "package app", branch)
 
 	reviewerID := registerAgent(t, srv.BaseURL, name+"-reviewer", []string{"reviewer"})
 	claimTask(t, srv.BaseURL, taskID, reviewerID)
 	apiJSON(t, "POST", srv.BaseURL, "/api/tasks/"+taskID+"/reviews",
 		map[string]interface{}{"status": "approved", "body": "LGTM"}, nil)
 
-	return projectID, slug, taskID, firstPRID(t, srv, taskID)
+	return projectID, slug, taskID, branch, firstPRID(t, srv, taskID)
 }
 
 func getTask(t *testing.T, srv *gitTestServer, taskID string) db.Task {
@@ -74,7 +74,7 @@ func getPR(t *testing.T, srv *gitTestServer, taskID, prID string) db.PullRequest
 func TestReviewApproval_OpensPRAndAwaitsMerge(t *testing.T) {
 	t.Parallel()
 	srv := newGitTestServer(t)
-	_, _, taskID, prID := setupApprovedPR(t, srv, "pr-open")
+	_, _, taskID, branch, prID := setupApprovedPR(t, srv, "pr-open")
 
 	task := getTask(t, srv, taskID)
 	if task.Status != db.TaskStatusAwaitingMerge {
@@ -84,15 +84,15 @@ func TestReviewApproval_OpensPRAndAwaitsMerge(t *testing.T) {
 	if pr.Status != "open" {
 		t.Errorf("PR status = %q, want open", pr.Status)
 	}
-	if pr.Branch != "task/"+taskID {
-		t.Errorf("PR branch = %q, want task/%s", pr.Branch, taskID)
+	if pr.Branch != branch {
+		t.Errorf("PR branch = %q, want %q", pr.Branch, branch)
 	}
 }
 
 func TestPR_NotAutoApproved(t *testing.T) {
 	t.Parallel()
 	srv := newGitTestServer(t)
-	_, _, taskID, prID := setupApprovedPR(t, srv, "pr-noauto")
+	_, _, taskID, _, prID := setupApprovedPR(t, srv, "pr-noauto")
 
 	// Give any (incorrectly-running) background merger a chance to act.
 	time.Sleep(500 * time.Millisecond)
@@ -110,7 +110,7 @@ func TestPR_NotAutoApproved(t *testing.T) {
 func TestDeployerClaimsAndApproves_Merges(t *testing.T) {
 	t.Parallel()
 	srv := newGitTestServer(t)
-	projectID, _, taskID, prID := setupApprovedPR(t, srv, "pr-merge")
+	projectID, _, taskID, branch, prID := setupApprovedPR(t, srv, "pr-merge")
 
 	// Deployer claims the merge gate (AWAITING_MERGE → MERGING).
 	deployerID := registerAgent(t, srv.BaseURL, "pr-merge-deployer", []string{"deployer"})
@@ -137,8 +137,8 @@ func TestDeployerClaimsAndApproves_Merges(t *testing.T) {
 	repoPath := bareRepoPath(srv, projectID)
 	branches, _ := git.ListBranches(repoPath)
 	for _, b := range branches {
-		if b == "task/"+taskID {
-			t.Errorf("branch task/%s should have been deleted; branches: %v", taskID, branches)
+		if b == branch {
+			t.Errorf("branch %q should have been deleted; branches: %v", branch, branches)
 		}
 	}
 	if _, err := git.ReadFile(repoPath, "main", "app.go"); err != nil {
@@ -149,7 +149,7 @@ func TestDeployerClaimsAndApproves_Merges(t *testing.T) {
 func TestDeployerRejects_ReturnsToRevision(t *testing.T) {
 	t.Parallel()
 	srv := newGitTestServer(t)
-	projectID, _, taskID, prID := setupApprovedPR(t, srv, "pr-reject")
+	projectID, _, taskID, branch, prID := setupApprovedPR(t, srv, "pr-reject")
 
 	deployerID := registerAgent(t, srv.BaseURL, "pr-reject-deployer", []string{"deployer"})
 	claimTask(t, srv.BaseURL, taskID, deployerID)
@@ -171,19 +171,19 @@ func TestDeployerRejects_ReturnsToRevision(t *testing.T) {
 	branches, _ := git.ListBranches(bareRepoPath(srv, projectID))
 	found := false
 	for _, b := range branches {
-		if b == "task/"+taskID {
+		if b == branch {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("branch task/%s should be kept after reject; branches: %v", taskID, branches)
+		t.Errorf("branch %q should be kept after reject; branches: %v", branch, branches)
 	}
 }
 
 func TestApprove_MergeConflict_ReturnsToRevision(t *testing.T) {
 	t.Parallel()
 	srv := newGitTestServer(t)
-	projectID, _, taskID, prID := setupApprovedPR(t, srv, "pr-conflict")
+	projectID, _, taskID, _, prID := setupApprovedPR(t, srv, "pr-conflict")
 
 	// Advance main with a conflicting version of app.go (task added it as
 	// "package app"; main now adds it differently → three-way conflict).
@@ -210,7 +210,7 @@ func TestApprove_MergeConflict_ReturnsToRevision(t *testing.T) {
 func TestHumanApprovePR_Merges(t *testing.T) {
 	t.Parallel()
 	srv := newGitTestServer(t)
-	projectID, _, taskID, prID := setupApprovedPR(t, srv, "pr-human")
+	projectID, _, taskID, _, prID := setupApprovedPR(t, srv, "pr-human")
 
 	// Human approves directly from AWAITING_MERGE — no deployer claim.
 	status := apiJSON(t, "POST", srv.BaseURL,
@@ -237,7 +237,7 @@ func TestHumanApprovePR_Merges(t *testing.T) {
 func TestFullWorkflow_E2E(t *testing.T) {
 	t.Parallel()
 	srv := newGitTestServer(t)
-	projectID, slug, taskID, prID := setupApprovedPR(t, srv, "pr-e2e")
+	projectID, slug, taskID, _, prID := setupApprovedPR(t, srv, "pr-e2e")
 
 	if s := getTask(t, srv, taskID).Status; s != db.TaskStatusAwaitingMerge {
 		t.Fatalf("after reviewer approval: status = %q, want %q", s, db.TaskStatusAwaitingMerge)

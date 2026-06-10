@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"log"
-	"strings"
 	"time"
 
 	"agent-orchestrator/db"
@@ -24,24 +23,21 @@ func (s *Server) newGitHTTPHandler() *git.HTTPHandler {
 		return s.storage.RepoPath(p.ID), nil
 	}
 
-	postReceive := func(branchName, newSHA string) {
-		// Only care about task branches: task/{taskID}
-		if !strings.HasPrefix(branchName, "task/") {
-			return
-		}
-		taskID := strings.TrimPrefix(branchName, "task/")
-		if taskID == "" {
-			return
-		}
-
+	postReceive := func(slug, branchName, newSHA string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		// Load the task to check its current state.
-		t, err := s.db.GetTask(ctx, taskID)
+		// Resolve the project, then the task that owns this branch. Branches that
+		// belong to no task (e.g. pushes to main) are ignored. Branches are now
+		// human-readable (e.g. "feature/<slug>"), so we resolve by the persisted
+		// branch name rather than parsing a "task/<id>" prefix.
+		p, err := s.db.GetProjectBySlugOrID(ctx, slug)
 		if err != nil {
-			log.Printf("git post-receive: GetTask %q: %v", taskID, err)
 			return
+		}
+		t, err := s.db.GetTaskByBranch(ctx, p.ID, branchName)
+		if err != nil {
+			return // not a task branch
 		}
 
 		// Record the pushed SHA and timestamp regardless of state transition.
@@ -49,21 +45,21 @@ func (s *Server) newGitHTTPHandler() *git.HTTPHandler {
 		t.BranchHeadSHA = newSHA
 		t.LastPushAt = &now
 		if err := s.db.UpdateTask(ctx, t); err != nil {
-			log.Printf("git post-receive: UpdateTask SHA %q: %v", taskID, err)
+			log.Printf("git post-receive: UpdateTask SHA %q: %v", t.ID, err)
 		}
 
 		// Transition DEVELOPING → AWAITING_REVIEW on push.
 		if t.Status == db.TaskStatusDeveloping {
 			if err := s.db.TransitionTaskState(
-				ctx, taskID,
+				ctx, t.ID,
 				db.TaskStatusDeveloping,
 				db.TaskStatusAwaitingReview,
 				"", // no agent actor — driven by git push
 				"branch pushed by agent",
 			); err != nil {
-				log.Printf("git post-receive: TransitionTaskState %q: %v", taskID, err)
+				log.Printf("git post-receive: TransitionTaskState %q: %v", t.ID, err)
 			} else {
-				log.Printf("git post-receive: task %q → AWAITING_REVIEW (sha=%s)", taskID, newSHA)
+				log.Printf("git post-receive: task %q → AWAITING_REVIEW (sha=%s)", t.ID, newSHA)
 			}
 		}
 	}

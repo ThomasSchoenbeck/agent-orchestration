@@ -439,6 +439,8 @@
       description: task.payload?.description ?? "",
       priority: task.priority,
       status: task.status,
+      role: task.role ?? "",
+      reviewRole: task.review_role ?? "",
       linkedReqIds: new Set(
         taskLinks.filter((l) => l.kind === "requirement").map((l) => l.target_id),
       ),
@@ -464,6 +466,8 @@
       const updated = await updateTask(taskId, {
         priority: Number(editBuf.priority),
         status: editBuf.status,
+        role: editBuf.role,
+        review_role: editBuf.reviewRole,
         payload: {
           title: editBuf.title.trim(),
           description: editBuf.description.trim(),
@@ -609,6 +613,38 @@
             </div>
           </div>
 
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="task-role" class="text-xs text-gray-500 mb-1 block">Role</label>
+              <select
+                id="task-role"
+                aria-label="Role"
+                class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2
+                       text-sm text-gray-300 focus:outline-none focus:border-accent"
+                bind:value={editBuf.role}
+              >
+                {#each roleDefs as r}
+                  <option value={r.id}>{r.label}</option>
+                {/each}
+              </select>
+            </div>
+            <div>
+              <label for="task-review-role" class="text-xs text-gray-500 mb-1 block">Review</label>
+              <select
+                id="task-review-role"
+                aria-label="Review role"
+                class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2
+                       text-sm text-gray-300 focus:outline-none focus:border-accent"
+                bind:value={editBuf.reviewRole}
+              >
+                <option value="">Any reviewer</option>
+                {#each roleDefs as r}
+                  <option value={r.id}>{r.label}</option>
+                {/each}
+              </select>
+            </div>
+          </div>
+
           {#if projectReqs.length > 0 || projectFeats.length > 0}
             <div class="grid grid-cols-2 gap-3">
               {#if projectReqs.length > 0}
@@ -719,6 +755,9 @@
             <div class="flex flex-wrap gap-4 text-xs text-gray-500">
               <span title="Type">📋 {task.type}</span>
               <span title="Role">👤 {roleLabel(task.role, roleDefs)}</span>
+              <span title="Review setup"
+                >🔍 {task.review_role ? roleLabel(task.review_role, roleDefs) : "Any reviewer"}</span
+              >
               <span title="Priority">⭐ {task.priority ?? "—"}</span>
               {#if project}
                 <span title="Project">📁 {project.name}</span>

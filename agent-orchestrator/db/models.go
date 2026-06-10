@@ -70,6 +70,7 @@ type Task struct {
 	ProjectID       string                 `json:"project_id"`
 	Role            string                 `json:"role"`   // worker | reviewer | planner | ...
 	ReviewRole      string                 `json:"review_role,omitempty"` // role that should handle this task's review step
+	TaskTypeID      string                 `json:"task_type_id,omitempty"` // references task_types.id; drives the branch name
 	Focus           []string               `json:"focus,omitempty"`       // optional required skills; empty = any (Feature 6)
 	Status          string                 `json:"status"` // BACKLOG | DEVELOPING | AWAITING_REVIEW | REVIEWING | AWAITING_REVISION | AWAITING_MERGE | MERGING | COMPLETED | FAILED
 	Priority        int                    `json:"priority"`
@@ -81,9 +82,11 @@ type Task struct {
 	LastPushAt      *time.Time             `json:"last_push_at,omitempty"`
 	WorktreePath    string                 `json:"worktree_path,omitempty"`
 	AssignedPort    int                    `json:"assigned_port,omitempty"`
+	// Branch is the human-readable branch the agent works on (e.g. "feature/<slug>").
+	// Resolved from the task type's template and persisted at claim time, then immutable.
+	Branch          string                 `json:"branch,omitempty"`
 	// Agent-side only: populated from the claim response, never persisted to DB.
 	RepoURL         string                 `json:"repo_url,omitempty"`
-	Branch          string                 `json:"branch,omitempty"`
 	CreatedAt       time.Time              `json:"created_at"`
 	UpdatedAt       time.Time              `json:"updated_at"`
 	StartedAt       *time.Time             `json:"started_at,omitempty"`
@@ -100,6 +103,19 @@ type TaskFilters struct {
 	FeatureID     string // filter by linked feature
 	Limit         int
 	Offset        int
+}
+
+// TaskType is a configurable task category that drives the branch-name template
+// for its tasks. Seeded from config on first run; editable in Settings.
+type TaskType struct {
+	ID             string    `json:"id"`
+	Key            string    `json:"key"`             // unique slug: normal | bug | hotfix | release | ...
+	Label          string    `json:"label"`           // display name
+	BranchTemplate string    `json:"branch_template"` // e.g. "feature/{slug}"
+	IsDefault      bool      `json:"is_default"`
+	SortOrder      int       `json:"sort_order"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // --- Project Requirements / Features ---
@@ -207,6 +223,7 @@ type ProviderModel struct {
 	Roles              []string `json:"roles"`               // roles this model serves
 	InputPerMillion    float64  `json:"input_per_million"`   // USD per 1M input tokens
 	OutputPerMillion   float64  `json:"output_per_million"`  // USD per 1M output tokens
+	ContextWindow      int      `json:"context_window,omitempty"` // max context tokens (0 = unknown)
 	// Behavioral flags — override the provider-level Config when set.
 	TextToolCalls      bool     `json:"text_tool_calls,omitempty"`
 	FoldSystemIntoUser bool     `json:"fold_system_into_user,omitempty"`
@@ -353,6 +370,8 @@ type Metric struct {
 	InputTokens  int       `json:"input_tokens"`
 	OutputTokens int       `json:"output_tokens"`
 	Cost         float64   `json:"cost"`
+	InputCost    float64   `json:"input_cost"`
+	OutputCost   float64   `json:"output_cost"`
 	DurationMs   int       `json:"duration_ms"`
 	Success      bool      `json:"success"`
 	CreatedAt    time.Time `json:"created_at"`

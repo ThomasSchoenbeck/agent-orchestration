@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { listSettings, updateSetting, listChecklistTemplates, createChecklistTemplate, updateChecklistTemplate, deleteChecklistTemplate } from '../lib/api.js'
+  import { listSettings, updateSetting, listChecklistTemplates, createChecklistTemplate, updateChecklistTemplate, deleteChecklistTemplate, getTaskTypes, createTaskType, updateTaskType, deleteTaskType } from '../lib/api.js'
   import { toasts } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
 
@@ -47,6 +47,65 @@
   let newTplItems = $state('')  // newline-separated item labels
   let editingTplId = $state('')
   let tplBuf = $state({ name: '', items: '' })
+
+  // ── Task types ──────────────────────────────────────────────────────────────
+  let taskTypes = $state([])
+  let newType = $state({ key: '', label: '', branch_template: '' })
+  let editingTypeId = $state('')
+  let typeBuf = $state({ key: '', label: '', branch_template: '', is_default: false, sort_order: 0 })
+
+  async function loadTaskTypes() {
+    try {
+      taskTypes = (await getTaskTypes()) ?? []
+    } catch (_) { taskTypes = [] }
+  }
+
+  async function createType() {
+    if (!newType.key.trim() || !newType.label.trim() || !newType.branch_template.trim()) {
+      toasts.error('Key, label and branch template are required')
+      return
+    }
+    try {
+      await createTaskType({
+        key: newType.key.trim(),
+        label: newType.label.trim(),
+        branch_template: newType.branch_template.trim(),
+        is_default: taskTypes.length === 0,
+      })
+      newType = { key: '', label: '', branch_template: '' }
+      await loadTaskTypes()
+      toasts.success('Task type created')
+    } catch (e) { toasts.error('Create failed: ' + e.message) }
+  }
+
+  function startEditType(tt) {
+    editingTypeId = tt.id
+    typeBuf = { key: tt.key, label: tt.label, branch_template: tt.branch_template, is_default: tt.is_default, sort_order: tt.sort_order }
+  }
+
+  async function saveType(id) {
+    try {
+      await updateTaskType(id, { ...typeBuf })
+      editingTypeId = ''
+      await loadTaskTypes()
+      toasts.success('Task type saved')
+    } catch (e) { toasts.error('Save failed: ' + e.message) }
+  }
+
+  async function setDefaultType(tt) {
+    try {
+      await updateTaskType(tt.id, { ...tt, is_default: true })
+      await loadTaskTypes()
+    } catch (e) { toasts.error('Set default failed: ' + e.message) }
+  }
+
+  async function removeType(id) {
+    if (!confirm('Delete this task type?')) return
+    try {
+      await deleteTaskType(id)
+      await loadTaskTypes()
+    } catch (e) { toasts.error('Delete failed: ' + e.message) }
+  }
 
   function settingVal(key) {
     return settings[key]?.value ?? ''
@@ -193,7 +252,7 @@
     }
   }
 
-  onMount(() => { load(); loadTemplates() })
+  onMount(() => { load(); loadTemplates(); loadTaskTypes() })
 </script>
 
 <div class="overflow-y-auto p-6 max-w-4xl mx-auto">
@@ -270,6 +329,62 @@
             disabled={saving}
             onclick={() => saveDefault('orchestrator.resync_prompt')}
           >Save</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Task Types -->
+    <section class="mb-8">
+      <h2 class="text-base font-semibold text-gray-200 mb-1">Task Types</h2>
+      <p class="text-xs text-gray-400 mb-4">Each type sets the branch name an agent creates for its tasks via a template. Placeholders: <code>{'{slug}'}</code> (from the title), <code>{'{shortid}'}</code>, <code>{'{id}'}</code>, <code>{'{type}'}</code>. One type is the default.</p>
+
+      <div class="flex flex-col gap-2">
+        {#each taskTypes as tt (tt.id)}
+          <div class="p-3 bg-surface-800 rounded border border-surface-600">
+            {#if editingTypeId === tt.id}
+              <div class="grid grid-cols-3 gap-2">
+                <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-accent" placeholder="key" bind:value={typeBuf.key} />
+                <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-accent" placeholder="Label" bind:value={typeBuf.label} />
+                <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 font-mono focus:outline-none focus:border-accent" placeholder="feature/{'{slug}'}" bind:value={typeBuf.branch_template} />
+              </div>
+              <div class="flex justify-end gap-2 mt-2">
+                <button class="px-3 py-1 text-xs text-gray-400 hover:text-gray-200" onclick={() => editingTypeId = ''}>Cancel</button>
+                <button class="px-3 py-1 bg-accent hover:bg-accent-hover text-white text-xs rounded transition-colors" onclick={() => saveType(tt.id)}>Save</button>
+              </div>
+            {:else}
+              <div class="flex items-center justify-between">
+                <div class="min-w-0">
+                  <div class="text-sm text-gray-200 font-medium">
+                    {tt.label}
+                    <span class="text-xs text-gray-500">({tt.key})</span>
+                    {#if tt.is_default}<span class="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-accent/20 text-accent">default</span>{/if}
+                  </div>
+                  <div class="text-xs text-gray-500 font-mono mt-0.5 truncate">{tt.branch_template}</div>
+                </div>
+                <div class="flex items-center gap-2 ml-4 shrink-0">
+                  {#if !tt.is_default}
+                    <button class="text-xs text-gray-400 hover:text-accent" onclick={() => setDefaultType(tt)}>Set default</button>
+                  {/if}
+                  <button class="text-xs text-gray-400 hover:text-gray-200" onclick={() => startEditType(tt)}>Edit</button>
+                  {#if !tt.is_default}
+                    <button class="text-xs text-gray-500 hover:text-red-400" onclick={() => removeType(tt.id)}>Delete</button>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/each}
+
+        <!-- Add new -->
+        <div class="p-3 bg-surface-800 rounded border border-dashed border-surface-600">
+          <div class="grid grid-cols-3 gap-2">
+            <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-accent" placeholder="key (e.g. bug)" bind:value={newType.key} />
+            <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-accent" placeholder="Label" bind:value={newType.label} />
+            <input class="bg-surface-700 border border-surface-500 rounded px-2 py-1 text-sm text-gray-200 font-mono focus:outline-none focus:border-accent" placeholder="bug/{'{slug}'}" bind:value={newType.branch_template} />
+          </div>
+          <div class="flex justify-end mt-2">
+            <button class="px-3 py-1 bg-accent hover:bg-accent-hover text-white text-xs rounded transition-colors" onclick={createType}>Add task type</button>
+          </div>
         </div>
       </div>
     </section>

@@ -158,6 +158,50 @@ describe('Tasks — create form', () => {
     expect(screen.getByRole('combobox', { name: 'Review role' })).toBeInTheDocument()
   })
 
+  it('labels the default review option "any reviewer"', async () => {
+    stubFetch()
+    const user = userEvent.setup()
+    render(Tasks)
+    await user.click(screen.getByText('+ New'))
+    expect(screen.getByRole('combobox', { name: 'Review role' })).toHaveTextContent(
+      'Review: any reviewer',
+    )
+  })
+
+  it('includes the selected task_type_id in the create payload', async () => {
+    const TYPE_DEFS = [
+      { id: 'tt-normal', key: 'normal', label: 'Normal', branch_template: 'feature/{slug}', is_default: true },
+      { id: 'tt-bug', key: 'bug', label: 'Bug', branch_template: 'bug/{slug}', is_default: false },
+    ]
+    vi.stubGlobal('fetch', vi.fn((url, opts) => {
+      let data, status = 200
+      if (opts?.method === 'POST' && url === '/api/tasks') { data = { id: 'tnew' }; status = 201 }
+      else if (url.includes('/api/task-types')) data = TYPE_DEFS
+      else if (url.includes('/api/task-logs')) data = []
+      else if (url.includes('/api/projects')) data = PROJECTS
+      else if (url.includes('task-roles')) data = TASK_ROLES
+      else data = TASKS
+      return Promise.resolve({ ok: true, status, json: () => Promise.resolve(data) })
+    }))
+
+    const user = userEvent.setup()
+    render(Tasks)
+    await waitFor(() => screen.getByText('+ New'))
+    await user.click(screen.getByText('+ New'))
+
+    await user.selectOptions(screen.getByDisplayValue('Select project *'), 'proj1')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Task type' }), 'tt-bug')
+    await user.type(screen.getByPlaceholderText('Title'), 'New task')
+    await user.click(screen.getByText('Create'))
+
+    await waitFor(() => {
+      const postCall = fetch.mock.calls.find(([u, o]) => u === '/api/tasks' && o?.method === 'POST')
+      expect(postCall).toBeTruthy()
+      const body = JSON.parse(postCall[1].body)
+      expect(body.task_type_id).toBe('tt-bug')
+    })
+  })
+
   it('posts task with all required fields', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockImplementation((url) => {

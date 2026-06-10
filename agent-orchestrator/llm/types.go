@@ -34,7 +34,11 @@ type ChatResponse struct {
 	TokensUsed   int        `json:"tokens_used"`
 	InputTokens  int        `json:"input_tokens"`
 	OutputTokens int        `json:"output_tokens"`
-	DurationMs   int        `json:"duration_ms"`
+	// ContextTokens is the total prompt size occupying the context window on this
+	// call (input + cache-read + cache-creation). 0 when the provider doesn't
+	// report it — callers fall back to InputTokens.
+	ContextTokens int        `json:"context_tokens"`
+	DurationMs    int        `json:"duration_ms"`
 }
 
 // ChunkHandler is called by streaming providers for each token chunk.

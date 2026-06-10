@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { getCostBreakdown, getCostFilterOptions } from '../lib/api.js'
+  import { getCostBreakdown, getCostFilterOptions, listAgents } from '../lib/api.js'
   import { router } from '../lib/stores.js'
 
   // ── Dimensions (drill-down) ────────────────────────────────────────────────
@@ -22,11 +22,22 @@
   let options   = $state({ models: [], agent_roles: [], sources: [], providers: [], min_date: '', max_date: '' })
   let loading   = $state(false)
   let error     = $state('')
+  let agentNames = $state({}) // agent id → display name (cost breakdown shows names, ids in tooltip)
+
+  // Display label for a row: agent rows show the agent name (id stays in the
+  // tooltip + link), falling back to the id when the agent is unknown/deleted.
+  function displayKey(b) {
+    if (!b.key) return '(none)'
+    if (groupBy === 'agent_id') return agentNames[b.key] ?? b.key
+    return b.key
+  }
 
   let breakdownMax = $derived(breakdown.reduce((mx, b) => Math.max(mx, b.cost ?? 0), 0))
   let totalCost    = $derived(breakdown.reduce((s, b) => s + (b.cost ?? 0), 0))
   let totalIn      = $derived(breakdown.reduce((s, b) => s + (b.input_tokens ?? 0), 0))
   let totalOut     = $derived(breakdown.reduce((s, b) => s + (b.output_tokens ?? 0), 0))
+  let totalInCost  = $derived(breakdown.reduce((s, b) => s + (b.input_cost ?? 0), 0))
+  let totalOutCost = $derived(breakdown.reduce((s, b) => s + (b.output_cost ?? 0), 0))
   let totalCount   = $derived(breakdown.reduce((s, b) => s + (b.count ?? 0), 0))
 
   function pct(b) {
@@ -64,6 +75,12 @@
     try {
       options = await getCostFilterOptions()
     } catch (_) { /* options are best-effort */ }
+    try {
+      const agents = await listAgents()
+      const map = {}
+      for (const a of (Array.isArray(agents) ? agents : [])) map[a.id] = a.name
+      agentNames = map
+    } catch (_) { /* name mapping is best-effort */ }
     reload()
   })
 </script>
@@ -141,6 +158,7 @@
     </label>
     <div class="text-xs text-gray-400">
       Total <span class="text-gray-100 font-semibold">~${totalCost.toFixed(4)}</span>
+      (in ~${totalInCost.toFixed(4)} / out ~${totalOutCost.toFixed(4)})
       · {totalIn.toLocaleString()} in / {totalOut.toLocaleString()} out tokens
       · {totalCount.toLocaleString()} calls
     </div>
@@ -160,17 +178,18 @@
         <div class="flex items-center gap-2 text-xs">
           <div class="w-48 shrink-0 truncate font-mono text-gray-300" title={b.key}>
             {#if link}
-              <button class="text-accent hover:underline" onclick={() => router.push(...link)}>{b.key}</button>
+              <button class="text-accent hover:underline" onclick={() => router.push(...link)}>{displayKey(b)}</button>
             {:else}
-              {b.key || '(none)'}
+              {displayKey(b)}
             {/if}
           </div>
           <div class="flex-1 bg-surface-800 rounded h-4 overflow-hidden">
             <div class="bg-accent h-4 rounded" style="width: {pct(b)}%"></div>
           </div>
-          <div class="w-24 shrink-0 text-right text-gray-500">{(b.input_tokens ?? 0).toLocaleString()}/{(b.output_tokens ?? 0).toLocaleString()}</div>
-          <div class="w-20 shrink-0 text-right text-gray-200">~${(b.cost ?? 0).toFixed(4)}</div>
-          <div class="w-14 shrink-0 text-right text-gray-500">{b.count}×</div>
+          <div class="w-24 shrink-0 text-right text-gray-500" title="input / output tokens">{(b.input_tokens ?? 0).toLocaleString()}/{(b.output_tokens ?? 0).toLocaleString()}</div>
+          <div class="w-32 shrink-0 text-right text-gray-500" title="input / output cost">~${(b.input_cost ?? 0).toFixed(4)} / ~${(b.output_cost ?? 0).toFixed(4)}</div>
+          <div class="w-20 shrink-0 text-right text-gray-200" title="total cost">~${(b.cost ?? 0).toFixed(4)}</div>
+          <div class="w-12 shrink-0 text-right text-gray-500">{b.count}×</div>
         </div>
       {/each}
     </div>

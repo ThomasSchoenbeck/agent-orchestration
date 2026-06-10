@@ -67,14 +67,20 @@ func registerAgent(t *testing.T, baseURL, name string, roles []string) string {
 	return agentID
 }
 
-// claimTask POSTs /api/tasks/{id}/claim and asserts HTTP 200.
-func claimTask(t *testing.T, baseURL, taskID, agentID string) {
+// claimTask POSTs /api/tasks/{id}/claim, asserts HTTP 200, and returns the
+// generated branch the agent should work on (human-readable, e.g. the task's
+// type template applied to its title).
+func claimTask(t *testing.T, baseURL, taskID, agentID string) string {
 	t.Helper()
+	var resp struct {
+		Branch string `json:"branch"`
+	}
 	status := apiJSON(t, "POST", baseURL, "/api/tasks/"+taskID+"/claim",
-		map[string]string{"agent_id": agentID}, nil)
+		map[string]string{"agent_id": agentID}, &resp)
 	if status != 200 {
 		t.Fatalf("claimTask %q by %q: expected 200, got %d", taskID, agentID, status)
 	}
+	return resp.Branch
 }
 
 // cloneRepo uses go-git PlainClone to clone repoURL into a new t.TempDir().

@@ -19,8 +19,9 @@ import (
 type RepoResolver func(slug string) (repoPath string, err error)
 
 // PostReceiveHook is called after a successful receive-pack with each pushed ref.
-// branchName is e.g. "task/abc123". newSHA is the new HEAD hash.
-type PostReceiveHook func(branchName, newSHA string)
+// slug is the project slug the push targeted, branchName the ref (e.g.
+// "feature/add-login"), and newSHA the new HEAD hash.
+type PostReceiveHook func(slug, branchName, newSHA string)
 
 // HTTPHandler is a net/http.Handler serving the git smart-HTTP protocol.
 // Mount it under a path prefix such as "/git/".
@@ -200,7 +201,7 @@ func (h *HTTPHandler) serveReceivePack(w http.ResponseWriter, r *http.Request, s
 				continue // deletion — skip
 			}
 			branch := strings.TrimPrefix(cmd.Name.String(), "refs/heads/")
-			h.postReceive(branch, cmd.New.String())
+			h.postReceive(slug, branch, cmd.New.String())
 		}
 	}
 }

@@ -45,6 +45,9 @@ func (s *Server) registerHandlers() {
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	s.mux.HandleFunc("/api/skills/", s.handleSkillDetail)
 
+	s.mux.HandleFunc("/api/task-types", s.handleTaskTypes)
+	s.mux.HandleFunc("/api/task-types/", s.handleTaskTypeDetail)
+
 	// Context
 	s.mux.HandleFunc("/api/context/save", s.handleContextSave)
 	s.mux.HandleFunc("/api/context/query", s.handleContextQuery)
@@ -691,10 +694,18 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		if resolved, rerr := s.db.ResolveRoleRefs(r.Context(), []string{req.Role, req.ReviewRole}); rerr == nil {
 			role, reviewRole = resolved[0], resolved[1]
 		}
+		// Resolve the task type: explicit id, else the configured default (if any).
+		taskTypeID := req.TaskTypeID
+		if taskTypeID == "" {
+			if def, derr := s.db.GetDefaultTaskType(r.Context()); derr == nil {
+				taskTypeID = def.ID
+			}
+		}
 		t := &db.Task{
 			ProjectID:  req.ProjectID,
 			Role:       role,
 			ReviewRole: reviewRole,
+			TaskTypeID: taskTypeID,
 			Focus:      req.Focus,
 			Priority:   req.Priority,
 			Payload:    req.Payload,
@@ -757,7 +768,33 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Status == "" {
-			req.Status = "completed"
+			req.Status = db.TaskStatusCompleted
+		}
+		// B1: a code (non-planner) task must not reach COMPLETED via this endpoint —
+		// that skips the review → merge gate and leaves the branch unmerged. Redirect
+		// such a submission into review. Planner/creates_tasks tasks complete directly.
+		if strings.EqualFold(req.Status, db.TaskStatusCompleted) {
+			req.Status = db.TaskStatusCompleted // canonical uppercase
+			if ct, err := s.db.GetTask(r.Context(), id); err == nil && ct != nil &&
+				!s.taskAllowsDirectComplete(r.Context(), ct.Role) {
+				if terr := s.db.TransitionTaskState(r.Context(), id, ct.Status,
+					db.TaskStatusAwaitingReview, ct.AssignedAgentID,
+					"completion redirected to review (code task must be reviewed)"); terr != nil {
+					api.WriteError(w, http.StatusConflict, api.ErrCodeConflict, terr.Error())
+					return
+				}
+				if req.Metrics != nil {
+					// Same semantics as submit-for-review: the agent's run succeeded;
+					// the work is now headed to review rather than completing.
+					s.recordMetric(r.Context(), id, ct.AssignedAgentID, req.Metrics, true)
+				}
+				rt, _ := s.db.GetTask(r.Context(), id)
+				if rt != nil {
+					s.releaseTaskResources(rt)
+				}
+				api.WriteJSON(w, http.StatusOK, rt)
+				return
+			}
 		}
 		if err := s.db.SubmitTaskResult(r.Context(), id, req.Result, req.Status); err != nil {
 			s.internalError(w, err)
@@ -1267,7 +1304,7 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 				AgentName:   agentRec.Name,
 				EventType:   eventType,
 				TaskID:      taskFoundID,
-				Description: "Polled roles=[" + strings.Join(roles, ",") + "] skills=[" + strings.Join(agentRec.Skills, ",") + "] → " + result,
+				Description: "Polled roles=[" + strings.Join(s.roleNames(r.Context(), roles), ",") + "] skills=[" + strings.Join(agentRec.Skills, ",") + "] → " + result,
 				Metadata:    string(meta),
 			})
 		}
@@ -1916,10 +1953,15 @@ func (s *Server) recordMetric(ctx context.Context, taskID, agentID string, m *ap
 		return
 	}
 	cost := m.Cost
-	// If the agent submitted a model name, re-derive cost from provider pricing
-	// when it wasn't already calculated (or to verify it).
-	if m.Model != "" && m.Cost == 0 && (m.InputTokens > 0 || m.OutputTokens > 0) {
-		cost = s.costFromModel(ctx, m.Model, m.InputTokens, m.OutputTokens)
+	// Derive per-side cost from provider pricing so the breakdown can show input
+	// vs output cost separately. Also re-derive the total when the agent didn't
+	// compute one.
+	var inputCost, outputCost float64
+	if m.Model != "" {
+		inputCost, outputCost = s.costSplitFromModel(ctx, m.Model, m.InputTokens, m.OutputTokens)
+	}
+	if m.Cost == 0 && (m.InputTokens > 0 || m.OutputTokens > 0) {
+		cost = inputCost + outputCost
 	}
 	providerID := ""
 	if m.Model != "" {
@@ -1943,6 +1985,8 @@ func (s *Server) recordMetric(ctx context.Context, taskID, agentID string, m *ap
 		InputTokens:  m.InputTokens,
 		OutputTokens: m.OutputTokens,
 		Cost:         cost,
+		InputCost:    inputCost,
+		OutputCost:   outputCost,
 		DurationMs:   m.DurationMs,
 		Success:      success,
 		Source:       "agent",
@@ -1956,12 +2000,15 @@ func (s *Server) recordMetric(ctx context.Context, taskID, agentID string, m *ap
 // ledger, computing cost from the model's pricing. conversationID/projectID may
 // be empty (e.g. the standalone chat page has neither).
 func (s *Server) recordChatMetric(ctx context.Context, model, conversationID, projectID string, resp llm.ChatResponse) {
+	inputCost, outputCost := s.costSplitFromModel(ctx, model, resp.InputTokens, resp.OutputTokens)
 	_ = s.db.CreateMetric(ctx, &db.Metric{
 		Model:          model,
 		TokensUsed:     resp.TokensUsed,
 		InputTokens:    resp.InputTokens,
 		OutputTokens:   resp.OutputTokens,
-		Cost:           s.costFromModel(ctx, model, resp.InputTokens, resp.OutputTokens),
+		Cost:           inputCost + outputCost,
+		InputCost:      inputCost,
+		OutputCost:     outputCost,
 		Success:        true,
 		Source:         "chat",
 		ProviderID:     s.providerIDForModel(ctx, model),
@@ -1987,6 +2034,48 @@ func (s *Server) providerIDForModel(ctx context.Context, modelName string) strin
 	return ""
 }
 
+// roleDefByRef resolves a role ref (id first, then name) to its definition, or
+// nil when no known definition matches.
+func (s *Server) roleDefByRef(ctx context.Context, ref string) *db.RoleDefinition {
+	if ref == "" {
+		return nil
+	}
+	if rd, err := s.db.GetRoleDefinition(ctx, ref); err == nil && rd != nil {
+		return rd
+	}
+	if rd, err := s.db.GetRoleDefinitionByName(ctx, ref); err == nil && rd != nil {
+		return rd
+	}
+	return nil
+}
+
+// taskAllowsDirectComplete reports whether a role carries the creates_tasks
+// capability. Such planner/orchestrator tasks plan via tools, produce no code,
+// and legitimately complete directly via the result endpoint. All other (code)
+// tasks must pass through the review → merge gate before COMPLETED (B1).
+func (s *Server) taskAllowsDirectComplete(ctx context.Context, role string) bool {
+	rd := s.roleDefByRef(ctx, role)
+	if rd == nil {
+		return false
+	}
+	for _, c := range rd.Capabilities {
+		if c == "creates_tasks" {
+			return true
+		}
+	}
+	return false
+}
+
+// roleNames maps a slice of role refs (ids or names) to human-readable role
+// names for log output, preserving order.
+func (s *Server) roleNames(ctx context.Context, refs []string) []string {
+	out := make([]string, len(refs))
+	for i, r := range refs {
+		out[i] = s.roleName(ctx, r)
+	}
+	return out
+}
+
 // roleName resolves a role reference (id or name) to its human-readable name,
 // falling back to the ref itself when no definition matches.
 func (s *Server) roleName(ctx context.Context, ref string) string {
@@ -2001,19 +2090,26 @@ func (s *Server) roleName(ctx context.Context, ref string) string {
 
 // costFromModel looks up the provider that owns modelName and computes cost
 // using its per-model pricing. Returns 0 when no pricing is found.
-func (s *Server) costFromModel(ctx context.Context, modelName string, inputTokens, outputTokens int) float64 {
+// costSplitFromModel returns the input-side and output-side cost separately,
+// using the owning provider's per-model pricing. Returns (0,0) when no pricing
+// is found.
+func (s *Server) costSplitFromModel(ctx context.Context, modelName string, inputTokens, outputTokens int) (inputCost, outputCost float64) {
 	providers, err := s.db.ListProviders(ctx)
 	if err != nil {
-		return 0
+		return 0, 0
 	}
 	for _, p := range providers {
 		for _, m := range p.Models {
 			if m.Name == modelName {
-				in := float64(inputTokens) / 1_000_000 * m.InputPerMillion
-				out := float64(outputTokens) / 1_000_000 * m.OutputPerMillion
-				return in + out
+				return float64(inputTokens) / 1_000_000 * m.InputPerMillion,
+					float64(outputTokens) / 1_000_000 * m.OutputPerMillion
 			}
 		}
 	}
-	return 0
+	return 0, 0
+}
+
+func (s *Server) costFromModel(ctx context.Context, modelName string, inputTokens, outputTokens int) float64 {
+	in, out := s.costSplitFromModel(ctx, modelName, inputTokens, outputTokens)
+	return in + out
 }

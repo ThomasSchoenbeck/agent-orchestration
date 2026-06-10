@@ -213,6 +213,24 @@ func (r *Router) RouteByRole(role string) (*RouteResult, error) {
 	return nil, fmt.Errorf("no provider available for role %q (no DB definition, config mapping, or provider preference)", role)
 }
 
+// RoleName resolves a role ref (id or name) to its human-readable role name,
+// falling back to the ref itself when no definition matches. Used for log output
+// so agents report role names instead of opaque role ids.
+func (r *Router) RoleName(ref string) string {
+	if ref == "" {
+		return ref
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if cr, ok := r.rolesByID[ref]; ok && cr.def != nil && cr.def.Name != "" {
+		return cr.def.Name
+	}
+	if cr, ok := r.rolesByName[ref]; ok && cr.def != nil && cr.def.Name != "" {
+		return cr.def.Name
+	}
+	return ref
+}
+
 // BuildContext assembles a context string for the given role (config-backed fallback).
 // Deprecated: use BuildContextForRole instead for DB-backed rules.
 func (r *Router) BuildContext(role string, entries []ContextEntry) string {

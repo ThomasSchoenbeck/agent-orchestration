@@ -29,9 +29,9 @@ func TestParallelMergeNonOverlappingFiles(t *testing.T) {
 	// --- Task A (touches a.go) ---
 	taskA := makeTask(t, srv.BaseURL, projectID)
 	workerA := registerAgent(t, srv.BaseURL, "worker-par-a", []string{"worker"})
-	claimTask(t, srv.BaseURL, taskA, workerA)
+	branchA := claimTask(t, srv.BaseURL, taskA, workerA)
 	_, cloneA := cloneRepo(t, srv.BaseURL+"/git/"+slug+".git")
-	hashA := commitAndPush(t, cloneA, "a.go", "package a", "task/"+taskA)
+	hashA := commitAndPush(t, cloneA, "a.go", "package a", branchA)
 
 	reviewerA := registerAgent(t, srv.BaseURL, "reviewer-par-a", []string{"reviewer"})
 	claimTask(t, srv.BaseURL, taskA, reviewerA)
@@ -45,9 +45,9 @@ func TestParallelMergeNonOverlappingFiles(t *testing.T) {
 	// --- Task B (touches b.go) ---
 	taskB := makeTask(t, srv.BaseURL, projectID)
 	workerB := registerAgent(t, srv.BaseURL, "worker-par-b", []string{"worker"})
-	claimTask(t, srv.BaseURL, taskB, workerB)
+	branchB := claimTask(t, srv.BaseURL, taskB, workerB)
 	_, cloneB := cloneRepo(t, srv.BaseURL+"/git/"+slug+".git")
-	hashB := commitAndPush(t, cloneB, "b.go", "package b", "task/"+taskB)
+	hashB := commitAndPush(t, cloneB, "b.go", "package b", branchB)
 
 	reviewerB := registerAgent(t, srv.BaseURL, "reviewer-par-b", []string{"reviewer"})
 	claimTask(t, srv.BaseURL, taskB, reviewerB)
