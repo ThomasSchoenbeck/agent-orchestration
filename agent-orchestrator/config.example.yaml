@@ -108,10 +108,10 @@ providers:
 role_definitions:
   - name: orchestrator
     label: Orchestrator
-    description: Plans work and coordinates agents; merges approved work.
+    description: Plans work and coordinates agents.
     provider: openai               # provider name this role routes to
     model_override: gpt-4o         # specific model string (optional)
-    capabilities: [creates_tasks, handles_merge]
+    capabilities: [creates_tasks]
     allowed_tools: [list_tasks, create_work_package, plan_project, query_context, save_context, task_comment]
     context_include: []            # context types to inject (empty = all)
     context_exclude: []            # context types to omit
@@ -123,10 +123,10 @@ role_definitions:
 
   - name: reviewer
     label: Reviewer
-    description: Reviews worker output; suggestions only, no file writes.
+    description: Reviews worker output and owns the merge gate (code review + merge-review).
     provider: anthropic
     model_override: claude-sonnet-4-6
-    capabilities: [handles_review]
+    capabilities: [handles_review, handles_merge]
     allowed_tools: [read_file, list_files, task_comment]
 
   - name: worker

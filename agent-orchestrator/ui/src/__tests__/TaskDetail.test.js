@@ -42,6 +42,7 @@ vi.mock('../lib/api.js', () => {
     listLogs: r([]),
     getTaskCost: r(null),
     listPRs: r([]),
+    createPR: r({ id: 'pr1' }),
     approvePR: r({}),
     rejectPR: r({}),
     getTaskRoles: vi.fn(),
@@ -57,7 +58,7 @@ vi.mock('../lib/stores.js', () => ({
   },
 }))
 
-import { getTask, getTaskRoles, updateTask } from '../lib/api.js'
+import { getTask, getTaskRoles, updateTask, createPR } from '../lib/api.js'
 
 const ROLES = [
   { id: 'w1', value: 'worker', label: 'Worker' },
@@ -116,5 +117,24 @@ describe('TaskDetail — editing role/review (B4)', () => {
         expect.objectContaining({ role: 'w1', review_role: 'rev-1' }),
       )
     })
+  })
+})
+
+describe('TaskDetail — Create PR button (reviewer-owned merge)', () => {
+  it('shows Create PR for a task in review and calls createPR', async () => {
+    getTask.mockResolvedValue(baseTask({ status: 'AWAITING_REVIEW' }))
+    const user = userEvent.setup()
+    render(TaskDetail, { props: { taskId: 't1' } })
+
+    const btn = await screen.findByRole('button', { name: 'Create PR' })
+    await user.click(btn)
+    await waitFor(() => expect(createPR).toHaveBeenCalledWith('t1'))
+  })
+
+  it('does not show Create PR for a task not in review', async () => {
+    getTask.mockResolvedValue(baseTask({ status: 'DEVELOPING' }))
+    render(TaskDetail, { props: { taskId: 't1' } })
+    await waitFor(() => screen.getByTitle('Review setup'))
+    expect(screen.queryByRole('button', { name: 'Create PR' })).toBeNull()
   })
 })

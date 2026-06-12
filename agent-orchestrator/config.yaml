@@ -28,18 +28,18 @@ providers:
 role_definitions:
   - name: orchestrator
     label: Orchestrator
-    description: Plans work and coordinates agents; merges approved work.
+    description: Plans work and coordinates agents.
     provider: local
     model_override: gemma-4-E4B-it-Q8_0.gguf
-    capabilities: [creates_tasks, handles_merge]
+    capabilities: [creates_tasks]
     allowed_tools: [list_tasks, create_work_package, plan_project, query_context, save_context, task_comment]
 
   - name: reviewer
     label: Reviewer
-    description: Reviews worker output; suggestions only, no file writes.
+    description: Reviews worker output and owns the merge gate (code review + merge-review).
     provider: local
     model_override: gemma-4-E4B-it-Q8_0.gguf
-    capabilities: [handles_review]
+    capabilities: [handles_review, handles_merge]
     allowed_tools: [read_file, list_files, task_comment]
 
   - name: worker

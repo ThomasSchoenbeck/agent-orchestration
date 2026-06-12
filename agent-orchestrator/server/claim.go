@@ -47,6 +47,23 @@ func (s *Server) prepareClaimResponse(ctx context.Context, task *db.Task, agentI
 	}
 	task.AssignedAgentID = agentID
 
+	// A review claimed with no explicit reviewer ("any reviewer") records the
+	// claiming agent's review role, so the agent routes the review with a reviewer
+	// persona — the executor's effectiveRole needs review_role set to know it is a
+	// review rather than running it as the task's own (worker) role.
+	if (task.Status == db.TaskStatusReviewing || task.Status == db.TaskStatusMerging) && task.ReviewRole == "" {
+		if rr := s.reviewRoleForAgent(ctx, agentID); rr != "" {
+			task.ReviewRole = rr
+		}
+	}
+
+	// Open the pull request when the merge phase is picked up — a task in
+	// AWAITING_MERGE claimed into MERGING. Idempotent: it reuses an existing open
+	// PR (e.g. one a human opened earlier via the Create-PR button).
+	if task.Status == db.TaskStatusMerging {
+		s.ensurePRForTask(ctx, task, agentID, "")
+	}
+
 	s.provisionWorkspace(ctx, task, branchName, resp)
 
 	// Persist agent assignment and port back to DB.
@@ -57,6 +74,27 @@ func (s *Server) prepareClaimResponse(ctx context.Context, task *db.Task, agentI
 	}
 
 	return resp
+}
+
+// reviewRoleForAgent returns the id of the claiming agent's first role that
+// carries the handles_review capability, or "" when it has none.
+func (s *Server) reviewRoleForAgent(ctx context.Context, agentID string) string {
+	agent, err := s.db.GetAgent(ctx, agentID)
+	if err != nil || agent == nil {
+		return ""
+	}
+	for _, roleRef := range agent.Roles {
+		rd := s.roleDefByRef(ctx, roleRef)
+		if rd == nil {
+			continue
+		}
+		for _, c := range rd.Capabilities {
+			if c == "handles_review" {
+				return rd.ID
+			}
+		}
+	}
+	return ""
 }
 
 // resolveTaskBranch builds the human-readable branch an agent will work on, from

@@ -30,11 +30,11 @@ func TestSeedRoles_NewTaxonomy(t *testing.T) {
 
 	want := map[string][]string{
 		"worker":     {},
-		"reviewer":   {"handles_review"},
+		"reviewer":   {"handles_review", "handles_merge"}, // reviewer owns the merge gate
 		"planner":    {"creates_tasks"},
 		"researcher": {"creates_tasks"},
 		"security":   {},
-		"deployer":   {"handles_merge", "handles_deploy"},
+		"deployer":   {"handles_deploy"}, // deployment only — no longer merges
 		"designer":   {"creates_tasks"},
 	}
 	for name, caps := range want {

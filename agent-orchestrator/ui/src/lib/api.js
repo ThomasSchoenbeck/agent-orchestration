@@ -83,6 +83,7 @@ export const listTaskLogs = (taskId) => get(`/api/tasks/${taskId}/logs`)
 
 // ── Pull requests (Feature 2) ─────────────────────────────────────────────────
 export const listPRs   = (taskId)             => get(`/api/tasks/${taskId}/pull-requests`)
+export const createPR  = (taskId)             => post(`/api/tasks/${taskId}/pull-requests`)
 export const approvePR = (taskId, prId, body) => post(`/api/tasks/${taskId}/pull-requests/${prId}/approve`, { decider_id: 'human', body })
 export const rejectPR  = (taskId, prId, body) => post(`/api/tasks/${taskId}/pull-requests/${prId}/reject`,  { decider_id: 'human', body })
 

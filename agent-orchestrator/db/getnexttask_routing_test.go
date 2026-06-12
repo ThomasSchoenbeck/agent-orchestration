@@ -58,6 +58,52 @@ func TestGetNextTask_CapabilityReviewRouting(t *testing.T) {
 	}
 }
 
+// TestGetNextTask_AssignedAwaitingReviewHiddenUntilCleared reproduces the
+// production bug: an AWAITING_REVIEW task that still carries the worker's
+// assignment is invisible to a polling reviewer (the poll query excludes
+// assigned tasks). Transitioning into a queue state must clear the assignment.
+func TestGetNextTask_AssignedAwaitingReviewHiddenUntilCleared(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+	reviewer := seedRole(t, d, "reviewer", []string{"handles_review"})
+
+	// AWAITING_REVIEW but still assigned to the worker → not pollable.
+	task := &db.Task{
+		ProjectID: "p1", Role: "worker", ReviewRole: reviewer.ID,
+		Status: db.TaskStatusAwaitingReview, AssignedAgentID: "worker-1",
+	}
+	if err := d.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if got, err := d.GetNextTask(ctx, []string{reviewer.ID}); err != nil {
+		t.Fatalf("GetNextTask: %v", err)
+	} else if got != nil {
+		t.Fatalf("reviewer must NOT poll an AWAITING_REVIEW task still assigned to the worker, got %v", got)
+	}
+
+	// Simulate the real path: worker in DEVELOPING, then the git hook transitions
+	// to AWAITING_REVIEW — which must release the worker's claim.
+	task.Status = db.TaskStatusDeveloping
+	task.AssignedAgentID = "worker-1"
+	if err := d.UpdateTask(ctx, task); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+	if err := d.TransitionTaskState(ctx, task.ID,
+		db.TaskStatusDeveloping, db.TaskStatusAwaitingReview, "", "branch pushed"); err != nil {
+		t.Fatalf("TransitionTaskState: %v", err)
+	}
+	if got, _ := d.GetTask(ctx, task.ID); got.AssignedAgentID != "" {
+		t.Errorf("assigned_agent_id = %q, want cleared after entering AWAITING_REVIEW", got.AssignedAgentID)
+	}
+	got, err := d.GetNextTask(ctx, []string{reviewer.ID})
+	if err != nil {
+		t.Fatalf("GetNextTask after transition: %v", err)
+	}
+	if got == nil || got.ID != task.ID {
+		t.Fatalf("reviewer should poll the task once the assignment is cleared, got %v", got)
+	}
+}
+
 func TestGetNextTask_ReviewRoleWithoutCapability(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()

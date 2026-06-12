@@ -48,6 +48,10 @@ func setupApprovedPR(t *testing.T, srv *gitTestServer, name string) (string, str
 	apiJSON(t, "POST", srv.BaseURL, "/api/tasks/"+taskID+"/reviews",
 		map[string]interface{}{"status": "approved", "body": "LGTM"}, nil)
 
+	// The PR opens when the merge phase is picked up; open it here via the
+	// (human) Create-PR endpoint so the merge-decision assertions have a PR.
+	apiJSON(t, "POST", srv.BaseURL, "/api/tasks/"+taskID+"/pull-requests", nil, nil)
+
 	return projectID, slug, taskID, branch, firstPRID(t, srv, taskID)
 }
 

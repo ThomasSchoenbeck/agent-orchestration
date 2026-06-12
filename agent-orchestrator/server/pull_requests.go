@@ -18,21 +18,24 @@ import (
 //
 // parts is the path split after "/api/tasks/": [taskID, "pull-requests", prID?, action?].
 func (s *Server) handleTaskPullRequests(w http.ResponseWriter, r *http.Request, taskID string, parts []string) {
-	// List: no PR id.
+	// Collection: no PR id. GET lists; POST opens a PR for the task (human path).
 	if len(parts) < 3 {
-		if r.Method != http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
+			prs, err := s.db.ListPRsForTask(r.Context(), taskID)
+			if err != nil {
+				s.internalError(w, err)
+				return
+			}
+			if prs == nil {
+				prs = []*db.PullRequest{}
+			}
+			api.WriteJSON(w, http.StatusOK, prs)
+		case http.MethodPost:
+			s.createPRForTask(w, r, taskID)
+		default:
 			methodNotAllowed(w)
-			return
 		}
-		prs, err := s.db.ListPRsForTask(r.Context(), taskID)
-		if err != nil {
-			s.internalError(w, err)
-			return
-		}
-		if prs == nil {
-			prs = []*db.PullRequest{}
-		}
-		api.WriteJSON(w, http.StatusOK, prs)
 		return
 	}
 
@@ -61,6 +64,36 @@ func (s *Server) handleTaskPullRequests(w http.ResponseWriter, r *http.Request, 
 	default:
 		api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, "unknown pull-request action")
 	}
+}
+
+// createPRForTask lets a human open a PR for a task that is in review and move it
+// to the merge gate (AWAITING_MERGE), where the Merge action becomes available.
+func (s *Server) createPRForTask(w http.ResponseWriter, r *http.Request, taskID string) {
+	ctx := r.Context()
+	task, err := s.db.GetTask(ctx, taskID)
+	if err != nil {
+		api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+		return
+	}
+	switch task.Status {
+	case db.TaskStatusAwaitingReview, db.TaskStatusReviewing, db.TaskStatusAwaitingMerge:
+		// ok — a PR makes sense while the task is in review / at the merge gate.
+	default:
+		api.WriteError(w, http.StatusConflict, api.ErrCodeConflict,
+			fmt.Sprintf("task %q is not in review (status %q)", taskID, task.Status))
+		return
+	}
+
+	pr := s.ensurePRForTask(ctx, task, "human", "human")
+	if pr == nil {
+		s.internalError(w, fmt.Errorf("failed to create pull request for task %q", taskID))
+		return
+	}
+	if task.Status != db.TaskStatusAwaitingMerge {
+		_ = s.db.TransitionTaskState(ctx, taskID, task.Status,
+			db.TaskStatusAwaitingMerge, "human", "PR created for manual merge")
+	}
+	api.WriteJSON(w, http.StatusCreated, pr)
 }
 
 // approvePR is the single place that touches git: a merge can only follow an

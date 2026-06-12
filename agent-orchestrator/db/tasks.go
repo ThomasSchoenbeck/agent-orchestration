@@ -587,7 +587,17 @@ func (d *Database) TransitionTaskState(ctx context.Context, taskID, fromState, t
 			return fmt.Errorf("task %q: expected state %s, got %s", taskID, fromState, current)
 		}
 		now := time.Now().UTC()
-		if _, err := tx.ExecContext(ctx,
+		// Entering a queue state (AWAITING_REVIEW/MERGE/REVISION, BACKLOG) means a
+		// *different* agent should pick the task up next, so release the previous
+		// claimant. Otherwise the poll query (which excludes assigned tasks) would
+		// never offer e.g. an AWAITING_REVIEW task to a reviewer.
+		if IsQueueState(toState) {
+			if _, err := tx.ExecContext(ctx,
+				"UPDATE tasks SET status=?, assigned_agent_id=NULL, updated_at=? WHERE id=?", toState, now, taskID,
+			); err != nil {
+				return err
+			}
+		} else if _, err := tx.ExecContext(ctx,
 			"UPDATE tasks SET status=?, updated_at=? WHERE id=?", toState, now, taskID,
 		); err != nil {
 			return err

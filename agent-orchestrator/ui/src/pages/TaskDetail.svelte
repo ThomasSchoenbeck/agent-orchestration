@@ -34,6 +34,7 @@
     listLogs,
     getTaskCost,
     listPRs,
+    createPR,
     approvePR,
     rejectPR,
     getTaskRoles,
@@ -132,7 +133,7 @@
   let prBusy = $state(false)
 
   // ── Code panel ────────────────────────────────────────────────────────────
-  let taskBranch        = $state('')   // "task/<taskId>"
+  let taskBranch        = $state('')   // the task's working branch (persisted task.branch)
   let taskBranchExists  = $state(false)
   let taskCommits       = $state([])
   let codeLoading       = $state(false)
@@ -167,7 +168,9 @@
 
   async function loadCodePanel(t) {
     if (!t.project_id) return
-    taskBranch = `task/${t.id}`
+    // Branches are now human-readable (generated from the task type at claim);
+    // fall back to the legacy task/<id> for tasks created before that change.
+    taskBranch = t.branch || `task/${t.id}`
     codeLoading = true
     try {
       const [branches, commits] = await Promise.all([
@@ -291,6 +294,19 @@
   }
 
   // ── Pull requests (Feature 2) ──────────────────────────────────────────────
+  async function createPullRequest() {
+    prBusy = true
+    try {
+      await createPR(taskId)
+      toasts.success("Pull request created")
+      await loadAll()
+    } catch (e) {
+      toasts.error("Create PR failed: " + e.message)
+    } finally {
+      prBusy = false
+    }
+  }
+
   async function decidePR(prId, verdict) {
     prBusy = true
     try {
@@ -1139,6 +1155,16 @@
       {/if}
 
       <!-- ── Pull requests (Feature 2) ─────────────────────────────── -->
+      {#if !pullRequests.some((p) => p.status === "open") && (task?.status === "AWAITING_REVIEW" || task?.status === "REVIEWING" || task?.status === "AWAITING_MERGE")}
+        <div class="mt-6 flex items-center gap-2">
+          <button
+            class="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white text-xs rounded transition-colors disabled:opacity-40"
+            disabled={prBusy}
+            onclick={createPullRequest}
+          >Create PR</button>
+          <span class="text-xs text-gray-500">Open a pull request and move the task to the merge gate.</span>
+        </div>
+      {/if}
       {#if pullRequests.length > 0}
         <div class="mt-6">
           <h3 class="text-sm font-semibold text-gray-300 mb-3">Pull Requests</h3>
