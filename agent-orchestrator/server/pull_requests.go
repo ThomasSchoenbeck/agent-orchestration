@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"agent-orchestrator/api"
 	"agent-orchestrator/db"
@@ -96,10 +97,27 @@ func (s *Server) createPRForTask(w http.ResponseWriter, r *http.Request, taskID 
 	api.WriteJSON(w, http.StatusCreated, pr)
 }
 
+// projectMergeMutex returns the per-project mutex that serialises merges into
+// that project's main ref, creating it on first use.
+func (s *Server) projectMergeMutex(projectID string) *sync.Mutex {
+	s.mergeMu.Lock()
+	defer s.mergeMu.Unlock()
+	m, ok := s.mergeLocks[projectID]
+	if !ok {
+		m = &sync.Mutex{}
+		s.mergeLocks[projectID] = m
+	}
+	return m
+}
+
 // approvePR is the single place that touches git: a merge can only follow an
 // explicit approval. It merges the PR branch into main, deletes the branch,
 // marks the PR merged, and completes the task. On merge conflict the PR is
 // rejected and the task returns to AWAITING_REVISION with the branch kept.
+//
+// The read-merge-write of main is serialised per project: concurrent approvals
+// in the same project run one at a time so no merge is lost; PR and task state
+// are re-read inside the lock so a duplicate approval becomes a no-op.
 func (s *Server) approvePR(w http.ResponseWriter, r *http.Request, taskID, prID, deciderID, body string) {
 	ctx := r.Context()
 	pr, err := s.db.GetPR(ctx, prID)
@@ -112,17 +130,38 @@ func (s *Server) approvePR(w http.ResponseWriter, r *http.Request, taskID, prID,
 		api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
 		return
 	}
-	if task.Status != db.TaskStatusAwaitingMerge && task.Status != db.TaskStatusMerging {
-		api.WriteError(w, http.StatusConflict, api.ErrCodeConflict,
-			fmt.Sprintf("task %q is not awaiting merge (status %q)", taskID, task.Status))
-		return
-	}
 
 	project, err := s.db.GetProject(ctx, task.ProjectID)
 	if err != nil {
 		s.internalError(w, err)
 		return
 	}
+
+	// Serialise merges into this project's main ref.
+	mu := s.projectMergeMutex(project.ID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Re-read inside the lock: a concurrent approval may have already merged this
+	// PR or completed the task while we waited.
+	if pr, err = s.db.GetPR(ctx, prID); err != nil {
+		api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+		return
+	}
+	if pr.Status != "open" {
+		api.WriteJSON(w, http.StatusOK, pr) // already decided — no-op
+		return
+	}
+	if task, err = s.db.GetTask(ctx, taskID); err != nil {
+		api.WriteError(w, http.StatusNotFound, api.ErrCodeNotFound, err.Error())
+		return
+	}
+	if task.Status != db.TaskStatusAwaitingMerge && task.Status != db.TaskStatusMerging {
+		api.WriteError(w, http.StatusConflict, api.ErrCodeConflict,
+			fmt.Sprintf("task %q is not awaiting merge (status %q)", taskID, task.Status))
+		return
+	}
+
 	repoPath := s.storage.RepoPath(project.ID)
 
 	var sha string

@@ -1,8 +1,12 @@
 package integration_test
 
 import (
+	"bytes"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,6 +151,124 @@ func TestDeployerClaimsAndApproves_Merges(t *testing.T) {
 	}
 	if _, err := git.ReadFile(repoPath, "main", "app.go"); err != nil {
 		t.Errorf("app.go missing on main after merge: %v", err)
+	}
+}
+
+// TestReviewerClaimsAndApproves_Merges verifies the reviewer role now owns the
+// merge phase (handles_merge): it claims AWAITING_MERGE → MERGING and approves,
+// landing the merge → COMPLETED.
+func TestReviewerClaimsAndApproves_Merges(t *testing.T) {
+	t.Parallel()
+	srv := newGitTestServer(t)
+	projectID, _, taskID, _, prID := setupApprovedPR(t, srv, "pr-rev-merge")
+
+	// A reviewer (handles_merge) claims the merge gate.
+	reviewerID := registerAgent(t, srv.BaseURL, "pr-rev-merge-reviewer2", []string{"reviewer"})
+	claimTask(t, srv.BaseURL, taskID, reviewerID)
+	if s := getTask(t, srv, taskID).Status; s != db.TaskStatusMerging {
+		t.Fatalf("after reviewer claim: status = %q, want %q", s, db.TaskStatusMerging)
+	}
+
+	status := apiJSON(t, "POST", srv.BaseURL,
+		"/api/tasks/"+taskID+"/pull-requests/"+prID+"/approve",
+		map[string]interface{}{"decider_id": reviewerID, "body": "ship it"}, nil)
+	if status != 200 {
+		t.Fatalf("approve: expected 200, got %d", status)
+	}
+
+	if s := getTask(t, srv, taskID).Status; s != db.TaskStatusCompleted {
+		t.Fatalf("after approve: status = %q, want %q", s, db.TaskStatusCompleted)
+	}
+	if pr := getPR(t, srv, taskID, prID); pr.Status != "merged" {
+		t.Errorf("PR status = %q, want merged", pr.Status)
+	}
+	if _, err := git.ReadFile(bareRepoPath(srv, projectID), "main", "app.go"); err != nil {
+		t.Errorf("app.go missing on main after reviewer merge: %v", err)
+	}
+}
+
+// TestApprove_DuplicateIsNoOp verifies the in-lock re-validation: a second
+// approval of an already-merged PR is a 200 no-op and does not merge twice.
+func TestApprove_DuplicateIsNoOp(t *testing.T) {
+	t.Parallel()
+	srv := newGitTestServer(t)
+	_, _, taskID, _, prID := setupApprovedPR(t, srv, "pr-dup")
+
+	for i := 0; i < 2; i++ {
+		status := apiJSON(t, "POST", srv.BaseURL,
+			"/api/tasks/"+taskID+"/pull-requests/"+prID+"/approve",
+			map[string]interface{}{"decider_id": "human", "body": "ship"}, nil)
+		if status != 200 {
+			t.Fatalf("approve #%d: expected 200, got %d", i, status)
+		}
+	}
+	if s := getTask(t, srv, taskID).Status; s != db.TaskStatusCompleted {
+		t.Errorf("task status = %q, want COMPLETED", s)
+	}
+	if pr := getPR(t, srv, taskID, prID); pr.Status != "merged" {
+		t.Errorf("PR status = %q, want merged", pr.Status)
+	}
+}
+
+// TestConcurrentApprovals_AllMergeIntoMain fires N approvals for distinct tasks
+// in one project simultaneously and asserts every merge landed on main (no lost
+// updates) — exercising the per-project merge serialisation.
+func TestConcurrentApprovals_AllMergeIntoMain(t *testing.T) {
+	t.Parallel()
+	srv := newGitTestServer(t)
+	projectID, slug := makeProject(t, srv.BaseURL, "pr-concurrent")
+	seedMainBranch(t, srv.BaseURL, slug)
+
+	const n = 4
+	taskIDs := make([]string, n)
+	prIDs := make([]string, n)
+	for i := 0; i < n; i++ {
+		taskID := makeTask(t, srv.BaseURL, projectID)
+		workerID := registerAgent(t, srv.BaseURL, fmt.Sprintf("pc-worker-%d", i), []string{"worker"})
+		branch := claimTask(t, srv.BaseURL, taskID, workerID)
+		_, clonePath := cloneRepo(t, srv.BaseURL+"/git/"+slug+".git")
+		commitAndPush(t, clonePath, fmt.Sprintf("file%d.go", i), fmt.Sprintf("package p%d", i), branch)
+
+		reviewerID := registerAgent(t, srv.BaseURL, fmt.Sprintf("pc-rev-%d", i), []string{"reviewer"})
+		claimTask(t, srv.BaseURL, taskID, reviewerID)
+		apiJSON(t, "POST", srv.BaseURL, "/api/tasks/"+taskID+"/reviews",
+			map[string]interface{}{"status": "approved", "body": "ok"}, nil)
+		apiJSON(t, "POST", srv.BaseURL, "/api/tasks/"+taskID+"/pull-requests", nil, nil)
+		taskIDs[i] = taskID
+		prIDs[i] = firstPRID(t, srv, taskID)
+	}
+
+	// Approve all PRs concurrently. Use raw HTTP — apiJSON is not goroutine-safe.
+	var wg sync.WaitGroup
+	statuses := make([]int, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			url := srv.BaseURL + "/api/tasks/" + taskIDs[i] + "/pull-requests/" + prIDs[i] + "/approve"
+			resp, err := http.Post(url, "application/json",
+				bytes.NewReader([]byte(`{"decider_id":"human","body":"ship"}`)))
+			if err != nil {
+				statuses[i] = -1
+				return
+			}
+			statuses[i] = resp.StatusCode
+			resp.Body.Close()
+		}(i)
+	}
+	wg.Wait()
+
+	repoPath := bareRepoPath(srv, projectID)
+	for i := 0; i < n; i++ {
+		if statuses[i] != 200 {
+			t.Errorf("approve %d: status = %d, want 200", i, statuses[i])
+		}
+		if s := getTask(t, srv, taskIDs[i]).Status; s != db.TaskStatusCompleted {
+			t.Errorf("task %d status = %q, want COMPLETED", i, s)
+		}
+		if _, err := git.ReadFile(repoPath, "main", fmt.Sprintf("file%d.go", i)); err != nil {
+			t.Errorf("file%d.go missing on main after concurrent merge (lost update?): %v", i, err)
+		}
 	}
 }
 

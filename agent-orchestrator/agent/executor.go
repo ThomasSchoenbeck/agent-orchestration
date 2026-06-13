@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"agent-orchestrator/api"
 	"agent-orchestrator/db"
+	"agent-orchestrator/git"
 	"agent-orchestrator/llm"
 	"agent-orchestrator/logging"
 	"agent-orchestrator/router"
@@ -168,13 +170,14 @@ func (e *Executor) Run(ctx context.Context, task *db.Task) {
 		return
 	}
 
-	// Merge-review tasks (claimed from AWAITING_MERGE, now in MERGING) submit a
-	// PR decision instead of a generic result. The approve/reject endpoint drives
-	// the task's final state, so we do not submit a result here.
+	// Merge-review tasks (claimed from AWAITING_MERGE, now in MERGING) bring the
+	// feature branch up to date with main (resolving conflicts with the LLM when
+	// needed) and then record a PR decision. The approve/reject endpoint drives
+	// the task's final state, so we do not submit a result here. runMergePhase
+	// posts its own comments.
 	if isMergeReviewTask(task) && execErr == nil {
-		e.submitMergeDecision(ctx, task, result)
+		e.runMergePhase(ctx, task, result)
 		tlog.InfoCtx(ctx, "merge-review task done (tokens=%d duration=%dms)", stats.totalTokens, durationMs)
-		e.postCompletionComment(ctx, task, result, db.TaskStatusMerging, stats.totalTokens, durationMs, nil)
 		return
 	}
 
@@ -263,33 +266,95 @@ func isMergeReviewTask(task *db.Task) bool {
 	return task.Status == db.TaskStatusMerging
 }
 
-// submitMergeDecision turns the LLM verdict into an approve/reject decision on
-// the task's open pull request. Reuses the review verdict extraction: an
-// "approved" status approves (and triggers the merge); anything else rejects.
-func (e *Executor) submitMergeDecision(ctx context.Context, task *db.Task, result map[string]interface{}) {
+// maxConflictResolveAttempts bounds how many times the LLM is asked to resolve
+// the remaining merge conflicts before the task falls back to revision.
+const maxConflictResolveAttempts = 2
+
+// maxBranchUpdateAttempts bounds how many times the merge phase re-fetches and
+// re-merges main into the feature branch. A second pass catches main advancing
+// while the (slow) LLM conflict resolution ran; the loop converges to UpToDate
+// once main stops moving, and gives up (→ revision) if it cannot.
+const maxBranchUpdateAttempts = 3
+
+// runMergePhase performs the final merge phase for a task in MERGING. A negative
+// review verdict rejects immediately. Otherwise it brings the feature branch up
+// to date with the PR base (main), resolving conflicts with the LLM when needed,
+// pushes the updated branch, and approves the PR so the server-side merge lands
+// cleanly. An unresolved conflict (or any git failure) routes the task back to
+// AWAITING_REVISION with an explanatory comment.
+func (e *Executor) runMergePhase(ctx context.Context, task *db.Task, result map[string]interface{}) {
 	tlog := e.log.ForTask(task.ID).ForProject(task.ProjectID)
 	verdict, body := extractReviewFromResult(result)
 
-	prs, err := e.client.ListPRs(ctx, task.ID)
-	if err != nil {
-		tlog.WarnCtx(ctx, "ListPRs failed: %v", err)
-		return
-	}
-	var pr *db.PullRequest
-	for _, p := range prs {
-		if p.Status == "open" {
-			pr = p
-			break
-		}
-	}
-	if pr == nil {
-		tlog.WarnCtx(ctx, "no open PR found for merge-review task")
+	if verdict != "approved" {
+		e.decidePR(ctx, task, "reject", body)
 		return
 	}
 
-	decision := "approve"
-	if verdict != "approved" {
-		decision = "reject"
+	// Without a worktree we cannot update the branch — fall back to a plain
+	// approval and let the server-side merge decide.
+	if task.WorktreePath == "" {
+		e.decidePR(ctx, task, "approve", body)
+		return
+	}
+
+	// Bring the feature branch up to date with main, re-fetching after each
+	// conflict resolution so we catch main advancing while the (slow) LLM
+	// resolution ran. The loop converges once main stops moving (UpToDate).
+	for attempt := 0; ; attempt++ {
+		status, base, err := e.updateFeatureBranch(ctx, task)
+		if err != nil {
+			tlog.WarnCtx(ctx, "branch update failed: %v", err)
+			e.commentAndReject(ctx, task, fmt.Sprintf("Branch update failed: %v", err))
+			return
+		}
+		if status.Clean {
+			break
+		}
+		if attempt >= maxBranchUpdateAttempts-1 {
+			tlog.WarnCtx(ctx, "branch still conflicting after %d attempts", maxBranchUpdateAttempts)
+			e.commentAndReject(ctx, task, conflictComment(status.ConflictPaths))
+			return
+		}
+		if !e.resolveConflictsWithLLM(ctx, task, base, status.ConflictPaths) {
+			e.commentAndReject(ctx, task, conflictComment(status.ConflictPaths))
+			return
+		}
+		// Loop: re-fetch in case main moved during resolution.
+	}
+
+	// Branch is up to date — push it so the server's approve merges cleanly,
+	// then approve.
+	if err := PushBranch(task.WorktreePath, task.Branch, "", ""); err != nil {
+		tlog.WarnCtx(ctx, "push updated feature branch failed: %v", err)
+		e.commentAndReject(ctx, task, fmt.Sprintf("Failed to push merged branch: %v", err))
+		return
+	}
+	e.decidePR(ctx, task, "approve", body)
+}
+
+// updateFeatureBranch fetches origin and merges the PR base (defaulting to main)
+// into the feature branch in the agent's clone. Returns the merge status and the
+// resolved base branch name.
+func (e *Executor) updateFeatureBranch(ctx context.Context, task *db.Task) (*git.MergeStatus, string, error) {
+	base := "main"
+	if pr := e.openPRFor(ctx, task); pr != nil && pr.Base != "" {
+		base = pr.Base
+	}
+	if err := FetchOrigin(task.WorktreePath, "", ""); err != nil {
+		return nil, base, err
+	}
+	status, err := git.MergeIntoFeature(task.WorktreePath, "origin/"+base, task.Branch)
+	return status, base, err
+}
+
+// decidePR submits an approve/reject decision on the task's open PR.
+func (e *Executor) decidePR(ctx context.Context, task *db.Task, decision, body string) {
+	tlog := e.log.ForTask(task.ID).ForProject(task.ProjectID)
+	pr := e.openPRFor(ctx, task)
+	if pr == nil {
+		tlog.WarnCtx(ctx, "no open PR found for merge-review task")
+		return
 	}
 	if err := e.client.SubmitPRDecision(ctx, task.ID, pr.ID, decision, body, e.agentID); err != nil {
 		tlog.WarnCtx(ctx, "SubmitPRDecision (%s) failed: %v", decision, err)
@@ -298,11 +363,173 @@ func (e *Executor) submitMergeDecision(ctx context.Context, task *db.Task, resul
 	tlog.InfoCtx(ctx, "submitted merge decision %q on PR %s", decision, pr.ID)
 }
 
+// commentAndReject posts an explanatory comment then rejects the PR, which
+// routes the task back to AWAITING_REVISION.
+func (e *Executor) commentAndReject(ctx context.Context, task *db.Task, msg string) {
+	if err := e.client.PostComment(ctx, task.ID, msg, e.agentID); err != nil {
+		e.log.ForTask(task.ID).WarnCtx(ctx, "post conflict comment failed: %v", err)
+	}
+	e.decidePR(ctx, task, "reject", msg)
+}
+
+// openPRFor returns the task's open pull request, or nil when there is none.
+func (e *Executor) openPRFor(ctx context.Context, task *db.Task) *db.PullRequest {
+	prs, err := e.client.ListPRs(ctx, task.ID)
+	if err != nil {
+		return nil
+	}
+	for _, p := range prs {
+		if p.Status == "open" {
+			return p
+		}
+	}
+	return nil
+}
+
+// conflictComment formats the revision comment listing unresolved conflicts.
+func conflictComment(paths []string) string {
+	return "Merge into main hit conflicts the agent could not resolve in:\n- " +
+		strings.Join(paths, "\n- ") + "\n\nReturning the task for revision."
+}
+
+const conflictResolveSystemPrompt = `You are resolving git merge conflicts. Each file below contains conflict markers:
+<<<<<<< feature
+(the feature branch version)
+=======
+(the main branch version)
+>>>>>>> main
+
+For every file, produce the fully resolved file content with ALL conflict markers
+removed, combining both sides so the code is correct and complete. Do not leave
+any <<<<<<<, =======, or >>>>>>> markers.
+
+Respond ONLY with each resolved file in exactly this format, and nothing else:
+=== FILE: <path> ===
+<full resolved file content>
+=== END FILE ===`
+
+// resolveConflictsWithLLM asks the LLM to rewrite the conflicted files (which
+// currently hold conflict markers) until no markers remain, up to a bounded
+// number of attempts. On success it records the two-parent merge commit on the
+// feature branch and returns true. Returns false when conflicts remain, the LLM
+// is unavailable, or the commit fails.
+func (e *Executor) resolveConflictsWithLLM(ctx context.Context, task *db.Task, base string, paths []string) bool {
+	tlog := e.log.ForTask(task.ID).ForProject(task.ProjectID)
+	route, err := e.rtr.RouteByRole(effectiveRole(task))
+	if err != nil || route == nil || route.Provider == nil {
+		tlog.WarnCtx(ctx, "no provider to resolve conflicts: %v", err)
+		return false
+	}
+
+	remaining := paths
+	for attempt := 0; attempt < maxConflictResolveAttempts && len(remaining) > 0; attempt++ {
+		prompt := e.buildConflictPrompt(task.WorktreePath, remaining)
+		if prompt == "" {
+			break
+		}
+		resp, callErr := route.Provider.Chat(ctx, llm.ChatRequest{
+			Model: route.Model,
+			Messages: []llm.Message{
+				{Role: "system", Content: conflictResolveSystemPrompt},
+				{Role: "user", Content: prompt},
+			},
+		})
+		if callErr != nil {
+			tlog.WarnCtx(ctx, "conflict-resolve LLM call failed: %v", callErr)
+			return false
+		}
+		for path, content := range parseResolvedFiles(resp.Content) {
+			full := filepath.Join(task.WorktreePath, filepath.FromSlash(path))
+			if werr := os.WriteFile(full, []byte(content), 0o644); werr != nil {
+				tlog.WarnCtx(ctx, "write resolved %q failed: %v", path, werr)
+				return false
+			}
+		}
+		remaining = filesWithConflictMarkers(task.WorktreePath, paths)
+	}
+
+	if len(remaining) > 0 {
+		tlog.WarnCtx(ctx, "conflicts unresolved after %d attempts: %v", maxConflictResolveAttempts, remaining)
+		return false
+	}
+
+	sha, err := git.CommitMerge(task.WorktreePath, task.Branch, "origin/"+base,
+		fmt.Sprintf("Merge %s into %s (conflicts resolved by agent)\n", base, task.Branch),
+		"Agent", "agent@system")
+	if err != nil {
+		tlog.WarnCtx(ctx, "commit of resolved merge failed: %v", err)
+		return false
+	}
+	tlog.InfoCtx(ctx, "resolved merge conflicts and committed %s", sha)
+	return true
+}
+
+// buildConflictPrompt reads the conflicted files from the worktree and renders
+// the user prompt for the resolver. Files that no longer hold markers (or are
+// unreadable) are skipped. Returns "" when nothing remains to resolve.
+func (e *Executor) buildConflictPrompt(worktreePath string, paths []string) string {
+	var sb strings.Builder
+	included := 0
+	for _, p := range paths {
+		data, err := os.ReadFile(filepath.Join(worktreePath, filepath.FromSlash(p)))
+		if err != nil || !hasConflictMarkers(string(data)) {
+			continue
+		}
+		sb.WriteString("=== FILE: ")
+		sb.WriteString(p)
+		sb.WriteString(" ===\n")
+		sb.Write(data)
+		sb.WriteString("\n=== END FILE ===\n\n")
+		included++
+	}
+	if included == 0 {
+		return ""
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// parseResolvedFiles extracts path → content pairs from the resolver response
+// in the "=== FILE: <path> ===\n...\n=== END FILE ===" format.
+func parseResolvedFiles(content string) map[string]string {
+	out := map[string]string{}
+	matches := resolvedFileRe.FindAllStringSubmatch(content, -1)
+	for _, m := range matches {
+		path := strings.TrimSpace(m[1])
+		body := strings.Trim(m[2], "\n")
+		if path != "" {
+			out[path] = body
+		}
+	}
+	return out
+}
+
+var resolvedFileRe = regexp.MustCompile(`(?s)=== FILE: (.*?) ===\n(.*?)\n=== END FILE ===`)
+
+// filesWithConflictMarkers returns the subset of paths whose worktree contents
+// still contain conflict markers (or could not be read).
+func filesWithConflictMarkers(worktreePath string, paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		data, err := os.ReadFile(filepath.Join(worktreePath, filepath.FromSlash(p)))
+		if err != nil || hasConflictMarkers(string(data)) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// hasConflictMarkers reports whether s contains a git conflict start marker.
+func hasConflictMarkers(s string) bool {
+	return strings.Contains(s, "<<<<<<< ") ||
+		strings.Contains(s, "\n=======\n") && strings.Contains(s, ">>>>>>> ")
+}
+
 // effectiveRole is the role whose configuration (model, prompt, tools) drives
-// execution. For a review the reviewing agent's role is task.ReviewRole rather
-// than the task's own (implementation) role.
+// execution. For a review or a merge the agent acts under task.ReviewRole rather
+// than the task's own (implementation) role — the reviewer persona owns both the
+// REVIEWING and MERGING phases (handles_review + handles_merge).
 func effectiveRole(task *db.Task) string {
-	if task.Status == db.TaskStatusReviewing && task.ReviewRole != "" {
+	if (task.Status == db.TaskStatusReviewing || task.Status == db.TaskStatusMerging) && task.ReviewRole != "" {
 		return task.ReviewRole
 	}
 	return task.Role

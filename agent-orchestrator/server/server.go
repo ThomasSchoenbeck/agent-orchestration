@@ -48,6 +48,12 @@ type Server struct {
 	portPool   *workflow.PortPool
 	agentSup   *workflow.AgentSupervisor // Feature 8: server-managed co-located agents
 
+	// mergeMu guards mergeLocks; each project has its own mutex serialising the
+	// read-merge-write of its main ref so concurrent PR approvals cannot lose a
+	// merge. Different projects merge in parallel.
+	mergeMu    sync.Mutex
+	mergeLocks map[string]*sync.Mutex
+
 	// Cached debug-mode flag — re-read from DB at most once per 30 s.
 	debugMu        sync.RWMutex
 	debugModeValue bool
@@ -87,6 +93,7 @@ func New(cfg *config.Config, database *db.Database, llmReg *llm.Registry) *Serve
 		pollStatus: make(map[string]*AgentPollStatus),
 		storage:    stor,
 		portPool:   workflow.NewPortPool(poolStart, poolSize),
+		mergeLocks: make(map[string]*sync.Mutex),
 	}
 	serverURL := fmt.Sprintf("http://localhost:%d", cfg.Server.Port)
 	s.agentSup = workflow.NewAgentSupervisor(database, serverURL, cfg.Agents.MaxManagedAgents)

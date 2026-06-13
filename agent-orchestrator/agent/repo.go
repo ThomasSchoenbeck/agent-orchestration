@@ -75,6 +75,53 @@ func CloneOrOpen(repoURL, localPath, branchName string) error {
 	return nil
 }
 
+// FetchOrigin updates the worktree's remote-tracking refs from origin so the
+// agent sees the latest main before merging. remoteURL overrides the configured
+// origin (remote-agent mode); token is used for HTTP basic-auth. An
+// already-up-to-date fetch is not an error.
+func FetchOrigin(worktreePath, remoteURL, token string) error {
+	repo, err := gogit.PlainOpen(worktreePath)
+	if err != nil {
+		return fmt.Errorf("repo.FetchOrigin open %q: %w", worktreePath, err)
+	}
+	opts := &gogit.FetchOptions{RemoteName: "origin", Force: true}
+	if remoteURL != "" {
+		opts.RemoteURL = remoteURL
+	}
+	if token != "" {
+		opts.Auth = &http.BasicAuth{Username: "git", Password: token}
+	}
+	if err := repo.Fetch(opts); err != nil && err != gogit.NoErrAlreadyUpToDate {
+		return fmt.Errorf("repo.FetchOrigin fetch: %w", err)
+	}
+	return nil
+}
+
+// PushBranch force-pushes the named local branch to origin. remoteURL overrides
+// the push destination (remote-agent mode); token is used for HTTP basic-auth.
+func PushBranch(worktreePath, branch, remoteURL, token string) error {
+	repo, err := gogit.PlainOpen(worktreePath)
+	if err != nil {
+		return fmt.Errorf("repo.PushBranch open %q: %w", worktreePath, err)
+	}
+	ref := plumbing.NewBranchReferenceName(branch)
+	refSpec := gogitconfig.RefSpec("+" + ref.String() + ":" + ref.String())
+	opts := &gogit.PushOptions{
+		RefSpecs: []gogitconfig.RefSpec{refSpec},
+		Force:    true,
+	}
+	if remoteURL != "" {
+		opts.RemoteURL = remoteURL
+	}
+	if token != "" {
+		opts.Auth = &http.BasicAuth{Username: "git", Password: token}
+	}
+	if err := repo.Push(opts); err != nil && err != gogit.NoErrAlreadyUpToDate {
+		return fmt.Errorf("repo.PushBranch push %q: %w", branch, err)
+	}
+	return nil
+}
+
 // CommitAndPush stages all changes in the worktree at worktreePath, creates a
 // commit with the given message and author identity, then pushes the current
 // branch to the named remote (usually "origin" for colocated, or the HTTP

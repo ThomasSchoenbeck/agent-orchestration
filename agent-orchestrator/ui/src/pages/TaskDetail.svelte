@@ -449,6 +449,18 @@
     }
   }
 
+  // isConflictComment flags the comments an agent posts when it cannot land a
+  // merge (unresolved conflicts, branch-update or push failure) so the UI can
+  // highlight them.
+  function isConflictComment(c) {
+    if (!c || c.author_type !== "agent" || typeof c.body !== "string") return false
+    return (
+      c.body.startsWith("Merge into main hit conflicts") ||
+      c.body.startsWith("Branch update failed:") ||
+      c.body.startsWith("Failed to push merged branch:")
+    )
+  }
+
   function startEdit() {
     editBuf = {
       title: task.payload?.title ?? "",
@@ -1007,6 +1019,7 @@
       {:else}
         <div class="flex flex-col gap-3 mb-4">
           {#each comments as c (c.id)}
+            {@const conflict = isConflictComment(c)}
             <div class="group flex gap-3">
               <!-- Avatar dot -->
               <div
@@ -1031,6 +1044,11 @@
                   {#if c.author_type === "agent" && c.author_name && c.author_role}
                     <span class="text-[10px] text-gray-600">{c.author_role}</span>
                   {/if}
+                  {#if conflict}
+                    <span
+                      class="text-[10px] px-1.5 py-0.5 rounded font-medium uppercase tracking-wide bg-rose-900 text-rose-300"
+                    >⚠ Merge conflict</span>
+                  {/if}
                   <span class="text-[10px] text-gray-600 font-mono">
                     {new Date(c.created_at).toLocaleString([], {
                       month: "short",
@@ -1045,7 +1063,11 @@
                     aria-label="Delete comment">×</button
                   >
                 </div>
-                <div class="text-xs text-gray-300 whitespace-pre-wrap break-words">{c.body}</div>
+                <div
+                  class="text-xs whitespace-pre-wrap break-words {conflict
+                    ? 'text-rose-200 border border-rose-800 bg-rose-950 rounded p-2'
+                    : 'text-gray-300'}"
+                >{c.body}</div>
               </div>
             </div>
           {/each}

@@ -58,7 +58,7 @@ vi.mock('../lib/stores.js', () => ({
   },
 }))
 
-import { getTask, getTaskRoles, updateTask, createPR } from '../lib/api.js'
+import { getTask, getTaskRoles, updateTask, createPR, listComments } from '../lib/api.js'
 
 const ROLES = [
   { id: 'w1', value: 'worker', label: 'Worker' },
@@ -136,5 +136,29 @@ describe('TaskDetail — Create PR button (reviewer-owned merge)', () => {
     render(TaskDetail, { props: { taskId: 't1' } })
     await waitFor(() => screen.getByTitle('Review setup'))
     expect(screen.queryByRole('button', { name: 'Create PR' })).toBeNull()
+  })
+})
+
+describe('TaskDetail — conflict comment surfacing (E1)', () => {
+  const comment = (body) => ({
+    id: 'c1', author_type: 'agent', author_role: 'reviewer', author_name: 'rev',
+    body, created_at: new Date().toISOString(),
+  })
+
+  it('badges an agent merge-conflict comment', async () => {
+    getTask.mockResolvedValue(baseTask({ status: 'AWAITING_REVISION' }))
+    listComments.mockResolvedValue([
+      comment('Merge into main hit conflicts the agent could not resolve in:\n- a.go\n\nReturning the task for revision.'),
+    ])
+    render(TaskDetail, { props: { taskId: 't1' } })
+    expect(await screen.findByText('⚠ Merge conflict')).toBeTruthy()
+  })
+
+  it('does not badge a normal comment', async () => {
+    getTask.mockResolvedValue(baseTask({ status: 'AWAITING_REVISION' }))
+    listComments.mockResolvedValue([comment('Looks good to me.')])
+    render(TaskDetail, { props: { taskId: 't1' } })
+    await waitFor(() => screen.getByTitle('Review setup'))
+    expect(screen.queryByText('⚠ Merge conflict')).toBeNull()
   })
 })
