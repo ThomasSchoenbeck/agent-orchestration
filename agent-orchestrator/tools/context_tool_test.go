@@ -76,7 +76,7 @@ func TestSaveContext_MissingProjectID(t *testing.T) {
 	callToolExpectError(t, reg, "save_context", map[string]interface{}{
 		"type":    "note",
 		"content": "orphan context",
-	})
+	}, "project_id")
 }
 
 func TestSaveContext_MissingContent(t *testing.T) {
@@ -84,7 +84,7 @@ func TestSaveContext_MissingContent(t *testing.T) {
 	callToolExpectError(t, reg, "save_context", map[string]interface{}{
 		"project_id": projectID,
 		"type":       "note",
-	})
+	}, "content")
 }
 
 func TestSaveContext_DifferentTypes(t *testing.T) {
@@ -187,14 +187,14 @@ func TestQueryContext_MissingProjectID(t *testing.T) {
 	reg, _ := openContextToolDB(t)
 	callToolExpectError(t, reg, "query_context", map[string]interface{}{
 		"query": "test",
-	})
+	}, "project_id")
 }
 
 func TestQueryContext_MissingQuery(t *testing.T) {
 	reg, projectID := openContextToolDB(t)
 	callToolExpectError(t, reg, "query_context", map[string]interface{}{
 		"project_id": projectID,
-	})
+	}, "query")
 }
 
 func TestSaveAndQuery_RoundTrip(t *testing.T) {

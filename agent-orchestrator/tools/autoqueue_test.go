@@ -55,7 +55,7 @@ func TestCompleteProject_RejectedWithOpenTasks(t *testing.T) {
 		t.Fatalf("CreateTask: %v", err)
 	}
 
-	callToolExpectError(t, reg, "complete_project", map[string]interface{}{"project_id": projectID})
+	callToolExpectError(t, reg, "complete_project", map[string]interface{}{"project_id": projectID}, "non-terminal")
 }
 
 func TestCompleteProject_RequiresCreatesTasks(t *testing.T) {

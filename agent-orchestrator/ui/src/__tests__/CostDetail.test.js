@@ -6,6 +6,14 @@ import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import CostDetail from '../pages/CostDetail.svelte'
 
+describe('CostDetail — error handling', () => {
+  it('shows an inline error when the breakdown fails to load', async () => {
+    getCostBreakdown.mockRejectedValue(new Error('cost load failed'))
+    render(CostDetail)
+    expect(await screen.findByText('cost load failed')).toBeInTheDocument()
+  })
+})
+
 vi.mock('../lib/api.js', () => ({
   getCostBreakdown:     vi.fn(),
   getCostFilterOptions: vi.fn(),

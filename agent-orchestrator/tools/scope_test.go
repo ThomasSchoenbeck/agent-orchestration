@@ -181,7 +181,7 @@ func TestCompleteProject_RequiresScopeSatisfied(t *testing.T) {
 	}
 
 	// Not satisfied yet (feature is planned).
-	callToolExpectError(t, reg, "complete_project", map[string]interface{}{"project_id": projectID})
+	callToolExpectError(t, reg, "complete_project", map[string]interface{}{"project_id": projectID}, "scope not satisfied")
 
 	feat.Status = db.FeatStatusDone
 	if err := d.UpdateFeature(ctx, feat); err != nil {

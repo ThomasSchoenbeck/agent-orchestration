@@ -7,6 +7,21 @@ import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import { tick } from 'svelte'
 import Agents from '../pages/Agents.svelte'
+import { get } from 'svelte/store'
+import { toasts } from '../lib/stores.js'
+
+describe('Agents — load error handling', () => {
+  it('shows an error toast when agents fail to load', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('boom')))
+    render(Agents)
+    await waitFor(() => {
+      const errs = get(toasts).filter(
+        (t) => t.type === 'error' && /Failed to load agents/.test(t.message)
+      )
+      expect(errs.length).toBeGreaterThan(0)
+    })
+  })
+})
 
 const AGENTS = [
   { id: 'a1', name: 'worker-1', roles: ['worker', 'reviewer'], status: 'online' },

@@ -117,7 +117,7 @@ func TestListTasks_FilterByRole(t *testing.T) {
 
 func TestListTasks_MissingProjectID(t *testing.T) {
 	_, reg, _ := openTaskToolDB(t)
-	callToolExpectError(t, reg, "list_tasks", map[string]interface{}{})
+	callToolExpectError(t, reg, "list_tasks", map[string]interface{}{}, "project_id")
 }
 
 // --- submit_task_result ---
@@ -208,7 +208,7 @@ func TestSubmitTaskResult_MissingTaskID(t *testing.T) {
 	callToolExpectError(t, reg, "submit_task_result", map[string]interface{}{
 		"status": db.TaskStatusCompleted,
 		"output": "done",
-	})
+	}, "task_id")
 }
 
 // --- get_next_task ---
@@ -262,5 +262,5 @@ func TestGetNextTask_MultipleRoles(t *testing.T) {
 
 func TestGetNextTask_MissingRoles(t *testing.T) {
 	_, reg, _ := openTaskToolDB(t)
-	callToolExpectError(t, reg, "get_next_task", map[string]interface{}{})
+	callToolExpectError(t, reg, "get_next_task", map[string]interface{}{}, "roles")
 }

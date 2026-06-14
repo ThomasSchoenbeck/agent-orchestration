@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"agent-orchestrator/agent"
@@ -68,12 +69,17 @@ func callTool(t *testing.T, reg *tools.Registry, name string, args map[string]in
 	return m
 }
 
-// callToolExpectError invokes a tool expecting it to return an error.
-func callToolExpectError(t *testing.T, reg *tools.Registry, name string, args map[string]interface{}) error {
+// callToolExpectError invokes a tool expecting it to return an error whose
+// message contains wantSubstr. Asserting the substring (not merely that *an*
+// error occurred) prevents a test from passing on the wrong error.
+func callToolExpectError(t *testing.T, reg *tools.Registry, name string, args map[string]interface{}, wantSubstr string) error {
 	t.Helper()
 	_, err := reg.Execute(context.Background(), name, args)
 	if err == nil {
 		t.Fatalf("expected error from tool %q, got nil", name)
+	}
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Fatalf("tool %q error = %q, want substring %q", name, err.Error(), wantSubstr)
 	}
 	return err
 }
@@ -226,7 +232,7 @@ func TestPlanProject_InvalidProject(t *testing.T) {
 		"project_id":    "nonexistent-project-id",
 		"architecture":  "N/A",
 		"work_packages": `[{"title":"x","description":"y"}]`,
-	})
+	}, "plan_project")
 }
 
 func TestPlanProject_BadJSON(t *testing.T) {
@@ -235,7 +241,7 @@ func TestPlanProject_BadJSON(t *testing.T) {
 		"project_id":    projectID,
 		"architecture":  "N/A",
 		"work_packages": `not valid json {{{`,
-	})
+	}, "JSON")
 }
 
 func TestPlanProject_EmptyWorkPackages(t *testing.T) {
@@ -244,7 +250,7 @@ func TestPlanProject_EmptyWorkPackages(t *testing.T) {
 		"project_id":    projectID,
 		"architecture":  "N/A",
 		"work_packages": `[]`,
-	})
+	}, "must not be empty")
 }
 
 func TestPlanProject_MissingProjectID(t *testing.T) {
@@ -252,7 +258,7 @@ func TestPlanProject_MissingProjectID(t *testing.T) {
 	callToolExpectError(t, reg, "plan_project", map[string]interface{}{
 		"architecture":  "N/A",
 		"work_packages": `[{"title":"x","description":"y"}]`,
-	})
+	}, "project_id")
 }
 
 func TestPlanProject_ArchitectureStoredAsContext(t *testing.T) {
@@ -337,7 +343,7 @@ func TestCreateWorkPackage_MissingTitle(t *testing.T) {
 	callToolExpectError(t, reg, "create_work_package", map[string]interface{}{
 		"project_id":  projectID,
 		"description": "Missing title",
-	})
+	}, "title")
 }
 
 func TestCreateWorkPackage_MissingProjectID(t *testing.T) {
@@ -345,7 +351,7 @@ func TestCreateWorkPackage_MissingProjectID(t *testing.T) {
 	callToolExpectError(t, reg, "create_work_package", map[string]interface{}{
 		"title":       "Task",
 		"description": "Missing project",
-	})
+	}, "project_id")
 }
 
 func TestCreateWorkPackage_PayloadContainsTitleAndDescription(t *testing.T) {

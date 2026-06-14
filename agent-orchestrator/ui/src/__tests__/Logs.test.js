@@ -22,6 +22,8 @@ vi.mock('../lib/time.js', () => ({
 }))
 
 import { listLogs, listChatLog, listSettings, listAgentLogs, listAllTaskLogs } from '../lib/api.js'
+import { get } from 'svelte/store'
+import { toasts } from '../lib/stores.js'
 
 const LOGS = [
   {
@@ -50,6 +52,19 @@ beforeEach(() => {
   listSettings.mockResolvedValue([])
   listAgentLogs.mockResolvedValue([])
   listAllTaskLogs.mockResolvedValue([])
+})
+
+describe('Logs — error handling', () => {
+  it('adds an error toast when the initial system-log load fails', async () => {
+    listLogs.mockRejectedValue(new Error('boom'))
+    render(Logs)
+    await waitFor(() => {
+      const errs = get(toasts).filter(
+        (t) => t.type === 'error' && /Failed to load logs/.test(t.message)
+      )
+      expect(errs.length).toBeGreaterThan(0)
+    })
+  })
 })
 
 describe('Logs — rendering', () => {

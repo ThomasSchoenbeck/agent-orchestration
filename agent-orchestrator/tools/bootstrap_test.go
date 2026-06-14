@@ -66,7 +66,7 @@ func TestBootstrapProject_InvalidProject(t *testing.T) {
 	callToolExpectError(t, reg, "bootstrap_project", map[string]interface{}{
 		"project_id":   "nonexistent",
 		"requirements": `[{"title":"x","body":"y"}]`,
-	})
+	}, "bootstrap_project")
 }
 
 func TestBootstrapProject_EmptyScope(t *testing.T) {
@@ -74,12 +74,12 @@ func TestBootstrapProject_EmptyScope(t *testing.T) {
 	// No requirements or features → error.
 	callToolExpectError(t, reg, "bootstrap_project", map[string]interface{}{
 		"project_id": projectID,
-	})
+	}, "at least one requirement")
 }
 
 func TestBootstrapProject_MissingProjectID(t *testing.T) {
 	_, reg, _ := openPlanDB(t)
 	callToolExpectError(t, reg, "bootstrap_project", map[string]interface{}{
 		"requirements": `[{"title":"x","body":"y"}]`,
-	})
+	}, "project_id")
 }

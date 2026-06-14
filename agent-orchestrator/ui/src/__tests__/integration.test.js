@@ -311,9 +311,11 @@ describe.skipIf(SKIP)('Logs API', () => {
 })
 
 // ── WebSocket /ws/chat ────────────────────────────────────────────────────────
-// Skipped: the /ws/chat endpoint has not been implemented in the Go server yet.
-describe.skip('WebSocket chat', () => {
-  it('accepts connection and echoes/responds to messages', () => {
+// Uses the protocol-level ping/pong frame so the test is deterministic and does
+// not depend on an LLM provider being configured on the server. This exercises
+// the upgrade handshake, the read loop, and WSMessage envelope handling.
+describe.skipIf(SKIP)('WebSocket chat', () => {
+  it('upgrades the connection and answers a ping with a pong', () => {
     return new Promise((resolve, reject) => {
       const wsUrl = BASE.replace(/^http/, 'ws') + '/ws/chat'
       const ws    = new globalThis.WebSocket(wsUrl)
@@ -324,7 +326,7 @@ describe.skip('WebSocket chat', () => {
       }, 9000)
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ role: 'user', content: 'ping integration test' }))
+        ws.send(JSON.stringify({ type: 'ping' }))
       }
 
       ws.onmessage = (evt) => {
@@ -332,12 +334,10 @@ describe.skip('WebSocket chat', () => {
         ws.close()
         try {
           const data = JSON.parse(evt.data)
-          expect(data).toHaveProperty('content')
+          expect(data.type).toBe('pong')
           resolve()
-        } catch {
-          // plain-text response is also acceptable
-          expect(typeof evt.data).toBe('string')
-          resolve()
+        } catch (err) {
+          reject(err)
         }
       }
 

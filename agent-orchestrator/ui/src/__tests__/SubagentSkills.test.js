@@ -5,6 +5,21 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import SubagentSkills from '../pages/SubagentSkills.svelte'
+import { get } from 'svelte/store'
+import { toasts } from '../lib/stores.js'
+
+describe('SubagentSkills — error handling', () => {
+  it('shows an error toast when skills fail to load', async () => {
+    listSubagentSkills.mockRejectedValue(new Error('boom'))
+    render(SubagentSkills)
+    await waitFor(() => {
+      const errs = get(toasts).filter(
+        (t) => t.type === 'error' && /Failed to load subagent skills/.test(t.message)
+      )
+      expect(errs.length).toBeGreaterThan(0)
+    })
+  })
+})
 
 vi.mock('../lib/api.js', () => ({
   listSubagentSkills:   vi.fn(),

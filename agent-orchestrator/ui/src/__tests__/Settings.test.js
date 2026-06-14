@@ -9,6 +9,21 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import Settings from '../pages/Settings.svelte'
+import { get } from 'svelte/store'
+import { toasts } from '../lib/stores.js'
+
+describe('Settings — error handling', () => {
+  it('shows an error toast when settings fail to load', async () => {
+    listSettings.mockRejectedValue(new Error('boom'))
+    render(Settings)
+    await waitFor(() => {
+      const errs = get(toasts).filter(
+        (t) => t.type === 'error' && /Failed to load settings/.test(t.message)
+      )
+      expect(errs.length).toBeGreaterThan(0)
+    })
+  })
+})
 
 // ── Mock the api module ───────────────────────────────────────────────────────
 vi.mock('../lib/api.js', () => ({
