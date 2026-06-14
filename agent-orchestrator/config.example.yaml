@@ -112,12 +112,22 @@ role_definitions:
     provider: openai               # provider name this role routes to
     model_override: gpt-4o         # specific model string (optional)
     capabilities: [creates_tasks]
-    allowed_tools: [list_tasks, create_work_package, plan_project, query_context, save_context, task_comment]
+    allowed_tools: [list_tasks, create_work_package, plan_project, query_context, save_context, task_comment, run_subagent, checkpoint_session]
     context_include: []            # context types to inject (empty = all)
     context_exclude: []            # context types to omit
-    system_prompt: |               # optional persona; Go text/template syntax supported
-      You are the orchestrator for {{.ProjectName}}. Break requirements into
-      work packages and coordinate the worker and reviewer agents.
+    # system_prompt is used verbatim at runtime (no template substitution); the
+    # {{...}} syntax only resolves in the Roles-page "Preview" with vars you supply.
+    system_prompt: |
+      You are the orchestrator. Break requirements into work packages and
+      coordinate the worker and reviewer agents.
+    # resync_prompt: task description handed to this role on a project "Re-sync
+    # scope". Empty → built-in default. Editable later on the Roles page.
+    resync_prompt: |
+      Read the project description, then reconcile the project scope against it:
+      1. Use sync_scope (or bootstrap_project if the project has no requirements/features yet)
+         to create or update the requirements and features that the description implies.
+      2. Create work packages (create_work_package / plan_project) for the work needed to
+         complete the project, assigning each an appropriate role so other agents can pick them up.
     temperature: 0.7
     max_tokens: 4096
 
@@ -127,7 +137,7 @@ role_definitions:
     provider: anthropic
     model_override: claude-sonnet-4-6
     capabilities: [handles_review, handles_merge]
-    allowed_tools: [read_file, list_files, task_comment]
+    allowed_tools: [read_file, list_files, task_comment, run_subagent, checkpoint_session]
 
   - name: worker
     label: Worker
@@ -135,7 +145,71 @@ role_definitions:
     provider: openai
     model_override: gpt-4o
     capabilities: []
-    allowed_tools: [read_file, write_file, list_files, apply_diff, run_tests, task_comment]
+    allowed_tools: [read_file, write_file, list_files, apply_diff, run_tests, task_comment, run_subagent, checkpoint_session]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Skills — persona specializations agents compose on top of their role(s).
+# Seeded into the DB on first run (idempotent by name; Skills page wins after).
+# Each adds a prompt fragment, context include/exclude globs, and optional tools.
+# Omit this section to seed the built-in set (backend / frontend / infra).
+# ─────────────────────────────────────────────────────────────────────────────
+skills:
+  - name: backend
+    label: Backend
+    description: Server-side, APIs, data, business logic.
+    prompt_fragment: "You specialize in backend development: server-side logic, APIs, data modeling, and persistence. Favor correctness, clear error handling, and tests."
+    context_include: ["server/**", "db/**", "api/**"]
+    context_exclude: []
+    allowed_tools: []              # extra tools added on top of the role's set
+  - name: frontend
+    label: Frontend
+    description: UI, components, client-side state.
+    prompt_fragment: "You specialize in frontend development: UI components, layout, accessibility, and client-side state. Keep components simple and match the existing design system."
+    context_include: ["ui/**"]
+  - name: infra
+    label: Infrastructure
+    description: Build, CI/CD, deployment, configuration.
+    prompt_fragment: "You specialize in infrastructure: build pipelines, CI/CD, deployment, and configuration. Prefer reproducible, minimal, well-documented changes."
+    context_include: ["deploy/**", "config/**", ".github/**"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Subagent Skills — spawnable units of work an agent delegates to via the
+# run_subagent tool. A subagent runs its own focused tool loop and returns only a
+# summary, so its heavy context never enters the main agent's history.
+# Seeded on first run (idempotent by name; Subagents page wins after).
+#   {{instructions}} in prompt_template is replaced with the main agent's ask.
+#   tool_allowlist must NOT include run_subagent — subagents cannot nest.
+#   max_rounds bounds the subagent loop; max_tokens 0 = no extra cap.
+# Omit this section to seed the built-in set (investigate_codebase / code_subtask).
+# ─────────────────────────────────────────────────────────────────────────────
+subagent_skills:
+  - name: investigate_codebase
+    label: Investigate Codebase
+    description: Read-only exploration of a checked-out codebase; returns a findings summary.
+    tool_allowlist: [read_file, list_files, search_files]
+    max_rounds: 8
+    max_tokens: 0
+    context_include: []
+    context_exclude: []
+    prompt_template: |
+      You are a focused investigation subagent operating on a checked-out codebase. You have read-only tools (read_file, list_files, search_files). Use search_files to locate files by name or by content (regex) before reading them. Investigate exactly what is asked, reading only the files you need. Do not attempt to modify anything.
+
+      Investigation request:
+      {{instructions}}
+
+      When you have gathered enough, STOP calling tools and reply with a single concise findings summary: the key files, how they fit together, and direct answers to the request. This summary is the only thing returned to the main agent, so make it self-contained.
+  - name: code_subtask
+    label: Code Subtask
+    description: Read/write coding subtask over the shared worktree; returns a summary of changes made.
+    tool_allowlist: [read_file, write_file, apply_diff, list_files, run_tests, search_files]
+    max_rounds: 12
+    prompt_template: |
+      You are a focused coding subagent operating on the main agent's checked-out worktree. You may read and modify files (read_file, write_file, apply_diff, list_files, search_files) and run tests (run_tests). Make only the changes the task describes; do not commit or push — the main agent owns version control.
+
+      Coding task:
+      {{instructions}}
+
+      When done, STOP calling tools and reply with a concise summary of exactly what you changed (files touched and why) and the test outcome. This summary is the only thing returned to the main agent, so make it self-contained.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Agent Templates — server-managed, spawn N co-located agents per template.
@@ -211,7 +285,7 @@ agents:
 
   # Instances launched by "agent-orchestrator agents --config config.yaml".
   server_url: "http://localhost:8080"
-  workdir: ".agent-work"           # root for agent checkouts → {workdir}/{name}
+  workdir: "./data/agent-work"           # root for agent checkouts → {workdir}/{name}
   definitions:
     - name: worker-1
       roles: [worker]
@@ -252,14 +326,6 @@ storage:
 merge:
   squash: true          # collapse the branch into a single commit on main. Default: true
   delete_branch: true   # delete the source branch after a successful merge. Default: true
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Orchestrator — seeds platform_settings at startup (UI changes take precedence).
-# ─────────────────────────────────────────────────────────────────────────────
-orchestrator:
-  # Task description handed to the orchestrator on a project "Re-sync scope".
-  # Empty → built-in default. Editable later on the Settings page (DB wins).
-  resync_prompt: ""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Task Types — seeded into the DB on first run (Settings page wins afterwards).

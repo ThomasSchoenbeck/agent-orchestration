@@ -101,6 +101,24 @@ func (c *ServerClient) ListSkills(ctx context.Context) ([]*db.SkillDefinition, e
 	return skills, nil
 }
 
+// ListSubagentSkills fetches all subagent skills from the server (Subagents feature).
+func (c *ServerClient) ListSubagentSkills(ctx context.Context) ([]*db.SubagentSkill, error) {
+	var skills []*db.SubagentSkill
+	if err := c.get(ctx, "/api/subagent-skills", &skills); err != nil {
+		return nil, err
+	}
+	return skills, nil
+}
+
+// CreateAgentSession persists a main-loop checkpoint (Session checkpoint feature).
+func (c *ServerClient) CreateAgentSession(ctx context.Context, s *db.AgentSession) (*db.AgentSession, error) {
+	var out db.AgentSession
+	if err := c.post(ctx, "/api/agent-sessions", s, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Heartbeat sends a heartbeat for the given agent ID and returns the server's
 // control response (desired state + live roles/skills). Feature 7.
 func (c *ServerClient) Heartbeat(ctx context.Context, agentID string) (*api.HeartbeatResponse, error) {

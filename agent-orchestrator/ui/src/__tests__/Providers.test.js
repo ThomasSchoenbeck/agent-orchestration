@@ -18,11 +18,12 @@ vi.mock('../lib/api.js', () => ({
   getMetricsCosts: vi.fn(),
   getCostBreakdown: vi.fn(),
   listRoles:      vi.fn(),
+  getMetaTools:   vi.fn(),
 }))
 
 import {
   listProviders, createProvider, updateProvider, listRoles, getMetrics, getMetricsCosts,
-  getCostBreakdown,
+  getCostBreakdown, getMetaTools,
 } from '../lib/api.js'
 
 const ROLES = [
@@ -37,6 +38,11 @@ const PROVIDER = {
   enabled: true, roles: ['planner'], config: {},
 }
 
+const TOOLS = [
+  { value: 'read_file',  label: 'read_file',  description: 'Read a file' },
+  { value: 'write_file', label: 'write_file', description: 'Write a file' },
+]
+
 beforeEach(() => {
   listProviders.mockResolvedValue([PROVIDER])
   listRoles.mockResolvedValue(ROLES)
@@ -45,6 +51,7 @@ beforeEach(() => {
   getMetrics.mockResolvedValue(null)
   getMetricsCosts.mockResolvedValue(null)
   getCostBreakdown.mockResolvedValue([])
+  getMetaTools.mockResolvedValue(TOOLS)
 })
 
 describe('Providers — cost breakdown (F6)', () => {
@@ -221,5 +228,62 @@ describe('Providers — roles multi-select', () => {
         expect.objectContaining({ roles: ['executor'] })
       )
     )
+  })
+})
+
+// ── Form: tool allowlist multi-select (predefined list) ─────────────────────────
+describe('Providers — tool allowlist multi-select', () => {
+  const toolInput = () => screen.getByPlaceholderText('write_file, read_file, list_files…')
+
+  it('offers predefined tools from getMetaTools as suggestions', async () => {
+    render(Providers)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByText('+ Add Provider'))
+    await waitFor(() => expect(toolInput()).toBeInTheDocument())
+
+    await user.click(toolInput())
+    await user.type(toolInput(), 'read')
+    // suggestion from the predefined list shows in the dropdown listbox
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: /read_file/ })).toBeInTheDocument()
+    )
+  })
+
+  it('includes selected tools as an array in the create body config', async () => {
+    render(Providers)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByText('+ Add Provider'))
+    await waitFor(() => expect(toolInput()).toBeInTheDocument())
+
+    await user.type(screen.getByPlaceholderText('e.g. my-openai'), 'test-provider')
+    await user.type(toolInput(), 'read_file{Enter}')
+    await user.click(screen.getByText('Create'))
+
+    await waitFor(() =>
+      expect(createProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({ tool_allowlist: ['read_file'] }),
+        })
+      )
+    )
+  })
+
+  it('pre-fills existing tool allowlist as tags when editing', async () => {
+    listProviders.mockResolvedValue([
+      { ...PROVIDER, config: { tool_allowlist: ['write_file'] } },
+    ])
+    render(Providers)
+    await waitFor(() => screen.getByText('my-openai'))
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Edit'))
+    // The MultiSelect hides its placeholder once it has a value, so wait on the
+    // edit form (Update button) rather than the tool input's placeholder.
+    await waitFor(() => expect(screen.getByText('Update')).toBeInTheDocument())
+
+    // the existing tool appears as a removable tag with an aria-labelled remove button
+    expect(screen.getByLabelText('Remove write_file')).toBeInTheDocument()
   })
 })

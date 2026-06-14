@@ -17,7 +17,7 @@ vi.mock('../lib/api.js', () => ({
   getMetaTools:      vi.fn(),
 }))
 
-import { listRoles, listProviders, createRole, getMetaTools } from '../lib/api.js'
+import { listRoles, listProviders, createRole, updateRole, getMetaTools } from '../lib/api.js'
 
 const PROVIDERS = [
   { id: 'p1', name: 'gpt-4o',   roles: ['planner', 'reviewer'], enabled: true },
@@ -141,6 +141,45 @@ describe('Roles — provider dropdown filtering', () => {
       const select = screen.getByRole('combobox')
       expect(select.value).toBe('p1')
     })
+  })
+})
+
+describe('Roles — re-sync prompt (creates_tasks only)', () => {
+  const ORCH = {
+    id: 'r9', name: 'orchestrator', label: 'Orchestrator', description: '',
+    provider_id: 'p1', model_override: '', system_prompt: '',
+    context_include: [], context_exclude: [], capabilities: ['creates_tasks'],
+    allowed_tools: [], temperature: 0.7, max_tokens: 4096, resync_prompt: 'old prompt',
+    enabled: true,
+  }
+
+  it('shows the re-sync prompt field when editing a creates_tasks role and saves it', async () => {
+    listRoles.mockResolvedValue([ORCH])
+    render(Roles)
+    await waitFor(() => screen.getByText('Orchestrator'))
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Edit'))
+
+    const ta = await screen.findByDisplayValue('old prompt')
+    await user.clear(ta)
+    await user.type(ta, 'new resync prompt')
+    await user.click(screen.getByRole('button', { name: 'Update' }))
+
+    await waitFor(() => expect(updateRole).toHaveBeenCalled())
+    const body = updateRole.mock.calls[0][1]
+    expect(body.resync_prompt).toBe('new resync prompt')
+  })
+
+  it('hides the re-sync prompt field for a role without creates_tasks', async () => {
+    listRoles.mockResolvedValue([ROLE]) // ROLE has no creates_tasks capability
+    render(Roles)
+    await waitFor(() => screen.getByText('Planner'))
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Edit'))
+
+    expect(screen.queryByText('Re-sync prompt')).not.toBeInTheDocument()
   })
 })
 

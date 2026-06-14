@@ -79,30 +79,13 @@ func (d *Database) ListSettings(ctx context.Context) ([]*Setting, error) {
 	return settings, rows.Err()
 }
 
-// SettingKeyResyncPrompt is the platform-settings key holding the task
-// description used for project scope re-sync.
-const SettingKeyResyncPrompt = "orchestrator.resync_prompt"
-
-// DefaultResyncPrompt is the built-in re-sync task description used when neither
-// the config file nor the DB provides one.
+// DefaultResyncPrompt is the built-in re-sync task description used when the
+// orchestrator role definition does not set its own resync_prompt.
 const DefaultResyncPrompt = "Read the project description, then reconcile the project scope against it:\n" +
 	"1. Use sync_scope (or bootstrap_project if the project has no requirements/features yet) " +
 	"to create or update the requirements and features that the description implies.\n" +
 	"2. Create work packages (create_work_package / plan_project) for the work needed to " +
 	"complete the project, assigning each an appropriate role so other agents can pick them up."
-
-// SeedResyncPrompt seeds the orchestrator re-sync prompt. A non-empty
-// configPrompt (from the config file) takes precedence over the built-in
-// default on first run. Existing DB values are preserved (DB wins after first
-// seed), matching the retention-settings behaviour.
-func (d *Database) SeedResyncPrompt(ctx context.Context, configPrompt string) error {
-	value := configPrompt
-	if value == "" {
-		value = DefaultResyncPrompt
-	}
-	return d.SeedSetting(ctx, SettingKeyResyncPrompt, value,
-		"Task description handed to the orchestrator on project scope re-sync")
-}
 
 // Resilience setting keys, consumed by agents to wrap LLM providers with
 // retry / circuit-breaker / failover behaviour.

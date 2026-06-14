@@ -34,6 +34,7 @@
     allowed_tools:   [],
     temperature:     0.7,
     max_tokens:      4096,
+    resync_prompt:   '',
     enabled:         true,
   })
   let form = $state(emptyForm())
@@ -126,6 +127,7 @@
       allowed_tools:   Array.isArray(r.allowed_tools) ? [...r.allowed_tools] : [],
       temperature:     r.temperature ?? 0.7,
       max_tokens:      r.max_tokens ?? 4096,
+      resync_prompt:   r.resync_prompt ?? '',
       enabled:         r.enabled,
     }
     editingId      = r.id
@@ -149,6 +151,7 @@
       allowed_tools:   form.allowed_tools,
       temperature:     parseFloat(form.temperature) || 0.7,
       max_tokens:      parseInt(form.max_tokens, 10) || 4096,
+      resync_prompt:   form.resync_prompt,
       enabled:         form.enabled,
     }
     try {
@@ -406,6 +409,21 @@
           </div>
         {/if}
       </div>
+
+      <!-- Re-sync prompt — only meaningful for roles that create tasks (orchestrator). -->
+      {#if form.capabilities.includes('creates_tasks')}
+        <div class="border-t border-surface-600 pt-3">
+          <p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Re-sync prompt</p>
+          <p class="text-xs text-gray-500 mb-2">Task description handed to this role when a project's "Re-sync scope" runs. Leave blank to use the built-in default.</p>
+          <textarea
+            class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
+                   text-gray-200 font-mono placeholder-gray-500 focus:outline-none focus:border-accent
+                   resize-y min-h-24"
+            placeholder="Read the project description, then reconcile scope and create work packages…"
+            bind:value={form.resync_prompt}
+          ></textarea>
+        </div>
+      {/if}
 
       <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
         <input type="checkbox" bind:checked={form.enabled} class="accent-accent" />

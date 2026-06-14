@@ -1,4 +1,0 @@
-# NOTE: This file is not used. The active configuration lives in the Go module:
-#   agent-orchestrator/config.yaml          (default local setup)
-#   agent-orchestrator/config.example.yaml  (all options, documented)
-# (Created here by mistake; this environment does not allow deleting it.)

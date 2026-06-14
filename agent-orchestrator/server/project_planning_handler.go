@@ -74,9 +74,9 @@ func (s *Server) handleAgentProjectDetail(w http.ResponseWriter, r *http.Request
 }
 
 // handleProjectResync enqueues an orchestrator task that reconciles a project's
-// scope against its description. The task description comes from the
-// orchestrator.resync_prompt platform setting (seeded from config / default),
-// so the guidance is owned by the server rather than the UI button.
+// scope against its description. The task description comes from the orchestrator
+// role definition's resync_prompt (seeded from config), falling back to the
+// built-in DefaultResyncPrompt when unset.
 //
 // POST /api/projects/{id}/resync
 func (s *Server) handleProjectResync(w http.ResponseWriter, r *http.Request, projectID string) {
@@ -90,14 +90,16 @@ func (s *Server) handleProjectResync(w http.ResponseWriter, r *http.Request, pro
 		return
 	}
 
-	description := db.DefaultResyncPrompt
-	if setting, err := s.db.GetSetting(ctx, db.SettingKeyResyncPrompt); err == nil && setting.Value != "" {
-		description = setting.Value
-	}
-
+	// The re-sync task description now lives on the orchestrator role definition;
+	// fall back to the built-in default when unset or the role doesn't exist. The
+	// same lookup yields the role id used for the task assignment.
 	role := "orchestrator"
-	if resolved, rerr := s.db.ResolveRoleRefs(ctx, []string{role}); rerr == nil {
-		role = resolved[0]
+	description := db.DefaultResyncPrompt
+	if rd, err := s.db.GetRoleDefinitionByName(ctx, role); err == nil {
+		role = rd.ID
+		if rd.ResyncPrompt != "" {
+			description = rd.ResyncPrompt
+		}
 	}
 
 	task := &db.Task{

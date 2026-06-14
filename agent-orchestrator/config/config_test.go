@@ -70,6 +70,51 @@ task_types:
 	}
 }
 
+func TestLoad_SkillsAndSubagentSkills(t *testing.T) {
+	yaml := minimalValidYAML + `
+skills:
+  - name: backend
+    label: Backend
+    description: Server-side.
+    prompt_fragment: "Focus on backend."
+    context_include: ["server/**", "db/**"]
+    allowed_tools: [run_tests]
+
+subagent_skills:
+  - name: investigate_codebase
+    label: Investigate Codebase
+    tool_allowlist: [read_file, list_files, search_files]
+    max_rounds: 8
+    prompt_template: "Investigate {{instructions}} then summarize."
+`
+	cfg, err := config.Load(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Skills) != 1 {
+		t.Fatalf("Skills len = %d, want 1", len(cfg.Skills))
+	}
+	if cfg.Skills[0].Name != "backend" || cfg.Skills[0].PromptFragment != "Focus on backend." {
+		t.Errorf("Skills[0] = %+v", cfg.Skills[0])
+	}
+	if len(cfg.Skills[0].ContextInclude) != 2 || len(cfg.Skills[0].AllowedTools) != 1 {
+		t.Errorf("Skills[0] slices = %+v", cfg.Skills[0])
+	}
+	if len(cfg.SubagentSkills) != 1 {
+		t.Fatalf("SubagentSkills len = %d, want 1", len(cfg.SubagentSkills))
+	}
+	sa := cfg.SubagentSkills[0]
+	if sa.Name != "investigate_codebase" || sa.MaxRounds != 8 {
+		t.Errorf("SubagentSkills[0] = %+v", sa)
+	}
+	if len(sa.ToolAllowlist) != 3 || sa.ToolAllowlist[2] != "search_files" {
+		t.Errorf("SubagentSkills[0].ToolAllowlist = %v", sa.ToolAllowlist)
+	}
+	if !strings.Contains(sa.PromptTemplate, "{{instructions}}") {
+		t.Errorf("prompt_template should retain the placeholder: %q", sa.PromptTemplate)
+	}
+}
+
 func TestLoad_Valid(t *testing.T) {
 	path := writeTemp(t, minimalValidYAML)
 	cfg, err := config.Load(path)

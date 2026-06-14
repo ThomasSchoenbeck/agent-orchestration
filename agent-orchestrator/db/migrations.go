@@ -320,6 +320,35 @@ CREATE TABLE IF NOT EXISTS skill_definitions (
     updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Subagent skills (Subagents feature): spawnable units of work delegated via run_subagent
+CREATE TABLE IF NOT EXISTS subagent_skills (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE,
+    label           TEXT NOT NULL DEFAULT '',
+    description     TEXT NOT NULL DEFAULT '',
+    prompt_template TEXT NOT NULL DEFAULT '',
+    tool_allowlist  TEXT NOT NULL DEFAULT '[]',
+    context_include TEXT NOT NULL DEFAULT '[]',
+    context_exclude TEXT NOT NULL DEFAULT '[]',
+    max_rounds      INTEGER NOT NULL DEFAULT 8,
+    max_tokens      INTEGER NOT NULL DEFAULT 0,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Agent sessions (Session checkpoint feature): persisted main-loop checkpoints
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id         TEXT PRIMARY KEY,
+    task_id    TEXT NOT NULL,
+    agent_id   TEXT NOT NULL DEFAULT '',
+    summary    TEXT NOT NULL DEFAULT '',
+    messages   TEXT NOT NULL DEFAULT '[]',
+    round      INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_task ON agent_sessions(task_id);
+
 -- Pull requests (Feature 2): merge gate opened by reviewer, decided by deployer/human
 CREATE TABLE IF NOT EXISTS pull_requests (
     id            TEXT PRIMARY KEY,
@@ -612,6 +641,12 @@ func (d *Database) applyColumnMigrations() error {
 		{
 			name: "add_output_cost_to_metrics",
 			sql:  "ALTER TABLE metrics ADD COLUMN output_cost REAL NOT NULL DEFAULT 0",
+		},
+		// Resync prompt moved from the orchestrator.resync_prompt platform setting
+		// onto the role definition (used by the orchestrator/creates_tasks role).
+		{
+			name: "add_resync_prompt_to_agent_role_definitions",
+			sql:  "ALTER TABLE agent_role_definitions ADD COLUMN resync_prompt TEXT NOT NULL DEFAULT ''",
 		},
 	}
 

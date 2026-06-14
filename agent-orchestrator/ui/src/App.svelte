@@ -8,6 +8,7 @@
   import AgentDetail   from './pages/AgentDetail.svelte'
   import Roles         from './pages/Roles.svelte'
   import Skills        from './pages/Skills.svelte'
+  import SubagentSkills from './pages/SubagentSkills.svelte'
   import Providers     from './pages/Providers.svelte'
   import CostDetail    from './pages/CostDetail.svelte'
   import Logs          from './pages/Logs.svelte'
@@ -20,6 +21,7 @@
     { id: 'agents',    label: 'Agents',    icon: '🤖' },
     { id: 'roles',     label: 'Roles',     icon: '🎭' },
     { id: 'skills',    label: 'Skills',    icon: '🧩' },
+    { id: 'subagents', label: 'Subagents', icon: '🛰️' },
     { id: 'providers', label: 'Providers', icon: '🔌' },
     { id: 'logs',      label: 'Logs',      icon: '📋' },
     { id: 'chat',      label: 'Chat',      icon: '💬' },
@@ -73,6 +75,8 @@
       <Roles />
     {:else if $router.page === 'skills'}
       <Skills />
+    {:else if $router.page === 'subagents'}
+      <SubagentSkills />
     {:else if $router.page === 'providers'}
       <Providers />
     {:else if $router.page === 'costs'}

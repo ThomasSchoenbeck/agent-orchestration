@@ -1,0 +1,99 @@
+/**
+ * Component tests for src/pages/SubagentSkills.svelte
+ */
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, waitFor, within } from '@testing-library/svelte'
+import userEvent from '@testing-library/user-event'
+import SubagentSkills from '../pages/SubagentSkills.svelte'
+
+vi.mock('../lib/api.js', () => ({
+  listSubagentSkills:   vi.fn(),
+  createSubagentSkill:  vi.fn(),
+  updateSubagentSkill:  vi.fn(),
+  deleteSubagentSkill:  vi.fn(),
+  seedSubagentSkills:   vi.fn(),
+  getMetaTools:         vi.fn(),
+}))
+
+import {
+  listSubagentSkills, createSubagentSkill, deleteSubagentSkill,
+  seedSubagentSkills, getMetaTools,
+} from '../lib/api.js'
+
+const SKILL = {
+  id: 's1', name: 'investigate_codebase', label: 'Investigate Codebase',
+  description: 'Read-only exploration', prompt_template: 'Investigate {{instructions}}',
+  tool_allowlist: ['read_file', 'list_files'],
+  context_include: [], context_exclude: [], max_rounds: 8, enabled: true,
+}
+
+beforeEach(() => {
+  listSubagentSkills.mockResolvedValue([SKILL])
+  createSubagentSkill.mockResolvedValue({ id: 's2', ...SKILL, name: 'new_one' })
+  deleteSubagentSkill.mockResolvedValue({})
+  seedSubagentSkills.mockResolvedValue({ seeded: 2 })
+  getMetaTools.mockResolvedValue([
+    { value: 'read_file', label: 'read_file' },
+    { value: 'write_file', label: 'write_file' },
+    { value: 'run_subagent', label: 'run_subagent' },
+  ])
+})
+
+describe('SubagentSkills — rendering', () => {
+  it('shows page heading', () => {
+    render(SubagentSkills)
+    expect(screen.getByText('Subagent Skills')).toBeInTheDocument()
+  })
+
+  it('renders the seeded skill after load', async () => {
+    render(SubagentSkills)
+    await waitFor(() => expect(screen.getByText('Investigate Codebase')).toBeInTheDocument())
+    expect(screen.getByText('investigate_codebase')).toBeInTheDocument()
+  })
+})
+
+describe('SubagentSkills — CRUD', () => {
+  it('creates a new subagent skill via the API helper', async () => {
+    render(SubagentSkills)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByText('New subagent skill'))
+    await waitFor(() => screen.getByPlaceholderText(/name \(slug/))
+
+    const nameInput = screen.getByPlaceholderText(/name \(slug/)
+    await user.clear(nameInput)
+    await user.type(nameInput, 'my_skill')
+    await user.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(createSubagentSkill).toHaveBeenCalled())
+    const payload = createSubagentSkill.mock.calls[0][0]
+    expect(payload.name).toBe('my_skill')
+    expect(payload.max_rounds).toBe(8)
+  })
+
+  it('calls the seed helper', async () => {
+    render(SubagentSkills)
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Seed starter set'))
+    await waitFor(() => expect(seedSubagentSkills).toHaveBeenCalled())
+  })
+})
+
+describe('SubagentSkills — no nesting', () => {
+  it('excludes run_subagent from the tool allowlist options', async () => {
+    render(SubagentSkills)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByText('New subagent skill'))
+    const input = await screen.findByPlaceholderText('tool allowlist')
+
+    // Open the dropdown so options render.
+    await user.click(input)
+
+    // Scope to the dropdown options (the heading text mentions run_subagent too).
+    const listbox = await screen.findByRole('listbox')
+    const opts = within(listbox)
+    expect(opts.getByText('read_file')).toBeInTheDocument()
+    expect(opts.queryByText('run_subagent')).not.toBeInTheDocument()
+  })
+})

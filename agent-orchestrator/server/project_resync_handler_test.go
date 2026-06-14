@@ -39,13 +39,15 @@ func TestProjectResync_CreatesOrchestratorTaskWithDefaultPrompt(t *testing.T) {
 	}
 }
 
-func TestProjectResync_UsesConfiguredPrompt(t *testing.T) {
+func TestProjectResync_UsesRoleResyncPrompt(t *testing.T) {
 	srv, database := newTestServer(t)
 	pid := newProject(t, database)
 
 	const custom = "custom re-sync instructions"
-	if err := database.SetSetting(context.Background(), db.SettingKeyResyncPrompt, custom, ""); err != nil {
-		t.Fatalf("SetSetting: %v", err)
+	if err := database.CreateRoleDefinition(context.Background(), &db.RoleDefinition{
+		Name: "orchestrator", Label: "Orchestrator", ResyncPrompt: custom, Enabled: true,
+	}); err != nil {
+		t.Fatalf("CreateRoleDefinition: %v", err)
 	}
 
 	w := do(t, srv, http.MethodPost, "/api/projects/"+pid+"/resync", nil)
@@ -67,31 +69,5 @@ func TestProjectResync_UnknownProject404(t *testing.T) {
 	w := do(t, srv, http.MethodPost, "/api/projects/does-not-exist/resync", nil)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected 404 for unknown project, got %d", w.Code)
-	}
-}
-
-func TestSeedResyncPrompt_DefaultAndPreserve(t *testing.T) {
-	_, database := newTestServer(t)
-	ctx := context.Background()
-
-	// First seed with empty config → default applied.
-	if err := database.SeedResyncPrompt(ctx, ""); err != nil {
-		t.Fatalf("SeedResyncPrompt: %v", err)
-	}
-	s, err := database.GetSetting(ctx, db.SettingKeyResyncPrompt)
-	if err != nil {
-		t.Fatalf("GetSetting: %v", err)
-	}
-	if s.Value != db.DefaultResyncPrompt {
-		t.Errorf("seeded value = %q, want default", s.Value)
-	}
-
-	// Re-seeding (e.g. with a config value) must not overwrite the existing row.
-	if err := database.SeedResyncPrompt(ctx, "from config"); err != nil {
-		t.Fatalf("SeedResyncPrompt re-seed: %v", err)
-	}
-	s, _ = database.GetSetting(ctx, db.SettingKeyResyncPrompt)
-	if s.Value != db.DefaultResyncPrompt {
-		t.Errorf("re-seed overwrote DB value: got %q", s.Value)
 	}
 }

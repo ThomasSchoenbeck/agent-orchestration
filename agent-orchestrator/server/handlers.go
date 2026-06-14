@@ -45,6 +45,11 @@ func (s *Server) registerHandlers() {
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	s.mux.HandleFunc("/api/skills/", s.handleSkillDetail)
 
+	s.mux.HandleFunc("/api/subagent-skills", s.handleSubagentSkills)
+	s.mux.HandleFunc("/api/subagent-skills/", s.handleSubagentSkillDetail)
+
+	s.mux.HandleFunc("/api/agent-sessions", s.handleAgentSessions)
+
 	s.mux.HandleFunc("/api/task-types", s.handleTaskTypes)
 	s.mux.HandleFunc("/api/task-types/", s.handleTaskTypeDetail)
 

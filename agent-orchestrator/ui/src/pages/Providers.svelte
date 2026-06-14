@@ -2,14 +2,16 @@
   import { onMount } from 'svelte'
   import {
     listProviders, createProvider, updateProvider, deleteProvider,
-    testProvider, getMetrics, getCostBreakdown, listRoles,
+    testProvider, getMetrics, getCostBreakdown, listRoles, getMetaTools,
   } from '../lib/api.js'
   import { toasts, router } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
+  import MultiSelect from '../components/MultiSelect.svelte'
 
   // ── State ─────────────────────────────────────────────────────────────────
   let providers   = $state([])
   let roles       = $state([])
+  let availTools  = $state([])
   let metrics     = $state(null)
   let loading     = $state(false)
 
@@ -42,12 +44,12 @@
   const emptyModel = () => ({
     name: '', roles: '', input_per_million: '', output_per_million: '',
     text_tool_calls: false, fold_system_into_user: false,
-    system_prefix: '', tool_allowlist: '',
+    system_prefix: '', tool_allowlist: [],
   })
 
   const emptyForm = () => ({
     name: '', type: 'openai_compatible', api_key: '',
-    base_url: '', model_name: '', enabled: true, deployment: '', text_tool_calls: false, fold_system_into_user: false, system_prefix: '', tool_allowlist: '',
+    base_url: '', model_name: '', enabled: true, deployment: '', text_tool_calls: false, fold_system_into_user: false, system_prefix: '', tool_allowlist: [],
     roles: [],
     models: [],  // per-model config rows
   })
@@ -88,12 +90,14 @@
   async function load() {
     loading = true
     try {
-      const [pr, mr] = await Promise.all([
+      const [pr, mr, ts] = await Promise.all([
         listProviders().catch(() => []),
         getMetrics().catch(() => null),
+        getMetaTools().catch(() => []),
       ])
-      providers = Array.isArray(pr) ? pr : (pr?.providers ?? [])
-      metrics   = mr
+      providers  = Array.isArray(pr) ? pr : (pr?.providers ?? [])
+      metrics    = mr
+      availTools = Array.isArray(ts) ? ts : []
     } catch (e) {
       toasts.error('Failed to load: ' + e.message)
     } finally {
@@ -121,7 +125,7 @@
       text_tool_calls:      p.config?.text_tool_calls ?? false,
       fold_system_into_user: p.config?.fold_system_into_user ?? false,
       system_prefix:         p.config?.system_prefix ?? '',
-      tool_allowlist:        (p.config?.tool_allowlist ?? []).join(', '),
+      tool_allowlist:        Array.isArray(p.config?.tool_allowlist) ? [...p.config.tool_allowlist] : [],
       roles:      p.roles ?? [],
       models:     (p.models ?? []).map(m => ({
         name:               m.name,
@@ -131,7 +135,7 @@
         text_tool_calls:    m.text_tool_calls ?? false,
         fold_system_into_user: m.fold_system_into_user ?? false,
         system_prefix:      m.system_prefix ?? '',
-        tool_allowlist:     (m.tool_allowlist ?? []).join(', '),
+        tool_allowlist:     Array.isArray(m.tool_allowlist) ? [...m.tool_allowlist] : [],
       })),
     }
     editingId = p.id
@@ -153,7 +157,7 @@
         ...(form.text_tool_calls ? { text_tool_calls: true } : {}),
         ...(form.fold_system_into_user ? { fold_system_into_user: true } : {}),
         ...(form.system_prefix ? { system_prefix: form.system_prefix } : {}),
-        ...(form.tool_allowlist.trim() ? { tool_allowlist: form.tool_allowlist.split(',').map(s => s.trim()).filter(Boolean) } : {}),
+        ...(form.tool_allowlist.length ? { tool_allowlist: form.tool_allowlist } : {}),
       },
     }
     if (form.api_key.trim()) body.api_key = form.api_key.trim()
@@ -167,7 +171,7 @@
         ...(m.text_tool_calls        ? { text_tool_calls: true }              : {}),
         ...(m.fold_system_into_user  ? { fold_system_into_user: true }        : {}),
         ...(m.system_prefix.trim()   ? { system_prefix: m.system_prefix.trim() } : {}),
-        ...(m.tool_allowlist.trim()  ? { tool_allowlist: m.tool_allowlist.split(',').map(s => s.trim()).filter(Boolean) } : {}),
+        ...(m.tool_allowlist.length  ? { tool_allowlist: m.tool_allowlist } : {}),
       }))
 
     try {
@@ -381,15 +385,9 @@
       <div>
         <label for="provider-tool-allowlist" class="text-xs text-gray-500 mb-1 block">
           Tool allowlist
-          <span class="text-gray-600 ml-1">(comma-separated — leave empty to send all tools; recommended for small models)</span>
+          <span class="text-gray-600 ml-1">(leave empty to send all tools; recommended for small models)</span>
         </label>
-        <input
-          id="provider-tool-allowlist"
-          class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
-                 text-gray-200 font-mono placeholder-gray-500 focus:outline-none focus:border-accent"
-          placeholder="write_file, read_file, list_files, apply_diff, run_tests"
-          bind:value={form.tool_allowlist}
-        />
+        <MultiSelect bind:value={form.tool_allowlist} options={availTools} placeholder="write_file, read_file, list_files…" />
       </div>
 
       <div>
@@ -498,11 +496,9 @@
                       />
                     </td>
                     <td class="px-2 py-1">
-                      <input
-                        class="w-36 bg-surface-700 rounded px-2 py-1 text-gray-200 font-mono focus:outline-none focus:ring-1 focus:ring-accent"
-                        placeholder="write_file, read_file"
-                        bind:value={m.tool_allowlist}
-                      />
+                      <div class="w-48">
+                        <MultiSelect bind:value={m.tool_allowlist} options={availTools} placeholder="write_file, read_file…" />
+                      </div>
                     </td>
                     <td class="px-2 py-1">
                       <button

@@ -28,6 +28,9 @@ describe('App — sidebar links', () => {
     const providers = screen.getByRole('link', { name: /Providers/ })
     expect(providers.getAttribute('href')).toBe('#/providers')
 
+    const subagents = screen.getByRole('link', { name: /Subagents/ })
+    expect(subagents.getAttribute('href')).toBe('#/subagents')
+
     const settings = screen.getByRole('link', { name: /Settings/ })
     expect(settings.getAttribute('href')).toBe('#/settings')
   })

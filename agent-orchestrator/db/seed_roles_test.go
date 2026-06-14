@@ -51,6 +51,23 @@ func TestSeedRoles_NewTaxonomy(t *testing.T) {
 	}
 }
 
+func TestSeedRoles_IncludeRunSubagent(t *testing.T) {
+	for _, r := range db.DefaultRoleDefinitions() {
+		for _, want := range []string{"run_subagent", "checkpoint_session"} {
+			var found bool
+			for _, tool := range r.AllowedTools {
+				if tool == want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("role %q default allowlist missing %q (got %v)", r.Name, want, r.AllowedTools)
+			}
+		}
+	}
+}
+
 func TestSeedRoles_Idempotent(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()

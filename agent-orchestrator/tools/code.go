@@ -21,6 +21,7 @@ func RegisterCodeTools(reg *Registry) error {
 		gitCloneTool(),
 		gitCheckoutTool(),
 		listFilesTool(),
+		searchFilesTool(),
 	}
 	for _, d := range defs {
 		if err := reg.Register(d); err != nil {

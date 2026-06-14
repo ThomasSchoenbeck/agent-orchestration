@@ -131,6 +131,17 @@ export const deleteSkill  = (id)     => del(`/api/skills/${id}`)
 export const seedSkills   = ()       => post('/api/skills/seed')
 export const getSkillsMeta = ()      => get('/api/meta/skills')
 
+// ── Subagent skills (Subagents feature) ────────────────────────────────────────
+export const listSubagentSkills  = ()      => get('/api/subagent-skills')
+export const getSubagentSkill    = (id)    => get(`/api/subagent-skills/${id}`)
+export const createSubagentSkill = (data)  => post('/api/subagent-skills', data)
+export const updateSubagentSkill = (id, d) => put(`/api/subagent-skills/${id}`, d)
+export const deleteSubagentSkill = (id)    => del(`/api/subagent-skills/${id}`)
+export const seedSubagentSkills  = ()      => post('/api/subagent-skills/seed')
+
+// ── Agent sessions (Session checkpoint feature) ────────────────────────────────
+export const listAgentSessions = (taskId) => get(`/api/agent-sessions?task_id=${encodeURIComponent(taskId)}`)
+
 // ── Logs ─────────────────────────────────────────────────────────────────────
 export const listLogs = (params = {}) => {
   const qs = new URLSearchParams(params).toString()

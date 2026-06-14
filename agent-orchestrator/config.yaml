@@ -12,17 +12,35 @@
 
 # ── LLM provider (local, OpenAI-compatible e.g. llama.cpp / LM Studio) ─────────
 providers:
-  - name: local
+  - name: llama.cpp
     type: openai_compatible
     base_url: http://localhost:7777/v1
-    api_key: ""                          # local servers need no key
+    api_key: "no-key"                          # local servers need no key
     models:
-      - name: gemma-4-E4B-it-Q8_0.gguf
+      - name: gemma-4-12b-it-IQ4_NL
         default: true                    # this provider's default model
-        roles: [orchestrator, reviewer, worker]
-        input_per_million: 0.05
-        output_per_million: 0.10
-        text_tool_calls: true            # small models: emit tool calls as text
+        roles: [reviewer]
+        input_per_million: 0.10
+        output_per_million: 0.30
+        context_window: 128000
+        text_tool_calls: false            # small models: emit tool calls as text
+        tool_allowlist: [read_files, list_files, search_files, task_comment]
+      - name: gemma-4-12b-it-IQ4_NL
+        default: true                    # this provider's default model
+        roles: [orchestrator]
+        input_per_million: 0.10
+        output_per_million: 0.30
+        context_window: 128000
+        text_tool_calls: false            # small models: emit tool calls as text
+        tool_allowlist: [task_comment, list_tasks, create_work_package, plan_project, query_context, save_context]
+      - name: gemma-4-12b-it-IQ4_NL
+        default: true                    # this provider's default model
+        roles: [worker]
+        input_per_million: 0.10
+        output_per_million: 0.30
+        context_window: 128000
+        text_tool_calls: false            # small models: emit tool calls as text
+        tool_allowlist: [read_files, write_files, list_files, search_files, apply_diff, run_tests, task_comment]
 
 # ── Role definitions (capabilities drive review / merge routing) ──────────────
 role_definitions:
@@ -30,25 +48,72 @@ role_definitions:
     label: Orchestrator
     description: Plans work and coordinates agents.
     provider: local
-    model_override: gemma-4-E4B-it-Q8_0.gguf
+    model_override: 
     capabilities: [creates_tasks]
-    allowed_tools: [list_tasks, create_work_package, plan_project, query_context, save_context, task_comment]
+    allowed_tools: [list_tasks, create_work_package, plan_project, query_context, save_context, task_comment, run_subagent, checkpoint_session]
 
   - name: reviewer
     label: Reviewer
     description: Reviews worker output and owns the merge gate (code review + merge-review).
     provider: local
-    model_override: gemma-4-E4B-it-Q8_0.gguf
+    model_override: 
     capabilities: [handles_review, handles_merge]
-    allowed_tools: [read_file, list_files, task_comment]
+    allowed_tools: [read_file, list_files, search_files, task_comment, run_subagent, checkpoint_session]
 
   - name: worker
     label: Worker
     description: Implements tasks — code, tests, docs.
     provider: local
-    model_override: gemma-4-E4B-it-Q8_0.gguf
+    model_override: 
     capabilities: []
-    allowed_tools: [read_file, write_file, list_files, apply_diff, run_tests, task_comment]
+    allowed_tools: [read_file, write_file, list_files, apply_diff, run_tests, task_comment, run_subagent, checkpoint_session]
+
+# ── Skills (persona specializations composed on top of roles) ─────────────────
+skills:
+  - name: backend
+    label: Backend
+    description: Server-side, APIs, data, business logic.
+    prompt_fragment: "You specialize in backend development: server-side logic, APIs, data modeling, and persistence. Favor correctness, clear error handling, and tests."
+    context_include: ["server/**", "db/**", "api/**"]
+  - name: frontend
+    label: Frontend
+    description: UI, components, client-side state.
+    prompt_fragment: "You specialize in frontend development: UI components, layout, accessibility, and client-side state. Keep components simple and match the existing design system."
+    context_include: ["ui/**"]
+  - name: infra
+    label: Infrastructure
+    description: Build, CI/CD, deployment, configuration.
+    prompt_fragment: "You specialize in infrastructure: build pipelines, CI/CD, deployment, and configuration. Prefer reproducible, minimal, well-documented changes."
+    context_include: ["deploy/**", "config/**", ".github/**"]
+
+# ── Subagent skills (spawnable units of work via run_subagent) ────────────────
+# {{instructions}} is replaced with the main agent's ask. tool_allowlist must
+# never include run_subagent (no nesting).
+subagent_skills:
+  - name: investigate_codebase
+    label: Investigate Codebase
+    description: Read-only exploration of a checked-out codebase; returns a findings summary.
+    tool_allowlist: [read_file, list_files, search_files]
+    max_rounds: 8
+    prompt_template: |
+      You are a focused investigation subagent operating on a checked-out codebase. You have read-only tools (read_file, list_files, search_files). Use search_files to locate files by name or by content (regex) before reading them. Investigate exactly what is asked, reading only the files you need. Do not attempt to modify anything.
+
+      Investigation request:
+      {{instructions}}
+
+      When you have gathered enough, STOP calling tools and reply with a single concise findings summary: the key files, how they fit together, and direct answers to the request. This summary is the only thing returned to the main agent, so make it self-contained.
+  - name: code_subtask
+    label: Code Subtask
+    description: Read/write coding subtask over the shared worktree; returns a summary of changes made.
+    tool_allowlist: [read_file, write_file, list_files, search_files, run_tests, apply_diff]
+    max_rounds: 12
+    prompt_template: |
+      You are a focused coding subagent operating on the main agent's checked-out worktree. You may read and modify files (read_file, write_file, apply_diff, list_files, search_files) and run tests (run_tests). Make only the changes the task describes; do not commit or push — the main agent owns version control.
+
+      Coding task:
+      {{instructions}}
+
+      When done, STOP calling tools and reply with a concise summary of exactly what you changed (files touched and why) and the test outcome. This summary is the only thing returned to the main agent, so make it self-contained.
 
 # ── Server-managed agent templates (spawn N co-located agents per role) ───────
 agent_templates:
@@ -74,9 +139,29 @@ database:
   type: sqlite
   path: ./data/orchestrator.db
 
+logs_db:
+  type: sqlite
+  path: ./data/logs.db
+
 agents:
   heartbeat_interval_sec: 30
   task_poll_interval_sec: 5
   task_timeout_sec: 300
   server_url: "http://localhost:8080"
-  workdir: ".agent-work"
+  workdir: "./data/agent-work"
+
+
+task_types:
+  - key: normal
+    label: Normal
+    branch_template: "feature/{slug}"
+    default: true
+  - key: bug
+    label: Bug
+    branch_template: "bug/{slug}"
+  - key: hotfix
+    label: Hotfix
+    branch_template: "hotfix/{slug}"
+  - key: release
+    label: Release
+    branch_template: "release/{slug}"

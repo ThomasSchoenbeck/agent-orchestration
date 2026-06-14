@@ -36,6 +36,44 @@ type Executor struct {
 	skillNames     []string
 	skillDefs      []*db.SkillDefinition
 	skillsResolved bool
+	// Subagents feature: enabled subagent skills (spawnable units of work),
+	// fetched lazily from the server and cached. Looked up by name when the
+	// main loop emits a run_subagent tool call.
+	subagentSkills         []*db.SubagentSkill
+	subagentSkillsResolved bool
+}
+
+// resolveSubagentSkills fetches the enabled subagent skills from the server once
+// and caches them. No-op when there is no client.
+func (e *Executor) resolveSubagentSkills(ctx context.Context) {
+	if e.subagentSkillsResolved || e.client == nil {
+		e.subagentSkillsResolved = true
+		return
+	}
+	all, err := e.client.ListSubagentSkills(ctx)
+	if err != nil {
+		e.log.Warn("could not fetch subagent skills: %v", err)
+		e.subagentSkillsResolved = true
+		return
+	}
+	for _, s := range all {
+		if s.Enabled {
+			e.subagentSkills = append(e.subagentSkills, s)
+		}
+	}
+	e.subagentSkillsResolved = true
+}
+
+// lookupSubagentSkill returns the enabled subagent skill with the given name,
+// resolving the cache on first use. Returns nil when not found/disabled.
+func (e *Executor) lookupSubagentSkill(ctx context.Context, name string) *db.SubagentSkill {
+	e.resolveSubagentSkills(ctx)
+	for _, s := range e.subagentSkills {
+		if s.Name == name {
+			return s
+		}
+	}
+	return nil
 }
 
 // resolveSkillDefs fetches the agent's skill definitions from the server once
@@ -618,6 +656,22 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			systemMsg += "\n\n" + frag
 		}
 	}
+	// Subagents: when run_subagent is available to this role, tell the model when
+	// to delegate context-heavy exploration. In text mode the tool docs already
+	// describe it, so only add the guidance for normal (API) tool-call mode.
+	if !route.TextToolCalls && systemMsg != "" {
+		al := e.resolvedToolAllowlist(route)
+		hasSubagent := len(al) == 0 // empty allowlist ⇒ all tools available
+		for _, n := range al {
+			if n == tools.SubagentToolName {
+				hasSubagent = true
+				break
+			}
+		}
+		if hasSubagent {
+			systemMsg += "\n\n" + subagentPromptFragment
+		}
+	}
 	if route.SystemPrefix != "" && systemMsg != "" {
 		systemMsg = route.SystemPrefix + "\n" + systemMsg
 	}
@@ -661,12 +715,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 		// known roles so the platform works out of the box without any config.
 		// Clearing the field in the UI restores the defaults, not "all tools".
 		// Feature 6: union in any tools the agent's skills add (role ⊕ skills).
-		baseTools := route.ToolAllowlist
-		if len(baseTools) == 0 {
-			baseTools = defaultToolsForRole(route.Role)
-		}
-		roleDef := &db.RoleDefinition{Name: route.Role, AllowedTools: baseTools}
-		allowlist := router.ResolveAgentPersona(roleDef, e.skillDefs).AllowedTools
+		allowlist := e.resolvedToolAllowlist(route)
 		if len(allowlist) > 0 {
 			allowed := make(map[string]bool, len(allowlist))
 			for _, name := range allowlist {
@@ -705,6 +754,10 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 	// error. After 3 such rounds we abort — the model is stuck.
 	consecutiveErrorRounds := 0
 	const maxConsecutiveErrorRounds = 3
+
+	// checkpointRequested is set when the model calls the checkpoint_session tool;
+	// it triggers the same compaction path as the automatic context-pressure check.
+	checkpointRequested := false
 
 	// LLM ↔ tool loop.
 	for round := 0; round < maxToolRounds; round++ {
@@ -806,33 +859,37 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 		roundHadSuccess := false
 		var textResults []string // used in text mode
 		for _, tc := range resp.ToolCalls {
-			// Inject repo_path for file tools when the LLM omitted it.
+			// Inject repo_path for file tools when the LLM omitted it (and strip an
+			// accidental worktree prefix from file_path). Shared with the subagent loop.
 			if task.WorktreePath != "" {
 				if tc.Arguments == nil {
 					tc.Arguments = make(map[string]interface{})
 				}
-				if _, ok := tc.Arguments["repo_path"]; !ok {
-					tc.Arguments["repo_path"] = task.WorktreePath
-				}
-				// Strip workspace prefix from file_path if the model erroneously
-				// included it (e.g. "data/worktrees/.../test.txt" → "test.txt").
-				if fp, ok := tc.Arguments["file_path"].(string); ok {
-					prefix := filepath.ToSlash(task.WorktreePath)
-					cleanFP := strings.TrimPrefix(strings.TrimPrefix(filepath.ToSlash(fp), prefix), "/")
-					if cleanFP != fp {
-						tc.Arguments["file_path"] = cleanFP
-					}
-				}
+				injectRepoPath(tc.Arguments, task.WorktreePath)
 			}
-			// Validate required arguments; give the model a specific error.
-			toolResultStr := validateToolArgs(e.tools, tc.Name, tc.Arguments)
-			if toolResultStr == "" {
-				result, jsonErr := e.tools.ExecuteJSON(ctx, tc.Name, tc.Arguments)
-				if jsonErr != nil {
-					tlog.Warn("tool %s error: %v", tc.Name, jsonErr)
-					toolResultStr = fmt.Sprintf(`{"error":%q}`, jsonErr.Error())
-				} else {
-					toolResultStr = result
+			// run_subagent: spawn a bounded nested loop and splice back only its
+			// summary. Token/cost folds into the task stats; the subagent transcript
+			// never enters this conversation.
+			var toolResultStr string
+			if tc.Name == tools.SubagentToolName {
+				toolResultStr = e.dispatchSubagent(ctx, tlog, *route, task, tc, &stats)
+			} else if tc.Name == tools.SessionToolName {
+				// Defer the actual checkpoint to the end of the round (after all
+				// tool results are in), then compact the history.
+				checkpointRequested = true
+				reason, _ := tc.Arguments["reason"].(string)
+				toolResultStr = fmt.Sprintf(`{"status":"checkpoint_scheduled","reason":%q}`, reason)
+			} else {
+				// Validate required arguments; give the model a specific error.
+				toolResultStr = validateToolArgs(e.tools, tc.Name, tc.Arguments)
+				if toolResultStr == "" {
+					result, jsonErr := e.tools.ExecuteJSON(ctx, tc.Name, tc.Arguments)
+					if jsonErr != nil {
+						tlog.Warn("tool %s error: %v", tc.Name, jsonErr)
+						toolResultStr = fmt.Sprintf(`{"error":%q}`, jsonErr.Error())
+					} else {
+						toolResultStr = result
+					}
 				}
 			}
 			if !strings.HasPrefix(toolResultStr, `{"error"`) {
@@ -874,6 +931,19 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			}
 		} else {
 			consecutiveErrorRounds = 0
+		}
+
+		// Session checkpoint: compact-and-continue on an explicit request
+		// (checkpoint_session tool) or when context usage crosses the threshold.
+		// Replaces the in-memory history with [system, summary]; the full
+		// pre-checkpoint messages are persisted as an AgentSession.
+		if checkpointRequested || shouldCheckpoint(contextUsed, contextMax) {
+			reason := "context_pressure"
+			if checkpointRequested {
+				reason = "requested"
+			}
+			messages = e.doCheckpoint(ctx, tlog, *route, task, messages, systemMsg, round, &stats, reason)
+			checkpointRequested = false
 		}
 	}
 
@@ -934,17 +1004,39 @@ func parseTextToolCalls(content string) []llm.ToolCall {
 // These act as the runtime fallback when no explicit allowlist is configured —
 // the platform works correctly out of the box without any setup.
 // Returning nil means send all tools (for unknown/custom roles).
+// subagentPromptFragment is appended to the system prompt when run_subagent is
+// available, telling the model when to delegate context-heavy work.
+const subagentPromptFragment = "Delegating subtasks: before reading large amounts of code yourself, " +
+	"delegate focused exploration to a subagent. Call run_subagent with skill=\"investigate_codebase\" " +
+	"and a clear, self-contained summary of what you need to find out. You will get back a concise " +
+	"digest instead of the raw files, keeping your own context small. Use this whenever a task starts " +
+	"on an unfamiliar or freshly checked-out codebase.\n\n" +
+	"If the conversation grows very long and the remaining work can proceed from a summary of what's " +
+	"been done, call checkpoint_session to compact the history and continue."
+
 func defaultToolsForRole(role string) []string {
 	switch role {
 	case "worker":
-		return []string{"read_file", "write_file", "list_files", "apply_diff", "run_tests", "task_comment", "request_input"}
+		return []string{"read_file", "write_file", "list_files", "apply_diff", "run_tests", "task_comment", "request_input", "run_subagent", "checkpoint_session"}
 	case "reviewer":
-		return []string{"read_file", "list_files", "task_comment", "request_input"}
+		return []string{"read_file", "list_files", "task_comment", "request_input", "run_subagent", "checkpoint_session"}
 	case "orchestrator":
-		return []string{"list_tasks", "create_work_package", "plan_project", "bootstrap_project", "sync_scope", "complete_project", "query_context", "save_context", "task_comment", "request_input"}
+		return []string{"list_tasks", "create_work_package", "plan_project", "bootstrap_project", "sync_scope", "complete_project", "query_context", "save_context", "task_comment", "request_input", "run_subagent", "checkpoint_session"}
 	default:
 		return nil // unknown role: send all tools
 	}
+}
+
+// resolvedToolAllowlist returns the effective tool allowlist for a route: the
+// role's configured allowlist (or built-in defaults) unioned with any tools the
+// agent's skills add. An empty result means "all tools" (unknown role).
+func (e *Executor) resolvedToolAllowlist(route *router.RouteResult) []string {
+	baseTools := route.ToolAllowlist
+	if len(baseTools) == 0 {
+		baseTools = defaultToolsForRole(route.Role)
+	}
+	roleDef := &db.RoleDefinition{Name: route.Role, AllowedTools: baseTools}
+	return router.ResolveAgentPersona(roleDef, e.skillDefs).AllowedTools
 }
 
 // validateToolArgs checks that all required arguments for the named tool are

@@ -26,11 +26,15 @@ type Config struct {
 	RoleDefinitions []RoleDefinitionConfig    `yaml:"role_definitions"`
 	// AgentTemplates seed server-managed agent templates into the DB on first run.
 	AgentTemplates  []AgentTemplateConfig     `yaml:"agent_templates"`
-	// Orchestrator holds orchestrator-role behaviour seeded into platform settings.
-	Orchestrator    OrchestratorConfig         `yaml:"orchestrator"`
 	// TaskTypes seed configurable task types (branch-name templates) into the DB
 	// on first run. The Settings page is the source of truth afterwards.
 	TaskTypes       []TaskTypeConfig           `yaml:"task_types"`
+	// Skills seed persona skill definitions (specializations agents compose on top
+	// of roles) into the DB on first run. Empty → the built-in starter set.
+	Skills          []SkillConfig              `yaml:"skills"`
+	// SubagentSkills seed spawnable subagent skills (run_subagent units of work)
+	// into the DB on first run. Empty → the built-in starter set.
+	SubagentSkills  []SubagentSkillConfig      `yaml:"subagent_skills"`
 }
 
 // TaskTypeConfig defines one task type seeded on first run: a unique key, a
@@ -41,15 +45,6 @@ type TaskTypeConfig struct {
 	Label          string `yaml:"label"`
 	BranchTemplate string `yaml:"branch_template"`
 	Default        bool   `yaml:"default"`
-}
-
-// OrchestratorConfig configures the orchestrator role's built-in behaviour.
-// Values seed platform_settings on first run; the Settings page is the source
-// of truth afterwards (config changes do not override an existing DB value).
-type OrchestratorConfig struct {
-	// ResyncPrompt is the task description handed to the orchestrator when the
-	// project "Re-sync scope" action is triggered. Empty → the built-in default.
-	ResyncPrompt string `yaml:"resync_prompt"`
 }
 
 // ProviderModelConfig declares one model within a provider: its supported roles,
@@ -224,6 +219,9 @@ type RoleDefinitionConfig struct {
 	SystemPrompt   string   `yaml:"system_prompt"`
 	Temperature    float64  `yaml:"temperature"`
 	MaxTokens      int      `yaml:"max_tokens"`
+	// ResyncPrompt is the task description handed to this role on project scope
+	// re-sync (used by the orchestrator/creates_tasks role; empty → built-in default).
+	ResyncPrompt   string   `yaml:"resync_prompt"`
 }
 
 // AgentTemplateConfig defines a server-managed agent template seeded on first run.
@@ -235,6 +233,34 @@ type AgentTemplateConfig struct {
 	Autostart bool     `yaml:"autostart"`
 }
 
+
+// SkillConfig defines one persona skill definition seeded on first run: a
+// specialization (prompt fragment + context scoping + optional tools) an agent
+// composes on top of its role(s).
+type SkillConfig struct {
+	Name           string   `yaml:"name"`
+	Label          string   `yaml:"label"`
+	Description    string   `yaml:"description"`
+	PromptFragment string   `yaml:"prompt_fragment"`
+	ContextInclude []string `yaml:"context_include"`
+	ContextExclude []string `yaml:"context_exclude"`
+	AllowedTools   []string `yaml:"allowed_tools"`
+}
+
+// SubagentSkillConfig defines one spawnable subagent skill seeded on first run.
+// A subagent runs its own focused tool loop (via run_subagent) and returns only a
+// summary, keeping the main agent's context small.
+type SubagentSkillConfig struct {
+	Name           string   `yaml:"name"`
+	Label          string   `yaml:"label"`
+	Description    string   `yaml:"description"`
+	PromptTemplate string   `yaml:"prompt_template"` // {{instructions}} is replaced with the main agent's ask
+	ToolAllowlist  []string `yaml:"tool_allowlist"`
+	ContextInclude []string `yaml:"context_include"`
+	ContextExclude []string `yaml:"context_exclude"`
+	MaxRounds      int      `yaml:"max_rounds"`
+	MaxTokens      int      `yaml:"max_tokens"`
+}
 
 // LogRetentionConfig holds default and per-type retention settings.
 // These values seed the platform_settings table at startup (DB wins on conflict).

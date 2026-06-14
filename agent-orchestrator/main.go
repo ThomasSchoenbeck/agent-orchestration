@@ -224,6 +224,7 @@ func runServer(args []string) error {
 				ModelOverride:  rc.ModelOverride,
 				Temperature:    temp,
 				MaxTokens:      maxTok,
+				ResyncPrompt:   rc.ResyncPrompt,
 				Enabled:        true,
 			}
 			if prov, ok := provByName[rc.Provider]; ok {
@@ -275,11 +276,28 @@ func runServer(args []string) error {
 		}
 	}
 
-	// Seed the starter skill set (Feature 6) on a fresh DB (idempotent by name).
-	if n, serr := database.SeedSkillDefinitions(startCtx, db.DefaultSkillDefinitions()); serr != nil {
+	// Seed persona skills (Feature 6): from config when provided, else the built-in
+	// starter set (idempotent by name).
+	skillsToSeed, skillSrc := db.DefaultSkillDefinitions(), "default"
+	if len(cfg.Skills) > 0 {
+		skillsToSeed, skillSrc = configSkillDefinitions(cfg.Skills), "config"
+	}
+	if n, serr := database.SeedSkillDefinitions(startCtx, skillsToSeed); serr != nil {
 		log.Printf("warning: seed skill definitions: %v", serr)
 	} else if n > 0 {
-		log.Printf("seeded %d skill definition(s)", n)
+		log.Printf("seeded %d skill definition(s) from %s", n, skillSrc)
+	}
+
+	// Seed subagent skills: from config when provided, else the built-in set
+	// (idempotent by name).
+	subToSeed, subSrc := db.DefaultSubagentSkills(), "default"
+	if len(cfg.SubagentSkills) > 0 {
+		subToSeed, subSrc = configSubagentSkills(cfg.SubagentSkills), "config"
+	}
+	if n, serr := database.SeedSubagentSkills(startCtx, subToSeed); serr != nil {
+		log.Printf("warning: seed subagent skills: %v", serr)
+	} else if n > 0 {
+		log.Printf("seeded %d subagent skill(s) from %s", n, subSrc)
 	}
 
 	// Seed agent templates from config on first run (idempotent by name).
@@ -323,11 +341,6 @@ func runServer(args []string) error {
 		cfg.LogRetention.Overrides,
 	); err != nil {
 		log.Printf("warning: seed retention config: %v", err)
-	}
-
-	// Seed the orchestrator re-sync prompt (config value wins on first run only).
-	if err := database.SeedResyncPrompt(startCtx, cfg.Orchestrator.ResyncPrompt); err != nil {
-		log.Printf("warning: seed resync prompt: %v", err)
 	}
 
 	srv := server.New(cfg, database, llmReg)
@@ -532,6 +545,8 @@ func buildAgent(name string, roles, skills []string, serverURL, configPath, work
 	_ = tools.RegisterPlanTools(toolReg, backend)
 	_ = tools.RegisterContextTools(toolReg, backend)
 	_ = tools.RegisterCommentTools(toolReg, backend)
+	_ = tools.RegisterSubagentTool(toolReg)
+	_ = tools.RegisterSessionTool(toolReg)
 	a.WithExecutor(rtr, toolReg)
 
 	log.Printf("agent %q: executor wired (LLM providers: %d)", name, len(llmReg.List()))
@@ -599,6 +614,46 @@ func configProvidersToDB(cfg *config.Config) []*db.Provider {
 			Roles:     roles,
 			Models:    models,
 			Enabled:   true,
+		})
+	}
+	return out
+}
+
+// configSkillDefinitions converts config skill entries into db.SkillDefinition
+// seed values (mirrors the role/task-type config→db conversion).
+func configSkillDefinitions(skills []config.SkillConfig) []*db.SkillDefinition {
+	out := make([]*db.SkillDefinition, 0, len(skills))
+	for _, s := range skills {
+		out = append(out, &db.SkillDefinition{
+			Name:           s.Name,
+			Label:          s.Label,
+			Description:    s.Description,
+			PromptFragment: s.PromptFragment,
+			ContextInclude: s.ContextInclude,
+			ContextExclude: s.ContextExclude,
+			AllowedTools:   s.AllowedTools,
+			Enabled:        true,
+		})
+	}
+	return out
+}
+
+// configSubagentSkills converts config subagent-skill entries into
+// db.SubagentSkill seed values.
+func configSubagentSkills(skills []config.SubagentSkillConfig) []*db.SubagentSkill {
+	out := make([]*db.SubagentSkill, 0, len(skills))
+	for _, s := range skills {
+		out = append(out, &db.SubagentSkill{
+			Name:           s.Name,
+			Label:          s.Label,
+			Description:    s.Description,
+			PromptTemplate: s.PromptTemplate,
+			ToolAllowlist:  s.ToolAllowlist,
+			ContextInclude: s.ContextInclude,
+			ContextExclude: s.ContextExclude,
+			MaxRounds:      s.MaxRounds,
+			MaxTokens:      s.MaxTokens,
+			Enabled:        true,
 		})
 	}
 	return out

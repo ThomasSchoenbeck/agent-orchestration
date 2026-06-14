@@ -38,6 +38,7 @@
     approvePR,
     rejectPR,
     getTaskRoles,
+    listAgentSessions,
   } from "../lib/api.js"
   import MarkdownEditor from "../components/MarkdownEditor.svelte"
   import FileTree from "../components/FileTree.svelte"
@@ -58,6 +59,7 @@
   let editing = $state(false)
   let taskLogs    = $state([])
   let agentExecLogs = $state([])   // from /api/logs?task_id=
+  let agentSessions = $state([])   // from /api/agent-sessions?task_id= (checkpoints)
   let logsLoading = $state(false)
   let expandedLogs = $state(new Set())  // log IDs with expanded content
 
@@ -80,6 +82,21 @@
     ]
     events.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
     return events
+  })
+
+  // Subagent runs (Subagents feature): completed run_subagent invocations and the
+  // summary each returned, surfaced from the agent exec logs' metadata so a run is
+  // observable without reading server logs.
+  let subagentRuns = $derived.by(() => {
+    return agentExecLogs
+      .map((e) => {
+        let m = e.metadata
+        if (typeof m === 'string') { try { m = JSON.parse(m) } catch (_) { m = null } }
+        if (!m || m.source !== 'subagent' || !m.summary) return null
+        return { id: e.id, ts: e.timestamp, skill: m.skill, instructions: m.instructions, summary: m.summary }
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(a.ts) - new Date(b.ts))
   })
 
   // Status history (Bug 10): a projection of status-change task-log events,
@@ -225,6 +242,11 @@
     } finally {
       logsLoading = false
     }
+    // Session checkpoints (best-effort; absence is normal for short tasks).
+    try {
+      const sess = await listAgentSessions(id)
+      agentSessions = Array.isArray(sess) ? sess : []
+    } catch (e) { /* ignore */ }
   }
 
   async function pollTask() {
@@ -1292,6 +1314,43 @@
                   </span>
                 </div>
                 <div class="text-xs text-gray-300 whitespace-pre-wrap font-mono">{rev.body}</div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if subagentRuns.length > 0}
+        <div class="mt-6">
+          <h3 class="text-sm font-semibold text-gray-300 mb-3">Subagent runs</h3>
+          <div class="flex flex-col gap-2">
+            {#each subagentRuns as run (run.id)}
+              <div class="p-3 bg-surface-800 rounded border border-surface-600">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-300">subagent</span>
+                  <span class="text-sm font-mono text-gray-200">{run.skill}</span>
+                </div>
+                {#if run.instructions}
+                  <p class="text-xs text-gray-500 mb-1"><span class="text-gray-400">ask:</span> {run.instructions}</p>
+                {/if}
+                <p class="text-xs text-gray-300 whitespace-pre-wrap">{run.summary}</p>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if agentSessions.length > 0}
+        <div class="mt-6">
+          <h3 class="text-sm font-semibold text-gray-300 mb-3">Session checkpoints</h3>
+          <div class="flex flex-col gap-2">
+            {#each agentSessions as sess (sess.id)}
+              <div class="p-3 bg-surface-800 rounded border border-surface-600">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-300">checkpoint</span>
+                  <span class="text-xs text-gray-500">round {sess.round} · {formatTimestamp(sess.created_at)}</span>
+                </div>
+                <p class="text-xs text-gray-300 whitespace-pre-wrap">{sess.summary}</p>
               </div>
             {/each}
           </div>

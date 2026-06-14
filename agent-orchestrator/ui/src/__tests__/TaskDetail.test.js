@@ -46,6 +46,7 @@ vi.mock('../lib/api.js', () => {
     approvePR: r({}),
     rejectPR: r({}),
     getTaskRoles: vi.fn(),
+    listAgentSessions: r([]),
   }
 })
 
@@ -58,7 +59,7 @@ vi.mock('../lib/stores.js', () => ({
   },
 }))
 
-import { getTask, getTaskRoles, updateTask, createPR, listComments } from '../lib/api.js'
+import { getTask, getTaskRoles, updateTask, createPR, listComments, listLogs, listAgentSessions } from '../lib/api.js'
 
 const ROLES = [
   { id: 'w1', value: 'worker', label: 'Worker' },
@@ -117,6 +118,42 @@ describe('TaskDetail — editing role/review (B4)', () => {
         expect.objectContaining({ role: 'w1', review_role: 'rev-1' }),
       )
     })
+  })
+})
+
+describe('TaskDetail — subagent runs (D2)', () => {
+  it('renders a subagent run with its skill and summary', async () => {
+    getTask.mockResolvedValue(baseTask())
+    listLogs.mockResolvedValue([
+      {
+        id: 'log-sub', timestamp: new Date().toISOString(), level: 'info',
+        message: 'subagent investigate_codebase completed',
+        metadata: {
+          source: 'subagent', skill: 'investigate_codebase',
+          instructions: 'find the entrypoint',
+          summary: 'main.go wires the server and agent.',
+        },
+      },
+    ])
+    render(TaskDetail, { props: { taskId: 't1' } })
+
+    await waitFor(() => expect(screen.getByText('Subagent runs')).toBeInTheDocument())
+    expect(screen.getByText('investigate_codebase')).toBeInTheDocument()
+    expect(screen.getByText('main.go wires the server and agent.')).toBeInTheDocument()
+  })
+})
+
+describe('TaskDetail — session checkpoints (F4)', () => {
+  it('renders a saved session checkpoint with round and summary', async () => {
+    getTask.mockResolvedValue(baseTask())
+    listAgentSessions.mockResolvedValue([
+      { id: 'sess1', task_id: 't1', round: 7, summary: 'Compacted: built the parser.', created_at: new Date().toISOString() },
+    ])
+    render(TaskDetail, { props: { taskId: 't1' } })
+
+    await waitFor(() => expect(screen.getByText('Session checkpoints')).toBeInTheDocument())
+    expect(screen.getByText('Compacted: built the parser.')).toBeInTheDocument()
+    expect(screen.getByText(/round 7/)).toBeInTheDocument()
   })
 })
 

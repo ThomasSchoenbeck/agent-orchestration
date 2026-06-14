@@ -33,13 +33,13 @@ func (d *Database) CreateRoleDefinition(ctx context.Context, r *RoleDefinition) 
 		`INSERT INTO agent_role_definitions
 		 (id, name, label, description, provider_id, model_override, system_prompt,
 		  context_include, context_exclude, capabilities, allowed_tools,
-		  temperature, max_tokens, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  temperature, max_tokens, resync_prompt, enabled, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, r.Name, r.Label, r.Description,
 		nullableStr(r.ProviderID), r.ModelOverride, r.SystemPrompt,
 		marshalJSONArray(r.ContextInclude), marshalJSONArray(r.ContextExclude),
 		marshalJSONArray(r.Capabilities), marshalJSONArray(r.AllowedTools),
-		r.Temperature, r.MaxTokens, r.Enabled,
+		r.Temperature, r.MaxTokens, r.ResyncPrompt, r.Enabled,
 		r.CreatedAt, r.UpdatedAt,
 	)
 	return err
@@ -95,13 +95,13 @@ func (d *Database) UpdateRoleDefinition(ctx context.Context, r *RoleDefinition) 
 		`UPDATE agent_role_definitions SET
 		 name=?, label=?, description=?, provider_id=?, model_override=?, system_prompt=?,
 		 context_include=?, context_exclude=?, capabilities=?, allowed_tools=?,
-		 temperature=?, max_tokens=?, enabled=?, updated_at=?
+		 temperature=?, max_tokens=?, resync_prompt=?, enabled=?, updated_at=?
 		 WHERE id=?`,
 		r.Name, r.Label, r.Description,
 		nullableStr(r.ProviderID), r.ModelOverride, r.SystemPrompt,
 		marshalJSONArray(r.ContextInclude), marshalJSONArray(r.ContextExclude),
 		marshalJSONArray(r.Capabilities), marshalJSONArray(r.AllowedTools),
-		r.Temperature, r.MaxTokens, r.Enabled, r.UpdatedAt, r.ID,
+		r.Temperature, r.MaxTokens, r.ResyncPrompt, r.Enabled, r.UpdatedAt, r.ID,
 	)
 	return err
 }
@@ -144,7 +144,7 @@ func (d *Database) SeedRoleDefinitions(ctx context.Context, roles []*RoleDefinit
 
 const roleDefSelectSQL = `SELECT id, name, label, description, provider_id, model_override,
     system_prompt, context_include, context_exclude, capabilities, allowed_tools,
-    temperature, max_tokens, enabled, created_at, updated_at
+    temperature, max_tokens, resync_prompt, enabled, created_at, updated_at
     FROM agent_role_definitions`
 
 func scanRoleDef(row *sql.Row) (*RoleDefinition, error) {
@@ -156,7 +156,7 @@ func scanRoleDef(row *sql.Row) (*RoleDefinition, error) {
 		&r.ID, &r.Name, &r.Label, &r.Description,
 		&providerID, &r.ModelOverride, &r.SystemPrompt,
 		&ciJSON, &ceJSON, &capJSON, &atJSON,
-		&r.Temperature, &r.MaxTokens, &enabled,
+		&r.Temperature, &r.MaxTokens, &r.ResyncPrompt, &enabled,
 		&createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -184,7 +184,7 @@ func scanRoleDefs(rows *sql.Rows) ([]*RoleDefinition, error) {
 			&r.ID, &r.Name, &r.Label, &r.Description,
 			&providerID, &r.ModelOverride, &r.SystemPrompt,
 			&ciJSON, &ceJSON, &capJSON, &atJSON,
-			&r.Temperature, &r.MaxTokens, &enabled,
+			&r.Temperature, &r.MaxTokens, &r.ResyncPrompt, &enabled,
 			&createdAt, &updatedAt,
 		); err != nil {
 			return nil, err

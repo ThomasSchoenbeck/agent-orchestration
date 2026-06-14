@@ -263,6 +263,10 @@ type RoleDefinition struct {
 	AllowedTools   []string  `json:"allowed_tools"`    // if non-empty, only these tools are sent to the LLM
 	Temperature    float64   `json:"temperature"`
 	MaxTokens      int       `json:"max_tokens"`
+	// ResyncPrompt is the task description handed to this role when a project
+	// "Re-sync scope" is triggered. Only the orchestrator/creates_tasks role uses
+	// it; empty falls back to the built-in DefaultResyncPrompt.
+	ResyncPrompt   string    `json:"resync_prompt"`
 	Enabled        bool      `json:"enabled"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -286,6 +290,41 @@ type SkillDefinition struct {
 	Enabled        bool      `json:"enabled"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// SubagentSkill is a spawnable unit of work (Subagents feature). Unlike a
+// SkillDefinition (which describes a persona's specialization), a SubagentSkill
+// configures a focused subagent that a running agent can delegate to via the
+// run_subagent tool. The heavy context lives and dies inside the subagent loop;
+// only its summary returns to the main loop.
+type SubagentSkill struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"` // slug: "investigate_codebase"
+	Label          string    `json:"label"`
+	Description    string    `json:"description"`
+	PromptTemplate string    `json:"prompt_template"` // wrapped around the main agent's instructions
+	ToolAllowlist  []string  `json:"tool_allowlist"`  // tools the subagent loop may use
+	ContextInclude []string  `json:"context_include"`
+	ContextExclude []string  `json:"context_exclude"`
+	MaxRounds      int       `json:"max_rounds"`           // bounds the subagent loop
+	MaxTokens      int       `json:"max_tokens,omitempty"` // optional token budget
+	Enabled        bool      `json:"enabled"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// AgentSession is a persisted checkpoint of a task's main loop (Session
+// checkpoint feature). At a checkpoint the loop's full message history is stored
+// alongside a generated summary, then the in-memory messages are compacted to
+// [system, summary] and the loop continues in a fresh ("new") session.
+type AgentSession struct {
+	ID        string    `json:"id"`
+	TaskID    string    `json:"task_id"`
+	AgentID   string    `json:"agent_id"`
+	Summary   string    `json:"summary"`
+	Messages  string    `json:"messages"` // JSON-encoded pre-checkpoint message history
+	Round     int       `json:"round"`    // tool-loop round at which the checkpoint fired
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // --- Context ---

@@ -69,6 +69,55 @@ func TestClient_ProvidersWithKeys(t *testing.T) {
 	}
 }
 
+func TestClient_ListSubagentSkills(t *testing.T) {
+	var gotPath string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/agent/subagent-skills", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode([]*db.SubagentSkill{
+			{Name: "investigate_codebase", Enabled: true, ToolAllowlist: []string{"read_file"}},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := agent.NewServerClientWithAuth(srv.URL, "tok", nil)
+	skills, err := c.ListSubagentSkills(context.Background())
+	if err != nil {
+		t.Fatalf("ListSubagentSkills: %v", err)
+	}
+	if gotPath != "/api/agent/subagent-skills" {
+		t.Errorf("path = %q, want /api/agent/subagent-skills", gotPath)
+	}
+	if len(skills) != 1 || skills[0].Name != "investigate_codebase" {
+		t.Errorf("skills = %+v", skills)
+	}
+}
+
+func TestClient_CreateAgentSession(t *testing.T) {
+	var gotPath string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/agent/agent-sessions", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(&db.AgentSession{ID: "sess-1", TaskID: "t1", Summary: "ok"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := agent.NewServerClientWithAuth(srv.URL, "tok", nil)
+	out, err := c.CreateAgentSession(context.Background(), &db.AgentSession{TaskID: "t1", Summary: "ok"})
+	if err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+	if gotPath != "/api/agent/agent-sessions" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if out == nil || out.ID != "sess-1" {
+		t.Errorf("session = %+v", out)
+	}
+}
+
 func TestClient_NoTokenOmitsAuthHeader(t *testing.T) {
 	var hadAuth bool
 	mux := http.NewServeMux()
