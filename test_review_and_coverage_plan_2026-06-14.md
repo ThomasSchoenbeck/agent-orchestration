@@ -23,13 +23,13 @@ Baseline coverage is recorded in `tasks_2026-06-14.md`. Run commands:
 
 ### Phase B — Fill coverage gaps to ≥80%
 - [~] B1 — `server` package (41.1% → 53.1%, paused; remainder is integration-bound — see test_quality_audit_2026-06-14.md)
-- [ ] B2 — root/`main` (6.1% → 80%)
+- [~] B2 — root/`main` (6.1% → **10.4%**) — all pure helpers now 100% (parseRoles, defaultAgentConfig, reconnectCfg, configSkillDefinitions, configSubagentSkills, printUsage, configProvidersToDB, agentTLSConfig). The rest (`main`/`runServer`/`runAgent`/`runAgents`/`buildAgent`, ~600 of 815 lines) is CLI bootstrap that boots real servers/agents → needs an e2e harness, not unit tests. 80% not achievable here without launching the binary.
 - [x] B3 — `db` package (60.3% → **82.0%**, done) — 6 batches; also surfaced/fixed the `CloneChecklistIteration` deadlock
 - [x] B4 — `llm` package (60.2% → **82.5%**, done) — 2 batches (openai.go httptest suite; ollama stream/embed, registry, resilience wrappers)
 - [ ] B5 — `workflow` package (61.5% → 80%)
 - [ ] B6 — `agent` package (65.3% → 80%)
 - [ ] B7 — `git` package (69.9% → 80%)
-- [ ] B8 — `tools` package (72.4% → 80%)
+- [~] B8 — `tools` package (72.4% → **77.0%**) — clean unit surface covered (capabilities, executor, arg helpers, session/subagent/request_input, file tools, task_comment). Remainder (`applyDiff`/`runTests`/`gitClone`/`gitCheckout`) shells out to `patch`/`git`/test-runners → integration-bound, left out of unit tests.
 - [ ] B9 — `storage` (79.8% → 80%) + top-ups: `config`, `logging`, `branchname`
 - [ ] B10 — Frontend 0%-coverage files
 - [ ] B11 — Frontend low-coverage pages
