@@ -22,10 +22,10 @@ Baseline coverage is recorded in `tasks_2026-06-14.md`. Run commands:
 - [ ] A7 — Consolidate audit findings, delete/fix weak tests
 
 ### Phase B — Fill coverage gaps to ≥80%
-- [ ] B1 — `server` package (41.1% → 80%)
+- [~] B1 — `server` package (41.1% → 53.1%, paused; remainder is integration-bound — see test_quality_audit_2026-06-14.md)
 - [ ] B2 — root/`main` (6.1% → 80%)
-- [ ] B3 — `db` package (60.3% → 80%)
-- [ ] B4 — `llm` package (60.2% → 80%)
+- [x] B3 — `db` package (60.3% → **82.0%**, done) — 6 batches; also surfaced/fixed the `CloneChecklistIteration` deadlock
+- [x] B4 — `llm` package (60.2% → **82.5%**, done) — 2 batches (openai.go httptest suite; ollama stream/embed, registry, resilience wrappers)
 - [ ] B5 — `workflow` package (61.5% → 80%)
 - [ ] B6 — `agent` package (65.3% → 80%)
 - [ ] B7 — `git` package (69.9% → 80%)

@@ -118,33 +118,45 @@ func (d *Database) CloneChecklistIteration(ctx context.Context, taskID string) (
 	// Determine next iteration number.
 	newGroup := nextIterationLabel(latestGroup)
 
-	// Fetch items from the latest group.
-	items, err := d.db.QueryContext(ctx,
+	// Fetch items from the latest group. Materialize the full result set and
+	// close the cursor BEFORE inserting: the insert below acquires a connection,
+	// and holding an open rows cursor while doing so deadlocks a single-connection
+	// pool (the cursor never releases its connection until closed).
+	rows, err := d.db.QueryContext(ctx,
 		`SELECT position, label FROM task_checklist_items
 		 WHERE task_id=? AND group_label=? ORDER BY position ASC`, taskID, latestGroup)
 	if err != nil {
 		return "", err
 	}
-	defer items.Close()
-
-	now := time.Now().UTC()
-	for items.Next() {
-		var pos int
-		var label string
-		if err := items.Scan(&pos, &label); err != nil {
+	type clonedItem struct {
+		pos   int
+		label string
+	}
+	var sources []clonedItem
+	for rows.Next() {
+		var it clonedItem
+		if err := rows.Scan(&it.pos, &it.label); err != nil {
+			rows.Close()
 			return "", err
 		}
+		sources = append(sources, it)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return "", err
+	}
+	rows.Close()
+
+	now := time.Now().UTC()
+	for _, it := range sources {
 		_, err := d.db.ExecContext(ctx,
 			`INSERT INTO task_checklist_items(id, task_id, group_label, position, label, status, updated_at)
 			 VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
-			newID(), taskID, newGroup, pos, label, now,
+			newID(), taskID, newGroup, it.pos, it.label, now,
 		)
 		if err != nil {
 			return "", err
 		}
-	}
-	if err := items.Err(); err != nil {
-		return "", err
 	}
 	return newGroup, nil
 }

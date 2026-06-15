@@ -175,8 +175,10 @@ func writeReviewContext(ctx context.Context, database *db.Database, ctxDir, task
 		return err
 	}
 
-	// Review thread (comments tied to this review).
-	comments, err := database.ListTaskComments(ctx, taskID)
+	// Review thread (comments tied to this review). ListComments with a non-empty
+	// reviewID filters to that review's comments; ListTaskComments (reviewID "")
+	// would instead return only comments with no review, which never match here.
+	comments, err := database.ListComments(ctx, taskID, latest.ID)
 	if err != nil || len(comments) == 0 {
 		return nil
 	}
