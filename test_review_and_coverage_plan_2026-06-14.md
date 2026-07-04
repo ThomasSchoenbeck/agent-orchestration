@@ -22,7 +22,7 @@ Baseline coverage is recorded in `tasks_2026-06-14.md`. Run commands:
 - [ ] A7 — Consolidate audit findings, delete/fix weak tests
 
 ### Phase B — Fill coverage gaps to ≥80%
-- [~] B1 — `server` package (41.1% → 53.1%, paused; remainder is integration-bound — see test_quality_audit_2026-06-14.md)
+- [~] B1 — `server` package (41.1% → **65.7%**). Most handlers now 60-100%. Remaining gap is either small edge-cases or genuinely integration-bound (`approvePR` git merge, `Start` port bind, `handleWSChat` + ws I/O, chat-LLM success) — covered by the Go integration suite, not unit tests.
 - [~] B2 — root/`main` (6.1% → **10.4%**) — all pure helpers now 100% (parseRoles, defaultAgentConfig, reconnectCfg, configSkillDefinitions, configSubagentSkills, printUsage, configProvidersToDB, agentTLSConfig). The rest (`main`/`runServer`/`runAgent`/`runAgents`/`buildAgent`, ~600 of 815 lines) is CLI bootstrap that boots real servers/agents → needs an e2e harness, not unit tests. 80% not achievable here without launching the binary.
 - [x] B3 — `db` package (60.3% → **82.0%**, done) — 6 batches; also surfaced/fixed the `CloneChecklistIteration` deadlock
 - [x] B4 — `llm` package (60.2% → **82.5%**, done) — 2 batches (openai.go httptest suite; ollama stream/embed, registry, resilience wrappers)
