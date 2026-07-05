@@ -108,19 +108,21 @@ func TestRouteByRole_RoleDefWithoutProviderFallsBackToProviderModels(t *testing.
 	d := openRouterDB(t)
 	ctx := context.Background()
 
-	// Provider with multiple models, each declaring ALL roles.
+	// Provider declaring all roles at the provider level (Phase 5, T5.1 removed
+	// per-model roles) with several models; its default model serves the role.
 	models := []db.ProviderModel{
-		{Name: "gemma-a", Roles: []string{"orchestrator", "reviewer", "worker"}},
-		{Name: "gemma-b", Roles: []string{"orchestrator", "reviewer", "worker"}},
-		{Name: "gemma-c", Roles: []string{"orchestrator", "reviewer", "worker"}},
+		{Name: "gemma-a"},
+		{Name: "gemma-b"},
+		{Name: "gemma-c"},
 	}
 	prov := &db.Provider{
-		Name:    "llama.cpp",
-		Type:    "openai_compatible",
-		BaseURL: "http://localhost:7777/v1",
-		Enabled: true,
-		Roles:   []string{"orchestrator", "reviewer", "worker"},
-		Models:  models,
+		Name:      "llama.cpp",
+		Type:      "openai_compatible",
+		BaseURL:   "http://localhost:7777/v1",
+		ModelName: "gemma-a",
+		Enabled:   true,
+		Roles:     []string{"orchestrator", "reviewer", "worker"},
+		Models:    models,
 	}
 	if err := d.CreateProvider(ctx, prov); err != nil {
 		t.Fatalf("CreateProvider: %v", err)
@@ -136,7 +138,7 @@ func TestRouteByRole_RoleDefWithoutProviderFallsBackToProviderModels(t *testing.
 	cfg := &config.Config{Providers: []config.ProviderConfig{}}
 	reg := llm.NewRegistry()
 	reg.Set("llama.cpp", llm.NewOpenAIProvider("llama.cpp", "http://localhost:7777/v1", "", ""))
-	reg.SetRoles("llama.cpp", "", prov.Roles) // mirror startup provider-role registration
+	reg.SetRoles("llama.cpp", "gemma-a", prov.Roles) // mirror startup provider-role registration
 
 	rtr := router.New(cfg, reg)
 	if err := rtr.LoadFromDB(d); err != nil {
@@ -151,7 +153,7 @@ func TestRouteByRole_RoleDefWithoutProviderFallsBackToProviderModels(t *testing.
 		t.Fatal("expected non-nil provider")
 	}
 	if res.Model == "" {
-		t.Error("expected a non-empty model from the provider's model-role binding")
+		t.Error("expected a non-empty model from the provider's default")
 	}
 	if res.Role != "orchestrator" {
 		t.Errorf("role = %q, want orchestrator", res.Role)
@@ -167,7 +169,7 @@ func TestRouteByRole_AcceptsRoleID(t *testing.T) {
 	prov := &db.Provider{
 		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
 		ModelName: "gemma3:4b", Enabled: true,
-		Models:    []db.ProviderModel{{Name: "gemma3:4b", Roles: []string{"worker"}}},
+		Models:    []db.ProviderModel{{Name: "gemma3:4b"}},
 	}
 	if err := d.CreateProvider(ctx, prov); err != nil {
 		t.Fatalf("CreateProvider: %v", err)
@@ -207,7 +209,7 @@ func TestRoleName_ResolvesRefToName(t *testing.T) {
 	prov := &db.Provider{
 		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
 		ModelName: "gemma3:4b", Enabled: true,
-		Models:    []db.ProviderModel{{Name: "gemma3:4b", Roles: []string{"worker"}}},
+		Models:    []db.ProviderModel{{Name: "gemma3:4b"}},
 	}
 	if err := d.CreateProvider(ctx, prov); err != nil {
 		t.Fatalf("CreateProvider: %v", err)
@@ -474,20 +476,21 @@ func TestRouterModelLevelTextToolCalls(t *testing.T) {
 	ctx := context.Background()
 
 	models := []db.ProviderModel{
-		{Name: "gemma3:4b", Roles: []string{"worker"}, TextToolCalls: true, FoldSystemIntoUser: true, SystemPrefix: "<|think|>"},
-		{Name: "qwen2.5:14b", Roles: []string{"reviewer"}}, // no text_tool_calls
+		{Name: "gemma3:4b", TextToolCalls: true, FoldSystemIntoUser: true, SystemPrefix: "<|think|>"},
+		{Name: "qwen2.5:14b"}, // no text_tool_calls
 	}
 	prov := &db.Provider{Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
 		ModelName: "gemma3:4b", Enabled: true, Models: models}
 	_ = d.CreateProvider(ctx, prov)
 
+	// Each role targets its model via ModelOverride (T5.1 removed per-model roles).
 	for _, roleDef := range []struct{ name, model string }{
 		{"worker", "gemma3:4b"},
 		{"reviewer", "qwen2.5:14b"},
 	} {
 		_ = d.CreateRoleDefinition(ctx, &db.RoleDefinition{
 			Name: roleDef.name, Label: roleDef.name,
-			ProviderID: prov.ID, Enabled: true,
+			ProviderID: prov.ID, ModelOverride: roleDef.model, Enabled: true,
 		})
 	}
 
@@ -536,8 +539,7 @@ func TestRouterModelLevelToolAllowlist(t *testing.T) {
 	ctx := context.Background()
 
 	models := []db.ProviderModel{
-		{Name: "gemma3:4b", Roles: []string{"worker"},
-			ToolAllowlist: []string{"write_file", "read_file"}},
+		{Name: "gemma3:4b", ToolAllowlist: []string{"write_file", "read_file"}},
 	}
 	prov := &db.Provider{
 		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
@@ -586,7 +588,7 @@ func TestRouterProviderLevelFallback(t *testing.T) {
 
 	// Model has no behavioral fields — provider level should apply.
 	models := []db.ProviderModel{
-		{Name: "gemma3:4b", Roles: []string{"worker"}},
+		{Name: "gemma3:4b"},
 	}
 	prov := &db.Provider{
 		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
@@ -637,7 +639,7 @@ func TestRouteByRole_ExposesCapabilities(t *testing.T) {
 	prov := &db.Provider{
 		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",
 		ModelName: "gemma3:4b", Enabled: true,
-		Models: []db.ProviderModel{{Name: "gemma3:4b", Roles: []string{"orchestrator"}}},
+		Models: []db.ProviderModel{{Name: "gemma3:4b"}},
 	}
 	if err := d.CreateProvider(ctx, prov); err != nil {
 		t.Fatalf("CreateProvider: %v", err)
@@ -680,8 +682,8 @@ func TestLoadFromData_MatchesLoadFromDB(t *testing.T) {
 	ctx := context.Background()
 
 	models := []db.ProviderModel{
-		{Name: "gemma3:4b", Roles: []string{"worker"}, ToolAllowlist: []string{"write_file", "read_file"}},
-		{Name: "qwen2.5:14b", Roles: []string{"reviewer"}},
+		{Name: "gemma3:4b", ToolAllowlist: []string{"write_file", "read_file"}},
+		{Name: "qwen2.5:14b"},
 	}
 	prov := &db.Provider{
 		Name: "ollama", Type: "ollama", BaseURL: "http://localhost:11434",

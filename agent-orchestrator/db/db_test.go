@@ -191,8 +191,8 @@ func TestProviderCRUD_WithModels(t *testing.T) {
 	ctx := context.Background()
 
 	models := []db.ProviderModel{
-		{Name: "gemma3:4b", Roles: []string{"worker"}, InputPerMillion: 0.05, OutputPerMillion: 0.10},
-		{Name: "qwen2.5:14b", Roles: []string{"reviewer"}, InputPerMillion: 0.20, OutputPerMillion: 0.40},
+		{Name: "gemma3:4b", InputPerMillion: 0.05, OutputPerMillion: 0.10},
+		{Name: "qwen2.5:14b", InputPerMillion: 0.20, OutputPerMillion: 0.40},
 	}
 
 	p := &db.Provider{
@@ -217,8 +217,8 @@ func TestProviderCRUD_WithModels(t *testing.T) {
 	if got.Models[0].Name != "gemma3:4b" {
 		t.Errorf("models[0].Name = %q, want gemma3:4b", got.Models[0].Name)
 	}
-	if got.Models[1].Roles[0] != "reviewer" {
-		t.Errorf("models[1].Roles[0] = %q, want reviewer", got.Models[1].Roles[0])
+	if got.Models[1].Name != "qwen2.5:14b" {
+		t.Errorf("models[1].Name = %q, want qwen2.5:14b", got.Models[1].Name)
 	}
 	if got.Models[0].InputPerMillion != 0.05 {
 		t.Errorf("models[0].InputPerMillion = %f, want 0.05", got.Models[0].InputPerMillion)

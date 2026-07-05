@@ -312,6 +312,26 @@ func TestSubagentPromptFragment_MentionsTool(t *testing.T) {
 	}
 }
 
+func TestDefaultToolsForRole_WorkerReviewerOrchestrationOnly(t *testing.T) {
+	for _, role := range []string{"worker", "reviewer"} {
+		set := map[string]bool{}
+		for _, tool := range defaultToolsForRole(role) {
+			set[tool] = true
+		}
+		for _, want := range []string{"run_subagent", "read_memory", "write_memory", "checkpoint_session"} {
+			if !set[want] {
+				t.Errorf("role %q must expose orchestration tool %q", role, want)
+			}
+		}
+		// Work tools moved to the subagents — must NOT be on the main session.
+		for _, forbidden := range []string{"read_file", "write_file", "apply_diff", "run_tests", "list_files"} {
+			if set[forbidden] {
+				t.Errorf("role %q must not expose work tool %q (it lives on the work subagent)", role, forbidden)
+			}
+		}
+	}
+}
+
 func TestDefaultToolsForRole_OrchestratorHasScopeTools(t *testing.T) {
 	got := defaultToolsForRole("orchestrator")
 	set := make(map[string]bool, len(got))
@@ -330,10 +350,12 @@ func TestDefaultToolsForRole_OrchestratorHasScopeTools(t *testing.T) {
 func TestIsPlannerTask(t *testing.T) {
 	reg := llm.NewRegistry()
 	reg.Set("p", llm.NewOllamaProvider("p", "http://localhost:11434", "m"))
+	reg.SetRoles("p", "m", []string{"orchestrator", "worker"}) // provider-level role preference
 	rtr := router.New(&config.Config{}, reg)
 	providers := []*db.Provider{{
 		Name: "p", ModelName: "m", Enabled: true,
-		Models: []db.ProviderModel{{Name: "m", Roles: []string{"orchestrator", "worker"}}},
+		Roles:  []string{"orchestrator", "worker"},
+		Models: []db.ProviderModel{{Name: "m"}},
 	}}
 	roles := []*db.RoleDefinition{
 		{Name: "orchestrator", Enabled: true, Capabilities: []string{"creates_tasks"}},

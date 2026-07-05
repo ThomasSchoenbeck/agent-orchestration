@@ -108,6 +108,17 @@ func (e *Executor) runSubagent(
 	ctx context.Context, tlog *AgentLogger, route router.RouteResult,
 	worktree string, skill *db.SubagentSkill, instructions string,
 ) (string, execStats, error) {
+	// T5.5: a subagent that carries its own provider>model priority list routes
+	// independently (with failover); otherwise it reuses the spawning session's
+	// route. On resolution failure it falls back to the spawning route.
+	if len(skill.Models) > 0 && e.rtr != nil {
+		if sr, rerr := e.rtr.RouteViaModels(skill.Models); rerr == nil {
+			route = *sr
+		} else {
+			tlog.WarnCtx(ctx, "subagent %s: priority list unresolved (%v); using spawning route", skill.Name, rerr)
+		}
+	}
+
 	maxRounds := skill.MaxRounds
 	if maxRounds <= 0 {
 		maxRounds = 8

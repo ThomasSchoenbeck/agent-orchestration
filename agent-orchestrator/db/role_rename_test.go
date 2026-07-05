@@ -27,8 +27,8 @@ func TestRenameRoleReferences_CascadesAcrossTables(t *testing.T) {
 		Name: "p", Type: "ollama", BaseURL: "http://x", Enabled: true,
 		Roles: []string{"worker", "reviewer"},
 		Models: []db.ProviderModel{
-			{Name: "m1", Roles: []string{"worker"}},
-			{Name: "m2", Roles: []string{"reviewer"}},
+			{Name: "m1"},
+			{Name: "m2"},
 		},
 	}
 	if err := d.CreateProvider(ctx, prov); err != nil {
@@ -64,15 +64,6 @@ func TestRenameRoleReferences_CascadesAcrossTables(t *testing.T) {
 	}
 	if !sliceHas(gotProv.Roles, "reviewer") {
 		t.Errorf("provider roles dropped reviewer: %v", gotProv.Roles)
-	}
-	var m1 []string
-	for _, m := range gotProv.Models {
-		if m.Name == "m1" {
-			m1 = m.Roles
-		}
-	}
-	if !sliceHas(m1, "builder") || sliceHas(m1, "worker") {
-		t.Errorf("model m1 roles = %v, want builder", m1)
 	}
 
 	// Agent: roles + start_roles renamed.

@@ -123,14 +123,13 @@ func runServer(args []string) error {
 	if count, _ := database.CountProviders(startCtx); count == 0 && len(cfg.Providers) > 0 {
 		var toSeed []*db.Provider
 		for _, pcfg := range cfg.Providers {
-			// Map per-model config (roles + pricing + behavioral flags) and a
-			// coarse provider-level role list (the union of all model roles).
+			// Map per-model config (pricing + behavioral flags + model prompt layer).
+			// Provider-level role preference is declared at the provider level
+			// (Phase 5, T5.1 removed model-level roles).
 			var models []db.ProviderModel
-			roleSet := map[string]bool{}
 			for _, m := range pcfg.Models {
 				models = append(models, db.ProviderModel{
 					Name:               m.Name,
-					Roles:              m.Roles,
 					InputPerMillion:    m.InputPerMillion,
 					OutputPerMillion:   m.OutputPerMillion,
 					ContextWindow:      m.ContextWindow,
@@ -138,14 +137,12 @@ func runServer(args []string) error {
 					FoldSystemIntoUser: m.FoldSystemIntoUser,
 					SystemPrefix:       m.SystemPrefix,
 					ToolAllowlist:      m.ToolAllowlist,
+					SystemPrompt:       m.SystemPrompt,
 				})
-				for _, r := range m.Roles {
-					roleSet[r] = true
-				}
 			}
-			roles := make([]string, 0, len(roleSet))
-			for r := range roleSet {
-				roles = append(roles, r)
+			var cfgMap map[string]interface{}
+			if pcfg.SystemPrompt != "" {
+				cfgMap = map[string]interface{}{"system_prompt": pcfg.SystemPrompt}
 			}
 			toSeed = append(toSeed, &db.Provider{
 				Name:      pcfg.Name,
@@ -154,7 +151,8 @@ func runServer(args []string) error {
 				APIKey:    pcfg.APIKey,
 				ModelName: pcfg.DefaultModel(),
 				Enabled:   true,
-				Roles:     roles,
+				Roles:     pcfg.Roles,
+				Config:    cfgMap,
 				Models:    models,
 			})
 		}
@@ -598,24 +596,21 @@ func configProvidersToDB(cfg *config.Config) []*db.Provider {
 	out := make([]*db.Provider, 0, len(cfg.Providers))
 	for _, p := range cfg.Providers {
 		var models []db.ProviderModel
-		roleSet := map[string]bool{}
 		for _, m := range p.Models {
-			models = append(models, db.ProviderModel{Name: m.Name, Roles: m.Roles})
-			for _, r := range m.Roles {
-				roleSet[r] = true
-			}
+			models = append(models, db.ProviderModel{Name: m.Name, SystemPrompt: m.SystemPrompt})
 		}
-		roles := make([]string, 0, len(roleSet))
-		for r := range roleSet {
-			roles = append(roles, r)
+		var cfgMap map[string]interface{}
+		if p.SystemPrompt != "" {
+			cfgMap = map[string]interface{}{"system_prompt": p.SystemPrompt}
 		}
 		out = append(out, &db.Provider{
 			Name:      p.Name,
 			Type:      p.Type,
 			BaseURL:   p.BaseURL,
 			ModelName: p.DefaultModel(),
-			Roles:     roles,
+			Roles:     p.Roles,
 			Models:    models,
+			Config:    cfgMap,
 			Enabled:   true,
 		})
 	}

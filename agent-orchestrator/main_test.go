@@ -38,8 +38,9 @@ func TestConfigProvidersToDB_MapsModelsAndRoles(t *testing.T) {
 			Name:    "llama.cpp",
 			Type:    "openai_compatible",
 			BaseURL: "http://localhost:7777/v1",
+			Roles:   []string{"worker", "reviewer"}, // provider-level (Phase 5, T5.1)
 			Models: []config.ProviderModelConfig{
-				{Name: "gemma", Roles: []string{"worker", "reviewer"}, Default: true},
+				{Name: "gemma", Default: true},
 			},
 		}},
 	}
@@ -51,10 +52,10 @@ func TestConfigProvidersToDB_MapsModelsAndRoles(t *testing.T) {
 	if p.Name != "llama.cpp" || p.ModelName != "gemma" {
 		t.Errorf("provider mapping wrong: name=%q model=%q", p.Name, p.ModelName)
 	}
-	if len(p.Models) != 1 || len(p.Models[0].Roles) != 2 {
-		t.Errorf("model roles not mapped: %+v", p.Models)
+	if len(p.Models) != 1 || p.Models[0].Name != "gemma" {
+		t.Errorf("models not mapped: %+v", p.Models)
 	}
-	if len(p.Roles) != 2 { // union of model roles
-		t.Errorf("expected 2 union roles, got %v", p.Roles)
+	if len(p.Roles) != 2 { // provider-level roles carried through
+		t.Errorf("expected 2 provider roles, got %v", p.Roles)
 	}
 }

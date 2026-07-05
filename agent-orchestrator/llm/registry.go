@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"agent-orchestrator/config"
-	"agent-orchestrator/db"
 )
 
 // providerTimeout resolves the HTTP request timeout for a provider. An explicit
@@ -189,28 +188,6 @@ func (r *Registry) SetRoles(name, defaultModel string, roles []string) {
 		// Only register provider-level entry if no model-level entry exists.
 		if existing, ok := r.roleIndex[role]; !ok || existing.modelName == "" {
 			r.roleIndex[role] = roleEntry{providerName: name, modelName: ""}
-		}
-	}
-}
-
-// SetModelRoles registers model-level role entries for a provider.
-// Each model with a non-empty Roles list gets a dedicated entry in the role
-// index so RouteByRole returns that specific model name for the role.
-// Model-level entries win over provider-level entries from SetRoles.
-func (r *Registry) SetModelRoles(providerName string, models []db.ProviderModel) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	// Clear old model-level entries for this provider.
-	for role, entry := range r.roleIndex {
-		if entry.providerName == providerName && entry.modelName != "" {
-			delete(r.roleIndex, role)
-		}
-	}
-	for _, m := range models {
-		for _, role := range m.Roles {
-			if role != "" {
-				r.roleIndex[role] = roleEntry{providerName: providerName, modelName: m.Name}
-			}
 		}
 	}
 }

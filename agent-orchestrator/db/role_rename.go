@@ -108,34 +108,25 @@ func (d *Database) RenameRoleReferences(ctx context.Context, oldName, newName st
 		return nil
 	}
 
-	// Providers: roles array + each model's roles array.
-	rows, err := d.db.QueryContext(ctx, `SELECT id, roles, models FROM providers`)
+	// Providers: provider-level roles array (Phase 5, T5.1 removed model-level roles).
+	rows, err := d.db.QueryContext(ctx, `SELECT id, roles FROM providers`)
 	if err != nil {
 		return err
 	}
 	type provUpdate struct {
-		id     string
-		roles  []string
-		models []ProviderModel
+		id    string
+		roles []string
 	}
 	var provUpdates []provUpdate
 	for rows.Next() {
-		var id, rolesJSON, modelsJSON string
-		if err := rows.Scan(&id, &rolesJSON, &modelsJSON); err != nil {
+		var id, rolesJSON string
+		if err := rows.Scan(&id, &rolesJSON); err != nil {
 			rows.Close()
 			return err
 		}
 		roles := unmarshalJSONStringSlice(rolesJSON)
-		models := unmarshalProviderModels(modelsJSON)
-		newRoles, dirty := replaceInSlice(roles, oldName, newName)
-		for i := range models {
-			if mr, ch := replaceInSlice(models[i].Roles, oldName, newName); ch {
-				models[i].Roles = mr
-				dirty = true
-			}
-		}
-		if dirty {
-			provUpdates = append(provUpdates, provUpdate{id: id, roles: newRoles, models: models})
+		if newRoles, dirty := replaceInSlice(roles, oldName, newName); dirty {
+			provUpdates = append(provUpdates, provUpdate{id: id, roles: newRoles})
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -145,8 +136,8 @@ func (d *Database) RenameRoleReferences(ctx context.Context, oldName, newName st
 	rows.Close()
 	for _, u := range provUpdates {
 		if _, err := d.db.ExecContext(ctx,
-			`UPDATE providers SET roles=?, models=? WHERE id=?`,
-			marshalJSONArray(u.roles), marshalJSONArray(u.models), u.id); err != nil {
+			`UPDATE providers SET roles=? WHERE id=?`,
+			marshalJSONArray(u.roles), u.id); err != nil {
 			return err
 		}
 	}

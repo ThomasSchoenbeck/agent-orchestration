@@ -229,7 +229,6 @@ type ModelRef struct {
 
 type ProviderModel struct {
 	Name               string   `json:"name"`
-	Roles              []string `json:"roles"`               // roles this model serves
 	InputPerMillion    float64  `json:"input_per_million"`   // USD per 1M input tokens
 	OutputPerMillion   float64  `json:"output_per_million"`  // USD per 1M output tokens
 	ContextWindow      int      `json:"context_window,omitempty"` // max context tokens (0 = unknown)
@@ -238,6 +237,9 @@ type ProviderModel struct {
 	FoldSystemIntoUser bool     `json:"fold_system_into_user,omitempty"`
 	SystemPrefix       string   `json:"system_prefix,omitempty"`
 	ToolAllowlist      []string `json:"tool_allowlist,omitempty"`
+	// SystemPrompt is the model-level prompt layer (Phase 5, T5.4), composed by
+	// prompt_prep alongside the agent/role/subagent/provider layers.
+	SystemPrompt       string   `json:"system_prompt,omitempty"`
 }
 
 type Provider struct {

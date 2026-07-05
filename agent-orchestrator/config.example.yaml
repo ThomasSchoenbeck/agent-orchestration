@@ -52,10 +52,11 @@ providers:
     # request_timeout_sec: 300            # HTTP timeout per LLM call. 0/omitted →
     #                                     # 300s for local (ollama/openai_compatible),
     #                                     # 120s for cloud. Raise for slow local models.
+    roles: [orchestrator, worker]         # roles this provider can serve (coarse fallback)
+    # system_prompt: ""                   # optional provider-level prompt layer
     models:
       - name: gpt-4o
         default: true                     # provider's default model
-        roles: [orchestrator, worker]     # roles this model serves
         input_per_million: 2.50           # USD per 1M input tokens
         output_per_million: 10.00         # USD per 1M output tokens
         context_window: 128000            # max context tokens (shown as "used / max" per message)
@@ -69,10 +70,10 @@ providers:
     type: anthropic
     base_url: "https://api.anthropic.com"
     api_key: "${ANTHROPIC_API_KEY}"
+    roles: [reviewer]
     models:
       - name: claude-sonnet-4-6
         default: true
-        roles: [reviewer]
         input_per_million: 3.00
         output_per_million: 15.00
 
@@ -82,19 +83,19 @@ providers:
     base_url: "https://my-resource.openai.azure.com"   # no trailing slash
     api_key: "${AZURE_OPENAI_API_KEY}"
     deployment: "gpt4o-prod"              # Azure deployment name
+    roles: [worker]
     models:
       - name: gpt-4o
         default: true
-        roles: [worker]
 
   # ── Ollama (local, no auth) ──────────────────────────────────────────────────
   - name: ollama-local
     type: ollama
     base_url: "http://localhost:11434"
+    roles: [worker]
     models:
       - name: llama3.2
         default: true
-        roles: [worker]
         # local models are free — omit pricing or set to 0
 
 # ─────────────────────────────────────────────────────────────────────────────

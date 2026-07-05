@@ -51,7 +51,6 @@ type TaskTypeConfig struct {
 // token pricing, and behavioral flags that override the provider-level defaults.
 type ProviderModelConfig struct {
 	Name               string   `yaml:"name"`
-	Roles              []string `yaml:"roles"`
 	Default            bool     `yaml:"default"` // this provider's default model
 	InputPerMillion    float64  `yaml:"input_per_million"`
 	OutputPerMillion   float64  `yaml:"output_per_million"`
@@ -60,6 +59,7 @@ type ProviderModelConfig struct {
 	FoldSystemIntoUser bool     `yaml:"fold_system_into_user"`
 	SystemPrefix       string   `yaml:"system_prefix"`
 	ToolAllowlist      []string `yaml:"tool_allowlist"`
+	SystemPrompt       string   `yaml:"system_prompt"` // model-level prompt layer (Phase 5, T5.4)
 }
 
 // ProviderConfig defines a single LLM backend. Its models are declared in the
@@ -70,7 +70,9 @@ type ProviderConfig struct {
 	BaseURL    string                `yaml:"base_url"`
 	APIKey     string                `yaml:"api_key"`
 	Deployment string                `yaml:"deployment"` // Azure OpenAI deployment name
-	Models     []ProviderModelConfig `yaml:"models"`     // per-model role and pricing config
+	SystemPrompt string              `yaml:"system_prompt"` // provider-level prompt layer (Phase 5, T5.4)
+	Roles      []string              `yaml:"roles"`      // roles this provider can serve (coarse fallback; Phase 5, T5.1)
+	Models     []ProviderModelConfig `yaml:"models"`     // per-model pricing + behavioral config
 	// RequestTimeoutSec overrides the HTTP request timeout (seconds). 0 → per-type
 	// default (300s for local ollama/openai_compatible servers, 120s for cloud).
 	RequestTimeoutSec int `yaml:"request_timeout_sec"`

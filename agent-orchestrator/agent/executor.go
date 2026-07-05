@@ -818,7 +818,12 @@ func (e *Executor) runMainLoop(
 	// result. baseLayers holds the static layers (the composed base prompt as the
 	// role layer + the task description); prior carries the previous round's prompt
 	// and result. When prompt_prep is not seeded, preparePrompt is a no-op.
-	baseLayers := PromptLayers{Role: systemMsg, Task: e.buildUserMessage(task)}
+	baseLayers := PromptLayers{
+		Role:     systemMsg,
+		Provider: route.ProviderPrompt,
+		Model:    route.ModelPrompt,
+		Task:     e.buildUserMessage(task),
+	}
 	prior := &priorRound{}
 
 	// LLM ↔ tool loop.
@@ -1074,20 +1079,27 @@ func parseTextToolCalls(content string) []llm.ToolCall {
 // Returning nil means send all tools (for unknown/custom roles).
 // subagentPromptFragment is appended to the system prompt when run_subagent is
 // available, telling the model when to delegate context-heavy work.
-const subagentPromptFragment = "Delegating subtasks: before reading large amounts of code yourself, " +
-	"delegate focused exploration to a subagent. Call run_subagent with skill=\"investigate_codebase\" " +
-	"and a clear, self-contained summary of what you need to find out. You will get back a concise " +
-	"digest instead of the raw files, keeping your own context small. Use this whenever a task starts " +
-	"on an unfamiliar or freshly checked-out codebase.\n\n" +
+const subagentPromptFragment = "You are a thin orchestrator: you do not read large amounts of code, edit " +
+	"files, run tests, or write reviews yourself. Delegate all real work to subagents with run_subagent " +
+	"and work from the concise summary each returns, keeping your own context small. Give each subagent a " +
+	"clear, self-contained instruction of exactly what to do:\n" +
+	"- Exploring or understanding the codebase → skill=\"investigate_codebase\".\n" +
+	"- Making code changes → skill=\"code_subtask\".\n" +
+	"- Reviewing changes on the branch → skill=\"review_subtask\".\n\n" +
 	"If the conversation grows very long and the remaining work can proceed from a summary of what's " +
 	"been done, call checkpoint_session to compact the history and continue."
 
 func defaultToolsForRole(role string) []string {
 	switch role {
 	case "worker":
-		return []string{"read_file", "write_file", "list_files", "apply_diff", "run_tests", "task_comment", "request_input", "run_subagent", "checkpoint_session", "read_memory", "write_memory"}
+		// T5.6: the main worker session is a thin orchestrator — it delegates all
+		// file/test work to the code_subtask subagent and keeps only orchestration
+		// tools. Work tools live on the work subagents.
+		return []string{"run_subagent", "read_memory", "write_memory", "checkpoint_session", "request_input", "task_comment"}
 	case "reviewer":
-		return []string{"read_file", "list_files", "task_comment", "request_input", "run_subagent", "checkpoint_session", "read_memory", "write_memory"}
+		// T5.6: the reviewer main session delegates the actual review to the
+		// review_subtask subagent; it keeps only orchestration tools.
+		return []string{"run_subagent", "read_memory", "write_memory", "checkpoint_session", "request_input", "task_comment"}
 	case "orchestrator":
 		return []string{"list_tasks", "create_work_package", "plan_project", "bootstrap_project", "sync_scope", "complete_project", "query_context", "save_context", "task_comment", "request_input", "run_subagent", "checkpoint_session"}
 	default:
