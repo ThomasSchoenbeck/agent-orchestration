@@ -119,6 +119,22 @@ func (c *ServerClient) CreateAgentSession(ctx context.Context, s *db.AgentSessio
 	return &out, nil
 }
 
+// CreatePreparedPrompt persists a prompt_prep-synthesized system prompt (Phase 4).
+func (c *ServerClient) CreatePreparedPrompt(ctx context.Context, p *db.PreparedPrompt) error {
+	return c.post(ctx, "/api/prepared-prompts", p, nil)
+}
+
+// ListAgentSessions fetches a task's persisted session tree (checkpoints), oldest
+// first. Used to reconstruct progress when resuming a task in a new session or on
+// another agent that never had the worktree.
+func (c *ServerClient) ListAgentSessions(ctx context.Context, taskID string) ([]*db.AgentSession, error) {
+	var sessions []*db.AgentSession
+	if err := c.get(ctx, fmt.Sprintf("/api/agent-sessions?task_id=%s", taskID), &sessions); err != nil {
+		return nil, err
+	}
+	return sessions, nil
+}
+
 // Heartbeat sends a heartbeat for the given agent ID and returns the server's
 // control response (desired state + live roles/skills). Feature 7.
 func (c *ServerClient) Heartbeat(ctx context.Context, agentID string) (*api.HeartbeatResponse, error) {

@@ -41,6 +41,9 @@ type Executor struct {
 	// main loop emits a run_subagent tool call.
 	subagentSkills         []*db.SubagentSkill
 	subagentSkillsResolved bool
+	// subagentTimeoutOverride, when > 0, replaces the default subagentTimeout for a
+	// single subagent run. Test hook only; production leaves it zero.
+	subagentTimeoutOverride time.Duration
 }
 
 // resolveSubagentSkills fetches the enabled subagent skills from the server once
@@ -629,6 +632,15 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 ) {
 	tlog := e.log.ForTask(task.ID)
 
+	// Mandatory core-skill preflight (T3.4): before running a worker/reviewer task,
+	// verify every required core subagent skill exists and is enabled; else fail the
+	// task fast with a specific error. Orchestrator/planner and merge-review tasks
+	// are exempt inside preflightCoreSkills.
+	if perr := e.preflightCoreSkills(ctx, task); perr != nil {
+		tlog.ErrorCtx(ctx, "%v", perr)
+		return map[string]interface{}{"error": perr.Error()}, db.TaskStatusFailed, stats, perr
+	}
+
 	// Resolve the provider for this task. For a review the reviewing agent's role
 	// is task.ReviewRole, not the task's own implementation role.
 	effRole := effectiveRole(task)
@@ -643,7 +655,8 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 		return nil, db.TaskStatusFailed, stats, fmt.Errorf("no provider for role %q", route.Role)
 	}
 	tlog.InfoCtx(ctx, "route resolved provider=%q model=%q role=%q", route.Provider.Name(), route.Model, route.Role)
-	stats.model = route.Model
+	// stats.model is seeded by the main session (newSession) and returned via
+	// stats = sess.Stats after runMainLoop.
 
 	// Feature 6: compose the agent's persona (role ⊕ skills).
 	e.resolveSkillDefs(ctx)
@@ -687,6 +700,20 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 	// resumed task sees the human/orchestrator reply.
 	if cc := e.commentsContext(ctx, task.ID); cc != "" {
 		userMsg = cc + "\n\n" + userMsg
+	}
+
+	// Cross-session recovery: if this task was worked before (prior checkpoints
+	// exist), reconstruct a resume brief via the task_status subagent and prepend
+	// it, so a restarted or remote agent continues from progress rather than cold.
+	// Planner/orchestrator tasks keep their current path unchanged.
+	if !e.IsPlannerTask(task) {
+		if brief, sstats := e.reconstructProgress(ctx, tlog, route, task); brief != "" {
+			userMsg = "Resuming this task — progress so far:\n\n" + brief + "\n\n---\n\n" + userMsg
+			stats.totalTokens += sstats.totalTokens
+			stats.inputTokens += sstats.inputTokens
+			stats.outputTokens += sstats.outputTokens
+			stats.cost += sstats.cost
+		}
 	}
 
 	// Some models (e.g. Gemma via llama.cpp) have no system role in their chat
@@ -750,6 +777,33 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 	}
 	tlog.LogWithMeta(ctx, "info", "LLM prompt", promptMeta)
 
+	// Run the LLM↔tool loop as the task's main session. The session owns the
+	// working message history and token/cost stats; execute() returns those stats.
+	sess := newSession(SessionKindMain, task.ID, e.agentID, *route)
+	sess.Messages = messages
+	result, status, err = e.runMainLoop(ctx, tlog, task, route, sess, toolDefs, systemMsg)
+	stats = sess.Stats
+	if err != nil {
+		sess.markFailed()
+	} else {
+		sess.markDone()
+	}
+	return result, status, stats, err
+}
+
+// runMainLoop drives the LLM↔tool loop for the task's main session, reading and
+// writing sess.Messages and accumulating token/cost into sess.Stats. Extracted
+// from execute() so the loop runs as a first-class Session (multi-session
+// orchestration); behaviour is unchanged.
+func (e *Executor) runMainLoop(
+	ctx context.Context, tlog *AgentLogger, task *db.Task, route *router.RouteResult,
+	sess *Session, toolDefs []llm.ToolDef, systemMsg string,
+) (map[string]interface{}, string, error) {
+	messages := sess.Messages
+	stats := &sess.Stats
+	// Keep the session's history in sync with the local slice on every return.
+	defer func() { sess.Messages = messages }()
+
 	// consecutiveErrorRounds counts rounds where every tool call returned an
 	// error. After 3 such rounds we abort — the model is stuck.
 	consecutiveErrorRounds := 0
@@ -759,10 +813,22 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 	// it triggers the same compaction path as the automatic context-pressure check.
 	checkpointRequested := false
 
+	// Prompt-prep (Phase 4): before each round, the prompt_prep subagent synthesizes
+	// messages[0] from the layered inputs, rolling forward from the prior prompt +
+	// result. baseLayers holds the static layers (the composed base prompt as the
+	// role layer + the task description); prior carries the previous round's prompt
+	// and result. When prompt_prep is not seeded, preparePrompt is a no-op.
+	baseLayers := PromptLayers{Role: systemMsg, Task: e.buildUserMessage(task)}
+	prior := &priorRound{}
+
 	// LLM ↔ tool loop.
 	for round := 0; round < maxToolRounds; round++ {
 		tlog.InfoCtx(ctx, "calling LLM provider=%q model=%q round=%d messages=%d",
 			route.Provider.Name(), route.Model, round, len(messages))
+		messages = e.preparePrompt(ctx, tlog, *route, task.ID, sess.ID, round, messages, baseLayers, prior, stats)
+		if len(messages) > 0 && messages[0].Role == "system" {
+			prior.prompt = messages[0].Content
+		}
 		req := llm.ChatRequest{
 			Model:    route.Model,
 			Messages: messages,
@@ -774,12 +840,14 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 		resp, callErr := route.Provider.Chat(ctx, req)
 		if callErr != nil {
 			tlog.ErrorCtx(ctx, "LLM call failed (round=%d): %v", round, callErr)
-			return nil, db.TaskStatusFailed, stats, fmt.Errorf("llm chat (round %d): %w", round, callErr)
+			return nil, db.TaskStatusFailed, fmt.Errorf("llm chat (round %d): %w", round, callErr)
 		}
 		stats.totalTokens += resp.TokensUsed
 		stats.inputTokens += resp.InputTokens
 		stats.outputTokens += resp.OutputTokens
 		stats.cost += logging.CostForCallWithProvider(route.ProviderModels, nil, route.Model, resp.InputTokens, resp.OutputTokens)
+		// Remember this round's result so prompt_prep can roll the prompt forward.
+		prior.result = resp.Content
 
 		// In text mode, parse tool calls out of the response content.
 		if route.TextToolCalls && len(resp.ToolCalls) == 0 {
@@ -833,7 +901,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			tlog.InfoCtx(ctx, "task complete after %d round(s), total_tokens=%d", round+1, stats.totalTokens)
 			return map[string]interface{}{
 				"output": resp.Content,
-			}, db.TaskStatusCompleted, stats, nil
+			}, db.TaskStatusCompleted, nil
 		}
 
 		// request_input is terminal: the agent is asking a human/orchestrator for
@@ -851,7 +919,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 					tlog.Warn("failed to post request_input comment: %v", cErr)
 				}
 				tlog.InfoCtx(ctx, "agent requested input; parking task as AWAITING_INPUT")
-				return map[string]interface{}{"question": question}, db.TaskStatusAwaitingInput, stats, nil
+				return map[string]interface{}{"question": question}, db.TaskStatusAwaitingInput, nil
 			}
 		}
 
@@ -872,7 +940,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			// never enters this conversation.
 			var toolResultStr string
 			if tc.Name == tools.SubagentToolName {
-				toolResultStr = e.dispatchSubagent(ctx, tlog, *route, task, tc, &stats)
+				toolResultStr = e.dispatchSubagent(ctx, tlog, *route, task, tc, stats)
 			} else if tc.Name == tools.SessionToolName {
 				// Defer the actual checkpoint to the end of the round (after all
 				// tool results are in), then compact the history.
@@ -927,7 +995,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 				tlog.WarnCtx(ctx, "aborting after %d consecutive rounds with all tool calls failing", consecutiveErrorRounds)
 				return map[string]interface{}{
 					"warning": fmt.Sprintf("aborted after %d consecutive all-error tool rounds", consecutiveErrorRounds),
-				}, db.TaskStatusFailed, stats, fmt.Errorf("model stuck: %d consecutive rounds of failing tool calls", consecutiveErrorRounds)
+				}, db.TaskStatusFailed, fmt.Errorf("model stuck: %d consecutive rounds of failing tool calls", consecutiveErrorRounds)
 			}
 		} else {
 			consecutiveErrorRounds = 0
@@ -942,7 +1010,7 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			if checkpointRequested {
 				reason = "requested"
 			}
-			messages = e.doCheckpoint(ctx, tlog, *route, task, messages, systemMsg, round, &stats, reason)
+			messages = e.doCheckpoint(ctx, tlog, *route, task, sess, messages, systemMsg, round, reason)
 			checkpointRequested = false
 		}
 	}
@@ -953,12 +1021,12 @@ func (e *Executor) execute(ctx context.Context, task *db.Task) (
 			return map[string]interface{}{
 				"output":  messages[i].Content,
 				"warning": "max tool rounds exceeded",
-			}, db.TaskStatusCompleted, stats, nil
+			}, db.TaskStatusCompleted, nil
 		}
 	}
 	return map[string]interface{}{
 		"warning": "max tool rounds exceeded with no assistant output",
-	}, db.TaskStatusFailed, stats, nil
+	}, db.TaskStatusFailed, nil
 }
 
 // textToolCallRe extracts fenced code blocks (```json ... ``` or ``` ... ```)
@@ -1017,9 +1085,9 @@ const subagentPromptFragment = "Delegating subtasks: before reading large amount
 func defaultToolsForRole(role string) []string {
 	switch role {
 	case "worker":
-		return []string{"read_file", "write_file", "list_files", "apply_diff", "run_tests", "task_comment", "request_input", "run_subagent", "checkpoint_session"}
+		return []string{"read_file", "write_file", "list_files", "apply_diff", "run_tests", "task_comment", "request_input", "run_subagent", "checkpoint_session", "read_memory", "write_memory"}
 	case "reviewer":
-		return []string{"read_file", "list_files", "task_comment", "request_input", "run_subagent", "checkpoint_session"}
+		return []string{"read_file", "list_files", "task_comment", "request_input", "run_subagent", "checkpoint_session", "read_memory", "write_memory"}
 	case "orchestrator":
 		return []string{"list_tasks", "create_work_package", "plan_project", "bootstrap_project", "sync_scope", "complete_project", "query_context", "save_context", "task_comment", "request_input", "run_subagent", "checkpoint_session"}
 	default:

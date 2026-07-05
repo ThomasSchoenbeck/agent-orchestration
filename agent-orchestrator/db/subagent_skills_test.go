@@ -173,3 +173,79 @@ func TestDefaultSubagentSkills_CodeSubtaskHasWriteTools(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultSubagentSkills_TaskStatusIsReadOnlyRecovery(t *testing.T) {
+	var ts *db.SubagentSkill
+	for _, s := range db.DefaultSubagentSkills() {
+		if s.Name == "task_status" {
+			ts = s
+		}
+	}
+	if ts == nil {
+		t.Fatal("expected a task_status default subagent skill")
+	}
+	if !ts.Enabled {
+		t.Error("task_status should be enabled")
+	}
+	// It reconstructs progress from the durable record: must have get_task_progress
+	// and read_memory, and must not carry any write tools.
+	allow := map[string]bool{}
+	for _, tool := range ts.ToolAllowlist {
+		allow[tool] = true
+	}
+	for _, want := range []string{"get_task_progress", "read_memory"} {
+		if !allow[want] {
+			t.Errorf("task_status must allow %q (got %v)", want, ts.ToolAllowlist)
+		}
+	}
+	for _, forbidden := range []string{"write_file", "apply_diff", "write_memory"} {
+		if allow[forbidden] {
+			t.Errorf("task_status must be read-only, but allows %q", forbidden)
+		}
+	}
+}
+
+func TestDefaultSubagentSkills_PromptPrepIsToollessOneShot(t *testing.T) {
+	var pp *db.SubagentSkill
+	for _, s := range db.DefaultSubagentSkills() {
+		if s.Name == "prompt_prep" {
+			pp = s
+		}
+	}
+	if pp == nil {
+		t.Fatal("expected a prompt_prep default subagent skill")
+	}
+	if !pp.Enabled {
+		t.Error("prompt_prep should be enabled")
+	}
+	if len(pp.ToolAllowlist) != 0 {
+		t.Errorf("prompt_prep must carry no tools (one-shot synthesis), got %v", pp.ToolAllowlist)
+	}
+	if pp.MaxRounds != 1 {
+		t.Errorf("prompt_prep should be one-shot (max_rounds 1), got %d", pp.MaxRounds)
+	}
+}
+
+func TestDefaultSubagentSkills_ReviewSubtaskIsReadOnly(t *testing.T) {
+	var rv *db.SubagentSkill
+	for _, s := range db.DefaultSubagentSkills() {
+		if s.Name == "review_subtask" {
+			rv = s
+		}
+	}
+	if rv == nil {
+		t.Fatal("expected a review_subtask default subagent skill")
+	}
+	allow := map[string]bool{}
+	for _, tool := range rv.ToolAllowlist {
+		allow[tool] = true
+	}
+	if !allow["read_file"] || !allow["search_files"] {
+		t.Errorf("review_subtask must allow read_file + search_files (got %v)", rv.ToolAllowlist)
+	}
+	for _, forbidden := range []string{"write_file", "apply_diff", "run_tests"} {
+		if allow[forbidden] {
+			t.Errorf("review_subtask must be read-only, but allows %q", forbidden)
+		}
+	}
+}

@@ -547,6 +547,8 @@ func buildAgent(name string, roles, skills []string, serverURL, configPath, work
 	_ = tools.RegisterCommentTools(toolReg, backend)
 	_ = tools.RegisterSubagentTool(toolReg)
 	_ = tools.RegisterSessionTool(toolReg)
+	_ = tools.RegisterMemoryTools(toolReg)
+	_ = tools.RegisterProgressTool(toolReg, backend)
 	a.WithExecutor(rtr, toolReg)
 
 	log.Printf("agent %q: executor wired (LLM providers: %d)", name, len(llmReg.List()))

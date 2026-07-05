@@ -324,7 +324,45 @@ type AgentSession struct {
 	Summary   string    `json:"summary"`
 	Messages  string    `json:"messages"` // JSON-encoded pre-checkpoint message history
 	Round     int       `json:"round"`    // tool-loop round at which the checkpoint fired
+	// Multi-session orchestration (2026-07-04): session-tree metadata.
+	Kind      string    `json:"kind"`      // main | discovery | work | prompt_prep | task_status
+	ParentID  string    `json:"parent_id"` // spawning session id ("" for a root/main session)
+	Status    string    `json:"status"`    // running | done | failed | timed_out
+	Title     string    `json:"title"`     // short human label for the session
+	Cost      float64   `json:"cost"`      // USD cost attributed to this session
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// TaskMemory is a task's durable, agent-writable running memory (Multi-session
+// orchestration, 2026-07-04). One row per task; it mirrors the worktree
+// .agent_context/ scratchpad but is never committed to the project repo.
+type TaskMemory struct {
+	ID        string            `json:"id"`
+	TaskID    string            `json:"task_id"`
+	Content   TaskMemoryContent `json:"content"`
+	UpdatedAt time.Time         `json:"updated_at"`
+}
+
+// PreparedPrompt is a single system prompt synthesized by the prompt_prep
+// subagent before an LLM round (Phase 4), linked to the calling session + round
+// for inspection. Append-only.
+type PreparedPrompt struct {
+	ID        string    `json:"id"`
+	TaskID    string    `json:"task_id"`
+	SessionID string    `json:"session_id"`
+	Round     int       `json:"round"`
+	Prompt    string    `json:"prompt"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// TaskMemoryContent is the structured body of a task's memory, split into the
+// sections an agent maintains as it works.
+type TaskMemoryContent struct {
+	Summary       string   `json:"summary"`
+	Progress      []string `json:"progress"`       // append-only log of steps taken
+	Decisions     []string `json:"decisions"`      // key choices and their rationale
+	Findings      []string `json:"findings"`       // discovery results worth remembering
+	OpenQuestions []string `json:"open_questions"` // unresolved questions / blockers
 }
 
 // --- Context ---

@@ -96,6 +96,8 @@ func (s *Server) handleMetaTools(w http.ResponseWriter, r *http.Request) {
 	_ = tools.RegisterCommentTools(reg, nil)
 	_ = tools.RegisterSubagentTool(reg)
 	_ = tools.RegisterSessionTool(reg)
+	_ = tools.RegisterMemoryTools(reg)
+	_ = tools.RegisterProgressTool(reg, nil)
 
 	defs := reg.List()
 	items := make([]metaItem, 0, len(defs))

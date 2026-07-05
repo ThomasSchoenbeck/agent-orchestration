@@ -169,6 +169,59 @@ func DefaultSubagentSkills() []*SubagentSkill {
 				"changed (files touched and why) and the test outcome. This summary is the only thing " +
 				"returned to the main agent, so make it self-contained.",
 		},
+		{
+			Name:          "review_subtask",
+			Label:         "Review Subtask",
+			Enabled:       true,
+			Description:   "Read-only review of the changes on the task branch; returns a verdict and notes.",
+			ToolAllowlist: []string{"read_file", "list_files", "search_files"},
+			MaxRounds:     10,
+			PromptTemplate: "You are a focused code-review subagent operating on the main agent's checked-out " +
+				"worktree. You have read-only tools (read_file, list_files, search_files). Review the changes " +
+				"for correctness, clarity, and adherence to the task; do not modify anything.\n\n" +
+				"Review request:\n{{instructions}}\n\n" +
+				"When done, STOP calling tools and reply with a concise review: an overall verdict " +
+				"(approved / changes_requested / revision_requested) followed by specific, actionable notes " +
+				"referencing files and lines. This review is the only thing returned to the main agent, so " +
+				"make it self-contained.",
+		},
+		{
+			Name:        "prompt_prep",
+			Label:       "Prompt Prep",
+			Enabled:     true,
+			Description: "Synthesizes the optimal system prompt for an upcoming LLM call from the layered inputs; returns the prompt only.",
+			// No tools: prompt_prep is a one-shot synthesis, not a tool loop.
+			ToolAllowlist: []string{},
+			MaxRounds:     1,
+			PromptTemplate: "You are a prompt-preparation subagent. Your only job is to synthesize the single best " +
+				"system prompt for the upcoming LLM call, given the layered inputs below. The layers are labeled " +
+				"and given in priority order (agent, role, subagent, provider, model) followed by the task " +
+				"description; on later rounds you also receive the prompt actually used last round and the model's " +
+				"latest result, so you can roll the prompt forward.\n\n" +
+				"Composition inputs:\n{{instructions}}\n\n" +
+				"Blend the layers into one coherent, self-contained system prompt that keeps the higher-priority " +
+				"layers' intent, folds in anything still relevant from the prior prompt, and adapts to the latest " +
+				"result. Reply with ONLY the synthesized system prompt text — no preamble, no explanation, no code " +
+				"fences.",
+		},
+		{
+			Name:          "task_status",
+			Label:         "Task Status",
+			Enabled:       true,
+			Description:   "Reconstructs a concise resume brief for a task from its durable record; returns the brief.",
+			ToolAllowlist: []string{"get_task_progress", "read_memory", "read_file", "list_files"},
+			MaxRounds:     8,
+			PromptTemplate: "You are a task-status reconstruction subagent. Reconstruct, concisely, where a " +
+				"task currently stands so a fresh work session can continue without redoing work. You have " +
+				"read-only tools: get_task_progress (ordered checkpoint summaries of prior sessions), " +
+				"read_memory (the task's durable memory), and read_file / list_files (the task branch " +
+				"contents).\n\n" +
+				"Reconstruction request:\n{{instructions}}\n\n" +
+				"Gather the checkpoint summaries and memory first, then inspect the branch only as needed. " +
+				"STOP calling tools once you can summarize, and reply with a single concise resume brief: " +
+				"what has been done, the current state, key decisions, and what remains. This brief is the " +
+				"only thing returned, so make it self-contained.",
+		},
 	}
 }
 

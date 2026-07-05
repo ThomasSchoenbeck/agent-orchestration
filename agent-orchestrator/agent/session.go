@@ -2,9 +2,12 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"agent-orchestrator/db"
 	"agent-orchestrator/llm"
@@ -67,27 +70,34 @@ func compactMessages(systemMsg, summary string, fold bool) []llm.Message {
 	}
 }
 
-// persistCheckpoint stores the pre-checkpoint messages + summary as an
-// AgentSession via the server client (best-effort).
-func (e *Executor) persistCheckpoint(ctx context.Context, tlog *AgentLogger, taskID string, preMessages []llm.Message, summary string, round int) {
+// persistSession stores the session as an AgentSession row — a node in the
+// task's session tree — carrying the given summary and tool-loop round
+// (best-effort). The row's cost is the delta since this session-chain's last
+// persist, so tree views show per-session cost rather than a running total.
+func (e *Executor) persistSession(ctx context.Context, tlog *AgentLogger, sess *Session, summary string, round int) {
 	if e.client == nil {
 		return
 	}
-	raw, _ := json.Marshal(preMessages)
-	if _, err := e.client.CreateAgentSession(ctx, &db.AgentSession{
-		TaskID: taskID, AgentID: e.agentID, Summary: summary, Messages: string(raw), Round: round,
-	}); err != nil {
-		tlog.Warn("failed to persist checkpoint session: %v", err)
+	row := sess.toAgentSession(summary, round)
+	row.Cost = sess.Stats.cost - sess.costBookmark
+	sess.costBookmark = sess.Stats.cost
+	if _, err := e.client.CreateAgentSession(ctx, row); err != nil {
+		tlog.Warn("failed to persist session: %v", err)
 	}
 }
 
-// doCheckpoint summarizes, persists, and compacts the conversation, folding the
-// summarization call's token/cost into the task stats. On error it leaves the
-// messages unchanged so the loop can continue uncompacted.
+// doCheckpoint summarizes the current session, persists it as a completed node,
+// and continues in a NEW main session seeded from the summary plus the task's
+// worktree memory (cross-session continuation). The new session is linked to the
+// one just persisted via ParentID, so successive checkpoints form a chain. The
+// summarization call's token/cost folds into the session (task) stats. On a
+// summarize error it leaves the messages unchanged so the loop continues
+// uncompacted in the same session.
 func (e *Executor) doCheckpoint(
 	ctx context.Context, tlog *AgentLogger, route router.RouteResult, task *db.Task,
-	messages []llm.Message, systemMsg string, round int, stats *execStats, reason string,
+	sess *Session, messages []llm.Message, systemMsg string, round int, reason string,
 ) []llm.Message {
+	stats := &sess.Stats
 	summary, cstats, err := e.checkpointSummarize(ctx, route, messages)
 	stats.totalTokens += cstats.totalTokens
 	stats.inputTokens += cstats.inputTokens
@@ -97,12 +107,57 @@ func (e *Executor) doCheckpoint(
 		tlog.WarnCtx(ctx, "checkpoint failed (%s); continuing without compaction: %v", reason, err)
 		return messages
 	}
-	e.persistCheckpoint(ctx, tlog, task.ID, messages, summary, round)
+
+	// Persist the session just completed, then roll over to a fresh main session
+	// linked to it.
+	sess.Messages = messages
+	sess.Status = SessionStatusDone
+	e.persistSession(ctx, tlog, sess, summary, round)
+
+	prevID := sess.ID
+	sess.ID = uuid.NewString()
+	sess.ParentID = prevID
+	sess.Status = SessionStatusRunning
+
+	// Seed the new session from the summary + the task's worktree memory so work
+	// continues across the context-window boundary in a fresh session.
+	memory := readWorktreeMemory(task.WorktreePath)
+	seeded := seedContinuation(systemMsg, summary, memory, route.FoldSystemIntoUser)
+	sess.Messages = seeded
+
 	tlog.LogWithMeta(ctx, "info", fmt.Sprintf("session checkpoint (%s)", reason), map[string]interface{}{
-		"source":  "checkpoint",
-		"reason":  reason,
-		"round":   round,
-		"summary": summary,
+		"source":          "checkpoint",
+		"reason":          reason,
+		"round":           round,
+		"summary":         summary,
+		"prev_session_id": prevID,
+		"new_session_id":  sess.ID,
 	})
-	return compactMessages(systemMsg, summary, route.FoldSystemIntoUser)
+	return seeded
 }
+
+// seedContinuation builds the opening history for a continuation session from the
+// prior session's summary and, when present, the task's worktree memory.
+func seedContinuation(systemMsg, summary, memory string, fold bool) []llm.Message {
+	if strings.TrimSpace(memory) != "" {
+		summary = summary + "\n\nTask memory:\n\n" + memory
+	}
+	return compactMessages(systemMsg, summary, fold)
+}
+
+// readWorktreeMemory returns the human-readable task memory (.agent_context/
+// memory.md) from the worktree, or "" when absent. Best-effort.
+func readWorktreeMemory(worktree string) string {
+	if worktree == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(worktree, memoryContextDir, "memory.md"))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// memoryContextDir is the worktree subdirectory holding the agent's task memory
+// scratchpad (mirrors tools' .agent_context/); kept gitignored, never committed.
+const memoryContextDir = ".agent_context"

@@ -337,7 +337,10 @@ CREATE TABLE IF NOT EXISTS subagent_skills (
     updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Agent sessions (Session checkpoint feature): persisted main-loop checkpoints
+-- Agent sessions (Session checkpoint feature): persisted main-loop checkpoints.
+-- Multi-session orchestration (2026-07-04) adds kind/parent_id/status/title/cost
+-- via applyColumnMigrations (kept out of this CREATE TABLE per the migration
+-- convention: ALTER-added columns must not be declared here).
 CREATE TABLE IF NOT EXISTS agent_sessions (
     id         TEXT PRIMARY KEY,
     task_id    TEXT NOT NULL,
@@ -348,6 +351,30 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_task ON agent_sessions(task_id);
+
+-- Task memory (Multi-session orchestration, 2026-07-04): one durable, agent-
+-- writable memory row per task (summary/progress/decisions/findings/questions).
+-- Mirrors the worktree .agent_context/ scratchpad so a session that runs out of
+-- context — or a remote agent without the worktree — can reconstruct progress.
+CREATE TABLE IF NOT EXISTS task_memory (
+    id           TEXT PRIMARY KEY,
+    task_id      TEXT NOT NULL UNIQUE,
+    content_json TEXT NOT NULL DEFAULT '{}',
+    updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Prepared prompts (Phase 4, prompt_prep): one row per system prompt synthesized
+-- by the prompt_prep subagent before an LLM round, linked to the calling session +
+-- round, for inspection. Append-only.
+CREATE TABLE IF NOT EXISTS prepared_prompts (
+    id         TEXT PRIMARY KEY,
+    task_id    TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    round      INTEGER NOT NULL DEFAULT 0,
+    prompt     TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_prepared_prompts_task ON prepared_prompts(task_id);
 
 -- Pull requests (Feature 2): merge gate opened by reviewer, decided by deployer/human
 CREATE TABLE IF NOT EXISTS pull_requests (
@@ -647,6 +674,31 @@ func (d *Database) applyColumnMigrations() error {
 		{
 			name: "add_resync_prompt_to_agent_role_definitions",
 			sql:  "ALTER TABLE agent_role_definitions ADD COLUMN resync_prompt TEXT NOT NULL DEFAULT ''",
+		},
+		// Multi-session orchestration (2026-07-04): session-tree metadata.
+		{
+			name: "add_kind_to_agent_sessions",
+			sql:  "ALTER TABLE agent_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'main'",
+		},
+		{
+			name: "add_parent_id_to_agent_sessions",
+			sql:  "ALTER TABLE agent_sessions ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			name: "add_status_to_agent_sessions",
+			sql:  "ALTER TABLE agent_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'done'",
+		},
+		{
+			name: "add_title_to_agent_sessions",
+			sql:  "ALTER TABLE agent_sessions ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			name: "add_cost_to_agent_sessions",
+			sql:  "ALTER TABLE agent_sessions ADD COLUMN cost REAL NOT NULL DEFAULT 0",
+		},
+		{
+			name: "add_parent_id_index_to_agent_sessions",
+			sql:  "CREATE INDEX IF NOT EXISTS idx_agent_sessions_parent ON agent_sessions(parent_id)",
 		},
 	}
 

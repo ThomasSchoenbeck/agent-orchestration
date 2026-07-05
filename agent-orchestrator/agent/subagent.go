@@ -146,7 +146,11 @@ func (e *Executor) runSubagent(
 		}
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, subagentTimeout)
+	timeout := subagentTimeout
+	if e.subagentTimeoutOverride > 0 {
+		timeout = e.subagentTimeoutOverride
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	type loopResult struct {
@@ -162,9 +166,15 @@ func (e *Executor) runSubagent(
 
 	select {
 	case <-runCtx.Done():
-		// On timeout/cancel the goroutine may still be writing its local stats;
-		// we return zero stats to avoid a data race. Partial accounting is lost.
-		return "", execStats{model: route.Model}, fmt.Errorf("subagent %s timed out or was cancelled: %w", skill.Name, runCtx.Err())
+		// Wait for the loop goroutine to unwind before reading its result, so its
+		// partial token/cost stats are safe to read (no data race) and preserved
+		// rather than discarded. The loop observes the cancelled ctx each round and
+		// returns promptly.
+		r := <-done
+		if r.err == nil {
+			r.err = fmt.Errorf("subagent %s timed out or was cancelled: %w", skill.Name, runCtx.Err())
+		}
+		return r.summary, r.stats, r.err
 	case r := <-done:
 		return r.summary, r.stats, r.err
 	}
@@ -183,9 +193,25 @@ func (e *Executor) subagentToolLoop(
 	stats.model = route.Model
 	lastAssistant := ""
 
+	// Prompt-prep (Phase 4): synthesize the subagent's system prompt each round,
+	// rolling forward from the prior prompt + result. Guarded so prompt_prep never
+	// preps itself. The subagent is not yet a tracked session (T3.2), so syntheses
+	// are not persisted here (empty taskID) — swap + stats folding still apply.
+	baseLayers := PromptLayers{}
+	if len(messages) > 0 && messages[0].Role == "system" {
+		baseLayers.Subagent = messages[0].Content
+	}
+	prior := &priorRound{}
+
 	for round := 0; round < maxRounds; round++ {
 		if err := ctx.Err(); err != nil {
 			return lastAssistant, stats, err
+		}
+		if skill.Name != promptPrepSkillName {
+			messages = e.preparePrompt(ctx, tlog, route, "", "", round, messages, baseLayers, prior, &stats)
+			if len(messages) > 0 && messages[0].Role == "system" {
+				prior.prompt = messages[0].Content
+			}
 		}
 		req := llm.ChatRequest{Model: route.Model, Messages: messages, Tools: toolDefs}
 		if len(toolDefs) > 0 {
@@ -199,6 +225,7 @@ func (e *Executor) subagentToolLoop(
 		stats.inputTokens += resp.InputTokens
 		stats.outputTokens += resp.OutputTokens
 		stats.cost += logging.CostForCallWithProvider(route.ProviderModels, nil, route.Model, resp.InputTokens, resp.OutputTokens)
+		prior.result = resp.Content
 
 		if route.TextToolCalls && len(resp.ToolCalls) == 0 {
 			resp.ToolCalls = parseTextToolCalls(resp.Content)

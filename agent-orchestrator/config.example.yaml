@@ -210,6 +210,18 @@ subagent_skills:
       {{instructions}}
 
       When done, STOP calling tools and reply with a concise summary of exactly what you changed (files touched and why) and the test outcome. This summary is the only thing returned to the main agent, so make it self-contained.
+  - name: prompt_prep
+    label: Prompt Prep
+    description: Synthesizes the optimal system prompt for an upcoming LLM call from the layered inputs; returns the prompt only.
+    tool_allowlist: []           # one-shot synthesis, no tools
+    max_rounds: 1
+    prompt_template: |
+      You are a prompt-preparation subagent. Your only job is to synthesize the single best system prompt for the upcoming LLM call, given the layered inputs below. The layers are labeled and given in priority order (agent, role, subagent, provider, model) followed by the task description; on later rounds you also receive the prompt actually used last round and the model's latest result, so you can roll the prompt forward.
+
+      Composition inputs:
+      {{instructions}}
+
+      Blend the layers into one coherent, self-contained system prompt that keeps the higher-priority layers' intent, folds in anything still relevant from the prior prompt, and adapts to the latest result. Reply with ONLY the synthesized system prompt text — no preamble, no explanation, no code fences.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Agent Templates — server-managed, spawn N co-located agents per template.

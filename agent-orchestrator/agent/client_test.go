@@ -20,6 +20,18 @@ func wrapAgentAPI(h http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/agent/") {
 			r.URL.Path = "/api" + strings.TrimPrefix(r.URL.Path, "/api/agent")
 		}
+		// Fallback for the executor's mandatory core-skill preflight (T3.4): serve
+		// the built-in subagent-skill registry when the wrapped mux doesn't register
+		// one, so worker/reviewer Run tests model a working platform. A test that
+		// registers its own /api/subagent-skills handler still wins.
+		if r.URL.Path == "/api/subagent-skills" {
+			if mux, ok := h.(*http.ServeMux); ok {
+				if _, pattern := mux.Handler(r); pattern == "" {
+					_ = json.NewEncoder(w).Encode(db.DefaultSubagentSkills())
+					return
+				}
+			}
+		}
 		h.ServeHTTP(w, r)
 	})
 }

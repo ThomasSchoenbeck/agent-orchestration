@@ -40,6 +40,7 @@ func (s *Server) registerAgentRoutes() {
 	am.HandleFunc("/api/subagent-skills", s.handleSubagentSkills)
 	am.HandleFunc("/api/subagent-skills/", s.handleSubagentSkillDetail)
 	am.HandleFunc("/api/agent-sessions", s.handleAgentSessions)
+	am.HandleFunc("/api/prepared-prompts", s.handlePreparedPrompts)
 	am.HandleFunc("/api/roles", s.handleRoles)
 	am.HandleFunc("/api/roles/", s.handleRoleDetail)
 	am.HandleFunc("/api/settings", s.handleSettings)
