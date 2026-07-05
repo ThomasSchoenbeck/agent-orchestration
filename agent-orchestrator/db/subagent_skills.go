@@ -27,15 +27,19 @@ func (d *Database) CreateSubagentSkill(ctx context.Context, s *SubagentSkill) er
 	if s.ContextExclude == nil {
 		s.ContextExclude = []string{}
 	}
+	if s.Models == nil {
+		s.Models = []ModelRef{}
+	}
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO subagent_skills
 		 (id, name, label, description, prompt_template, tool_allowlist,
-		  context_include, context_exclude, max_rounds, max_tokens, enabled,
+		  context_include, context_exclude, models_json, max_rounds, max_tokens, enabled,
 		  created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.Name, s.Label, s.Description, s.PromptTemplate,
 		marshalJSONArray(s.ToolAllowlist), marshalJSONArray(s.ContextInclude),
-		marshalJSONArray(s.ContextExclude), s.MaxRounds, s.MaxTokens, s.Enabled,
+		marshalJSONArray(s.ContextExclude), marshalJSONArray(s.Models),
+		s.MaxRounds, s.MaxTokens, s.Enabled,
 		s.CreatedAt, s.UpdatedAt,
 	)
 	return err
@@ -86,15 +90,19 @@ func (d *Database) UpdateSubagentSkill(ctx context.Context, s *SubagentSkill) er
 	if s.ContextExclude == nil {
 		s.ContextExclude = []string{}
 	}
+	if s.Models == nil {
+		s.Models = []ModelRef{}
+	}
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE subagent_skills SET
 		 name=?, label=?, description=?, prompt_template=?, tool_allowlist=?,
-		 context_include=?, context_exclude=?, max_rounds=?, max_tokens=?,
+		 context_include=?, context_exclude=?, models_json=?, max_rounds=?, max_tokens=?,
 		 enabled=?, updated_at=?
 		 WHERE id=?`,
 		s.Name, s.Label, s.Description, s.PromptTemplate,
 		marshalJSONArray(s.ToolAllowlist), marshalJSONArray(s.ContextInclude),
-		marshalJSONArray(s.ContextExclude), s.MaxRounds, s.MaxTokens, s.Enabled,
+		marshalJSONArray(s.ContextExclude), marshalJSONArray(s.Models),
+		s.MaxRounds, s.MaxTokens, s.Enabled,
 		s.UpdatedAt, s.ID,
 	)
 	return err
@@ -228,17 +236,17 @@ func DefaultSubagentSkills() []*SubagentSkill {
 // ── SQL / scan helpers ────────────────────────────────────────────────────────
 
 const subagentSkillSelectSQL = `SELECT id, name, label, description, prompt_template,
-    tool_allowlist, context_include, context_exclude, max_rounds, max_tokens,
+    tool_allowlist, context_include, context_exclude, models_json, max_rounds, max_tokens,
     enabled, created_at, updated_at
     FROM subagent_skills`
 
 func scanSubagentSkill(row *sql.Row) (*SubagentSkill, error) {
 	var s SubagentSkill
-	var taJSON, ciJSON, ceJSON, createdAt, updatedAt string
+	var taJSON, ciJSON, ceJSON, modelsJSON, createdAt, updatedAt string
 	var enabled int
 	err := row.Scan(
 		&s.ID, &s.Name, &s.Label, &s.Description, &s.PromptTemplate,
-		&taJSON, &ciJSON, &ceJSON, &s.MaxRounds, &s.MaxTokens, &enabled,
+		&taJSON, &ciJSON, &ceJSON, &modelsJSON, &s.MaxRounds, &s.MaxTokens, &enabled,
 		&createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -248,6 +256,7 @@ func scanSubagentSkill(row *sql.Row) (*SubagentSkill, error) {
 	s.ToolAllowlist = unmarshalJSONStringSlice(taJSON)
 	s.ContextInclude = unmarshalJSONStringSlice(ciJSON)
 	s.ContextExclude = unmarshalJSONStringSlice(ceJSON)
+	s.Models = unmarshalModelRefs(modelsJSON)
 	s.CreatedAt = parseTime(createdAt)
 	s.UpdatedAt = parseTime(updatedAt)
 	return &s, nil
@@ -257,11 +266,11 @@ func scanSubagentSkills(rows *sql.Rows) ([]*SubagentSkill, error) {
 	var defs []*SubagentSkill
 	for rows.Next() {
 		var s SubagentSkill
-		var taJSON, ciJSON, ceJSON, createdAt, updatedAt string
+		var taJSON, ciJSON, ceJSON, modelsJSON, createdAt, updatedAt string
 		var enabled int
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Label, &s.Description, &s.PromptTemplate,
-			&taJSON, &ciJSON, &ceJSON, &s.MaxRounds, &s.MaxTokens, &enabled,
+			&taJSON, &ciJSON, &ceJSON, &modelsJSON, &s.MaxRounds, &s.MaxTokens, &enabled,
 			&createdAt, &updatedAt,
 		); err != nil {
 			return nil, err
@@ -270,6 +279,7 @@ func scanSubagentSkills(rows *sql.Rows) ([]*SubagentSkill, error) {
 		s.ToolAllowlist = unmarshalJSONStringSlice(taJSON)
 		s.ContextInclude = unmarshalJSONStringSlice(ciJSON)
 		s.ContextExclude = unmarshalJSONStringSlice(ceJSON)
+		s.Models = unmarshalModelRefs(modelsJSON)
 		s.CreatedAt = parseTime(createdAt)
 		s.UpdatedAt = parseTime(updatedAt)
 		defs = append(defs, &s)

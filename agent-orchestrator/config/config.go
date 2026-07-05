@@ -204,6 +204,14 @@ type ModelPricing struct {
 	OutputPerMillion float64 `yaml:"output_per_million"`
 }
 
+// ModelRefConfig is one entry in an ordered provider>model priority list (Phase 5,
+// T5.2), used by roles and subagent skills. The router resolves the first
+// available (provider, model) pair, failing over to the next on error.
+type ModelRefConfig struct {
+	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`
+}
+
 // RoleDefinitionConfig defines an agent role seeded into the DB on first run:
 // its capabilities, persona, tool allowlist, and which provider/model serves it.
 type RoleDefinitionConfig struct {
@@ -212,6 +220,10 @@ type RoleDefinitionConfig struct {
 	Description    string   `yaml:"description"`
 	Provider       string   `yaml:"provider"`       // provider name this role routes to
 	ModelOverride  string   `yaml:"model_override"` // specific model string (optional)
+	// Models is the ordered provider>model priority list (Phase 5). When set the
+	// router resolves it with failover; Provider/ModelOverride remain the pre-Phase-5
+	// single-binding fallback until T5.5 switches routing over.
+	Models         []ModelRefConfig `yaml:"models"`
 	Capabilities   []string `yaml:"capabilities"`   // handles_review | handles_merge | creates_tasks | ...
 	AllowedTools   []string `yaml:"allowed_tools"`  // empty → all tools
 	ContextInclude []string `yaml:"context_include"`
@@ -258,6 +270,8 @@ type SubagentSkillConfig struct {
 	ToolAllowlist  []string `yaml:"tool_allowlist"`
 	ContextInclude []string `yaml:"context_include"`
 	ContextExclude []string `yaml:"context_exclude"`
+	// Models is the subagent's ordered provider>model priority list (Phase 5).
+	Models         []ModelRefConfig `yaml:"models"`
 	MaxRounds      int      `yaml:"max_rounds"`
 	MaxTokens      int      `yaml:"max_tokens"`
 }

@@ -222,6 +222,7 @@ func runServer(args []string) error {
 				ContextExclude: rc.ContextExclude,
 				SystemPrompt:   rc.SystemPrompt,
 				ModelOverride:  rc.ModelOverride,
+				Models:         configModelRefs(rc.Models),
 				Temperature:    temp,
 				MaxTokens:      maxTok,
 				ResyncPrompt:   rc.ResyncPrompt,
@@ -653,10 +654,21 @@ func configSubagentSkills(skills []config.SubagentSkillConfig) []*db.SubagentSki
 			ToolAllowlist:  s.ToolAllowlist,
 			ContextInclude: s.ContextInclude,
 			ContextExclude: s.ContextExclude,
+			Models:         configModelRefs(s.Models),
 			MaxRounds:      s.MaxRounds,
 			MaxTokens:      s.MaxTokens,
 			Enabled:        true,
 		})
+	}
+	return out
+}
+
+// configModelRefs converts config provider>model priority entries into
+// db.ModelRef seed values (Phase 5, T5.2).
+func configModelRefs(refs []config.ModelRefConfig) []db.ModelRef {
+	out := make([]db.ModelRef, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, db.ModelRef{Provider: r.Provider, Model: r.Model})
 	}
 	return out
 }

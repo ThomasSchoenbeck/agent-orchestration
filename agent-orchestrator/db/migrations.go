@@ -700,6 +700,15 @@ func (d *Database) applyColumnMigrations() error {
 			name: "add_parent_id_index_to_agent_sessions",
 			sql:  "CREATE INDEX IF NOT EXISTS idx_agent_sessions_parent ON agent_sessions(parent_id)",
 		},
+		// Phase 5 (T5.2): ordered provider>model priority list on roles + subagents.
+		{
+			name: "add_models_json_to_role_definitions",
+			sql:  "ALTER TABLE agent_role_definitions ADD COLUMN models_json TEXT NOT NULL DEFAULT '[]'",
+		},
+		{
+			name: "add_models_json_to_subagent_skills",
+			sql:  "ALTER TABLE subagent_skills ADD COLUMN models_json TEXT NOT NULL DEFAULT '[]'",
+		},
 	}
 
 	for _, m := range migrations {

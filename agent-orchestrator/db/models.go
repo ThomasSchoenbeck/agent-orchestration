@@ -218,6 +218,15 @@ type AgentTemplate struct {
 // token pricing, and behavioral flags that override the provider-level defaults.
 // Boolean fields use omitempty so that the zero value (false) is not stored —
 // model-level overrides only apply when the field is explicitly set to true.
+// ModelRef is one entry in an ordered provider>model priority list (Phase 5,
+// T5.2). Roles and subagent skills carry a list of these; the router resolves the
+// first available (provider, model) pair, failing over to the next on error or
+// unavailability. Both fields reference by name.
+type ModelRef struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
 type ProviderModel struct {
 	Name               string   `json:"name"`
 	Roles              []string `json:"roles"`               // roles this model serves
@@ -256,6 +265,10 @@ type RoleDefinition struct {
 	Description    string    `json:"description"`
 	ProviderID     string    `json:"provider_id,omitempty"`
 	ModelOverride  string    `json:"model_override"` // empty = use provider default
+	// Models is the ordered provider>model priority list (Phase 5, T5.2). When
+	// non-empty the router resolves it with failover; ProviderID/ModelOverride
+	// remain as the pre-Phase-5 single-binding fallback until T5.5 switches over.
+	Models         []ModelRef `json:"models"`
 	SystemPrompt   string    `json:"system_prompt"`
 	ContextInclude []string  `json:"context_include"`
 	ContextExclude []string  `json:"context_exclude"`
@@ -306,6 +319,10 @@ type SubagentSkill struct {
 	ToolAllowlist  []string  `json:"tool_allowlist"`  // tools the subagent loop may use
 	ContextInclude []string  `json:"context_include"`
 	ContextExclude []string  `json:"context_exclude"`
+	// Models is the subagent's ordered provider>model priority list (Phase 5,
+	// T5.2). Empty → the subagent reuses the spawning session's route (current
+	// behaviour) until T5.5 resolves per-subagent routing.
+	Models         []ModelRef `json:"models"`
 	MaxRounds      int       `json:"max_rounds"`           // bounds the subagent loop
 	MaxTokens      int       `json:"max_tokens,omitempty"` // optional token budget
 	Enabled        bool      `json:"enabled"`
@@ -526,4 +543,18 @@ func unmarshalJSONStringSlice(s string) []string {
 		sl = []string{}
 	}
 	return sl
+}
+
+// unmarshalModelRefs decodes a JSON array of provider>model priority entries
+// (Phase 5, T5.2). Returns an empty slice for empty/invalid input.
+func unmarshalModelRefs(s string) []ModelRef {
+	if s == "" {
+		return []ModelRef{}
+	}
+	var refs []ModelRef
+	_ = json.Unmarshal([]byte(s), &refs)
+	if refs == nil {
+		refs = []ModelRef{}
+	}
+	return refs
 }
