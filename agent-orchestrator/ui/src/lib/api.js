@@ -142,6 +142,10 @@ export const seedSubagentSkills  = ()      => post('/api/subagent-skills/seed')
 // ── Agent sessions (Session checkpoint feature) ────────────────────────────────
 export const listAgentSessions = (taskId) => get(`/api/agent-sessions?task_id=${encodeURIComponent(taskId)}`)
 
+// ── Multi-session orchestration: memory + synthesized prompts (Phase 6) ────────
+export const getTaskMemory     = (taskId) => get(`/api/tasks/${taskId}/memory`)
+export const listPreparedPrompts = (taskId) => get(`/api/prepared-prompts?task_id=${encodeURIComponent(taskId)}`)
+
 // ── Logs ─────────────────────────────────────────────────────────────────────
 export const listLogs = (params = {}) => {
   const qs = new URLSearchParams(params).toString()

@@ -769,6 +769,10 @@
               >
                 {statusLabels[task.status] ?? task.status}
               </span>
+              <button
+                class="text-xs text-accent hover:underline"
+                onclick={() => router.push('sessions', task.id)}
+              >Sessions &amp; memory →</button>
             </div>
 
             {#if task.payload?.description}

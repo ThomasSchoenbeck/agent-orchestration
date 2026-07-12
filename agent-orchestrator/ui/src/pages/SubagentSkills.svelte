@@ -3,12 +3,14 @@
   import { toasts } from '../lib/stores.js'
   import {
     listSubagentSkills, createSubagentSkill, updateSubagentSkill,
-    deleteSubagentSkill, seedSubagentSkills, getMetaTools,
+    deleteSubagentSkill, seedSubagentSkills, getMetaTools, listProviders,
   } from '../lib/api.js'
   import MultiSelect from '../components/MultiSelect.svelte'
+  import ModelPriorityList from '../components/ModelPriorityList.svelte'
 
   let skills = $state([])
   let availTools = $state([])
+  let providers = $state([])
   let loading = $state(true)
   let editing = $state(null) // skill id being edited, or 'new'
   let buf = $state(emptyBuf())
@@ -17,7 +19,7 @@
     return {
       name: '', label: '', description: '', prompt_template: '',
       tool_allowlist: [], context_include: '', context_exclude: '',
-      max_rounds: 8, enabled: true,
+      models: [], max_rounds: 8, enabled: true,
     }
   }
   const joinTags  = (a) => (Array.isArray(a) ? a.join(' ') : '')
@@ -26,8 +28,13 @@
   async function load() {
     loading = true
     try {
-      const [sk, ts] = await Promise.all([listSubagentSkills(), getMetaTools().catch(() => [])])
+      const [sk, ts, ps] = await Promise.all([
+        listSubagentSkills(),
+        getMetaTools().catch(() => []),
+        listProviders().catch(() => []),
+      ])
       skills = sk || []
+      providers = Array.isArray(ps) ? ps : (ps?.providers ?? [])
       // run_subagent can never be granted to a subagent (no nesting). Handle both
       // string and {value,label} catalog shapes.
       availTools = (Array.isArray(ts) ? ts : []).filter(t => (t && t.value !== undefined ? t.value : t) !== 'run_subagent')
@@ -46,6 +53,7 @@
       tool_allowlist: Array.isArray(s.tool_allowlist) ? [...s.tool_allowlist] : [],
       context_include: joinTags(s.context_include),
       context_exclude: joinTags(s.context_exclude),
+      models: Array.isArray(s.models) ? s.models.map(m => ({ provider: m.provider, model: m.model })) : [],
       max_rounds: s.max_rounds || 8,
       enabled: s.enabled,
     }
@@ -60,6 +68,7 @@
       tool_allowlist: buf.tool_allowlist,
       context_include: splitTags(buf.context_include),
       context_exclude: splitTags(buf.context_exclude),
+      models: buf.models.filter(m => m.provider && m.model),
       max_rounds: Number(buf.max_rounds) || 8,
       enabled: buf.enabled,
     }
@@ -112,6 +121,13 @@
         <div class="col-span-2"><MultiSelect bind:value={buf.tool_allowlist} options={availTools} placeholder="tool allowlist" /></div>
         <input class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm" placeholder="context include (space-separated)" bind:value={buf.context_include} />
         <input class="bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm" placeholder="context exclude" bind:value={buf.context_exclude} />
+      </div>
+      <div>
+        <label class="text-xs text-gray-500 mb-1 block">
+          Model priority list
+          <span class="text-gray-600 ml-1">(optional — ordered provider &gt; model with failover; empty = inherit the spawning session's model)</span>
+        </label>
+        <ModelPriorityList bind:value={buf.models} {providers} />
       </div>
       <div class="flex items-center gap-2">
         <label class="text-xs text-gray-500">Max rounds</label>

@@ -90,8 +90,9 @@ type HeartbeatResponse struct {
 // UpdateAgentRequest updates an agent's LIVE roles/skills only (Feature 7).
 // Start params are never modified through this endpoint.
 type UpdateAgentRequest struct {
-	Roles  *[]string `json:"roles,omitempty"`
-	Skills *[]string `json:"skills,omitempty"`
+	Roles        *[]string `json:"roles,omitempty"`
+	Skills       *[]string `json:"skills,omitempty"`
+	SystemPrompt *string   `json:"system_prompt,omitempty"` // agent-level prompt layer (Phase 5, T5.4)
 }
 
 // ClaimTaskResponse is returned by the task-claim endpoint and carries

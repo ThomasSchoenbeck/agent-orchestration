@@ -20,6 +20,22 @@ func TestAgentDetailGetAndPatch(t *testing.T) {
 	}
 }
 
+// PATCH /api/agents/{id} persists the agent-level system_prompt (Phase 5, T5.4);
+// the value round-trips on a subsequent GET.
+func TestAgentPatchSystemPrompt(t *testing.T) {
+	srv, _ := newTestServer(t)
+	rw := do(t, srv, http.MethodPost, "/api/agents/register", map[string]interface{}{"name": "a2", "roles": []string{"worker"}})
+	id, _ := decodeMap(t, rw.Body.Bytes())["agent_id"].(string)
+
+	if w := do(t, srv, http.MethodPatch, "/api/agents/"+id, map[string]interface{}{"system_prompt": "be terse"}); w.Code != http.StatusOK {
+		t.Fatalf("patch system_prompt: %d %s", w.Code, w.Body.String())
+	}
+	w := do(t, srv, http.MethodGet, "/api/agents/"+id, nil)
+	if got, _ := decodeMap(t, w.Body.Bytes())["system_prompt"].(string); got != "be terse" {
+		t.Errorf("system_prompt = %q, want %q", got, "be terse")
+	}
+}
+
 // handleTasks GET with the full set of filter query params.
 func TestTasksFilters(t *testing.T) {
 	srv, _ := newTestServer(t)

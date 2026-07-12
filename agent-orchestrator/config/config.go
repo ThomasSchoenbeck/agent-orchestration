@@ -184,6 +184,10 @@ type AgentConfig struct {
 	Workdir                      string            `yaml:"workdir"`     // default workdir root; per-agent gets {workdir}/{name}
 	ServerURL                    string            `yaml:"server_url"`  // orchestrator URL for agent-mode connections
 	Definitions                  []AgentDefinition `yaml:"definitions"` // agent instances to launch via "agents" subcommand
+	// ContextThresholdFraction is the share of a model's context window at which
+	// the main loop auto-checkpoints (summarize → persist → compact → continue).
+	// 0 → DefaultContextThresholdFraction (0.80). Multi-session orchestration.
+	ContextThresholdFraction float64 `yaml:"context_threshold_fraction"`
 
 	// Startup connection retry settings (used when the server may not be ready yet).
 	// Retry uses exponential backoff: delay doubles each attempt from InitialDelay up to MaxDelay.
@@ -337,6 +341,37 @@ func (c *Config) Validate() error {
 		errs = append(errs, "at least one role_definitions entry is required")
 	}
 
+	// Phase 5 (T5.2): a role must resolve to SOME route. It is routable when it
+	// carries a models: priority list, a provider: binding, or a provider declares
+	// support for it via provider-level roles. A role with none is unroutable at
+	// runtime (RouteByRole → "no provider available"), so catch it here. Any
+	// priority-list entry must name both a provider and a model.
+	claimedByProvider := map[string]bool{}
+	for _, p := range c.Providers {
+		for _, role := range p.Roles {
+			claimedByProvider[role] = true
+		}
+	}
+	for i, rd := range c.RoleDefinitions {
+		for j, m := range rd.Models {
+			if m.Provider == "" || m.Model == "" {
+				errs = append(errs, fmt.Sprintf("role_definitions[%d] %q: models[%d] must set both provider and model", i, rd.Name, j))
+			}
+		}
+		if len(rd.Models) == 0 && rd.Provider == "" && !claimedByProvider[rd.Name] {
+			errs = append(errs, fmt.Sprintf("role_definitions[%d] %q: unroutable — set a models: priority list, a provider:, or declare this role under a provider's roles:", i, rd.Name))
+		}
+	}
+	// Subagent skills inherit the spawning session's route when their models list is
+	// empty, so they are never unroutable — only validate list entries are complete.
+	for i, sk := range c.SubagentSkills {
+		for j, m := range sk.Models {
+			if m.Provider == "" || m.Model == "" {
+				errs = append(errs, fmt.Sprintf("subagent_skills[%d] %q: models[%d] must set both provider and model", i, sk.Name, j))
+			}
+		}
+	}
+
 	if c.Server.Port == 0 {
 		errs = append(errs, "server.port must be set")
 	}
@@ -417,6 +452,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Agents.MergeSupervisorIntervalSec == 0 {
 		c.Agents.MergeSupervisorIntervalSec = DefaultMergeSupervisorIntervalSec
+	}
+	// Clamp the checkpoint threshold to a sane (0,1] range; 0 / out-of-range → default.
+	if c.Agents.ContextThresholdFraction <= 0 || c.Agents.ContextThresholdFraction > 1 {
+		c.Agents.ContextThresholdFraction = DefaultContextThresholdFraction
 	}
 	if c.Agents.ConnectInitialDelayMs == 0 {
 		c.Agents.ConnectInitialDelayMs = DefaultConnectInitialDelayMs

@@ -18,9 +18,9 @@ const promptPrepSkillName = "prompt_prep"
 
 // PromptLayers holds the ordered system-prompt layers plus the task description
 // that prompt_prep blends into one prompt. Layers are labeled and emitted in a
-// stable priority order; empty layers are omitted. Phase 5 (T5.1/T5.4) adds the
-// per-level SystemPrompt fields that populate Agent/Provider/Model; until then the
-// main loop passes the already-composed base prompt as Role and the task as Task.
+// stable priority order; empty layers are omitted. The main loop fills Agent (the
+// executor's agent-record prompt), Role (the composed base prompt), Provider/Model
+// (from the resolved route), and Task; Subagent is filled in subagent sessions.
 type PromptLayers struct {
 	Agent    string
 	Role     string

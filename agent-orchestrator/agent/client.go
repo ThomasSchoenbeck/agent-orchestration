@@ -110,6 +110,16 @@ func (c *ServerClient) ListSubagentSkills(ctx context.Context) ([]*db.SubagentSk
 	return skills, nil
 }
 
+// GetAgent fetches the agent's own record (used for the agent-level system-prompt
+// layer, Phase 5 T5.4).
+func (c *ServerClient) GetAgent(ctx context.Context, agentID string) (*db.Agent, error) {
+	var a db.Agent
+	if err := c.get(ctx, fmt.Sprintf("/api/agents/%s", agentID), &a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
 // CreateAgentSession persists a main-loop checkpoint (Session checkpoint feature).
 func (c *ServerClient) CreateAgentSession(ctx context.Context, s *db.AgentSession) (*db.AgentSession, error) {
 	var out db.AgentSession

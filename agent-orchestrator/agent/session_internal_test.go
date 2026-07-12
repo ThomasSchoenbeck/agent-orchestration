@@ -28,6 +28,31 @@ func TestShouldCheckpoint(t *testing.T) {
 	}
 }
 
+// TestShouldCheckpointNow_HonoursOverride (T7.1): the executor-scoped check uses
+// the configured threshold when set, and the 0.80 default otherwise.
+func TestShouldCheckpointNow_HonoursOverride(t *testing.T) {
+	e := &Executor{} // no override → 0.80 default
+	if e.shouldCheckpointNow(700, 1000) {
+		t.Error("70% < 0.80 default: should not checkpoint")
+	}
+	if !e.shouldCheckpointNow(850, 1000) {
+		t.Error("85% >= 0.80 default: should checkpoint")
+	}
+
+	e.contextThresholdFraction = 0.5
+	if !e.shouldCheckpointNow(600, 1000) {
+		t.Error("60% >= 0.50 override: should checkpoint")
+	}
+	if e.shouldCheckpointNow(400, 1000) {
+		t.Error("40% < 0.50 override: should not checkpoint")
+	}
+
+	e.contextThresholdFraction = 5 // out of range → default 0.80
+	if e.shouldCheckpointNow(700, 1000) {
+		t.Error("out-of-range override should fall back to the 0.80 default")
+	}
+}
+
 func TestCompactMessages_PreservesSystem(t *testing.T) {
 	msgs := compactMessages("SYS", "did work", false)
 	if len(msgs) != 2 || msgs[0].Role != "system" || msgs[0].Content != "SYS" {

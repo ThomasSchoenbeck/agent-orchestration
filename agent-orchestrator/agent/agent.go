@@ -141,6 +141,9 @@ func (a *Agent) Start(ctx context.Context) error {
 		a.executor.agentID = a.id
 		a.executor.log     = newLogger(id, a.client)
 		a.executor.skillNames = a.skills
+		if a.cfg != nil {
+			a.executor.contextThresholdFraction = a.cfg.Agents.ContextThresholdFraction
+		}
 	}
 
 	go a.heartbeatLoop(ctx)

@@ -26,10 +26,16 @@ const checkpointSummaryPrompt = "Summarize the conversation so far so work can c
 	"history. Include: what has been done, key results and decisions, the current state of the task, and what " +
 	"still remains. Be concise but complete. Reply with only the summary."
 
-// shouldCheckpoint reports whether the current context usage crosses the
+// shouldCheckpoint reports whether the current context usage crosses the default
 // auto-checkpoint threshold. Returns false when the window size is unknown.
 func shouldCheckpoint(contextUsed, contextMax int) bool {
 	return contextMax > 0 && float64(contextUsed) >= checkpointContextFraction*float64(contextMax)
+}
+
+// shouldCheckpointNow is the executor-scoped variant that honours the configured
+// context-threshold override (T7.1), falling back to the package default.
+func (e *Executor) shouldCheckpointNow(contextUsed, contextMax int) bool {
+	return contextMax > 0 && float64(contextUsed) >= e.checkpointFraction()*float64(contextMax)
 }
 
 // checkpointSummarize runs one LLM call to summarize the conversation. It returns

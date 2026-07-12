@@ -119,18 +119,18 @@
   // ── Lifecycle controls (Feature 7) ──────────────────────────────────────────
   let availSkills    = $state([])
   let editingAgentId = $state('')
-  let editBuf        = $state({ roles: [], skills: [] })
+  let editBuf        = $state({ roles: [], skills: [], system_prompt: '' })
 
   const arrEq = (a = [], b = []) => a.length === b.length && a.every((x, i) => x === b[i])
   const isOverridden = (a) => !arrEq(a.roles, a.start_roles) || !arrEq(a.skills, a.start_skills)
 
   function startEditAgent(a) {
     editingAgentId = a.id
-    editBuf = { roles: [...(a.roles || [])], skills: [...(a.skills || [])] }
+    editBuf = { roles: [...(a.roles || [])], skills: [...(a.skills || [])], system_prompt: a.system_prompt || '' }
   }
   async function saveAgentLive(a) {
     try {
-      await updateAgent(a.id, { roles: editBuf.roles, skills: editBuf.skills })
+      await updateAgent(a.id, { roles: editBuf.roles, skills: editBuf.skills, system_prompt: editBuf.system_prompt })
       toasts.success('Live config updated (effective next poll)')
       editingAgentId = ''
       await loadAgents()
@@ -330,6 +330,12 @@
               <div class="mt-2 flex flex-col gap-2" onclick={(e) => e.stopPropagation()}>
                 <MultiSelect bind:value={editBuf.roles} options={roles} placeholder="live roles" labelFor={(v) => roleLabel(v, roles)} />
                 <MultiSelect bind:value={editBuf.skills} options={availSkills} placeholder="live skills" />
+                <textarea
+                  class="w-full bg-surface-700 border border-surface-500 rounded px-2 py-1.5 text-xs
+                         text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent resize-y min-h-14"
+                  placeholder="agent system prompt (blended into every task's prompt)"
+                  bind:value={editBuf.system_prompt}
+                ></textarea>
                 <div class="flex gap-2">
                   <button class="text-[11px] text-gray-400 hover:text-gray-200" onclick={() => editingAgentId = ''}>Cancel</button>
                   <button class="text-[11px] px-2 py-0.5 rounded bg-accent text-white" onclick={() => saveAgentLive(a)}>Save</button>

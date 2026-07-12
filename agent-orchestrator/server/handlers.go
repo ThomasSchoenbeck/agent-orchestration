@@ -989,6 +989,9 @@ func (s *Server) handleTaskDetail(w http.ResponseWriter, r *http.Request) {
 	case "chat":
 		s.handleTaskChat(w, r, id)
 
+	case "memory":
+		s.handleTaskMemory(w, r, id)
+
 	default:
 		switch r.Method {
 		case http.MethodGet:
@@ -1455,6 +1458,12 @@ func (s *Server) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
 		if err := s.db.UpdateAgentLiveConfig(r.Context(), agentID, roles, skills); err != nil {
 			s.internalError(w, err)
 			return
+		}
+		if req.SystemPrompt != nil {
+			if err := s.db.SetAgentSystemPrompt(r.Context(), agentID, *req.SystemPrompt); err != nil {
+				s.internalError(w, err)
+				return
+			}
 		}
 		updated, _ := s.db.GetAgent(r.Context(), agentID)
 		api.WriteJSON(w, http.StatusOK, updated)

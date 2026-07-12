@@ -28,11 +28,12 @@ vi.mock('../lib/api.js', () => ({
   deleteSubagentSkill:  vi.fn(),
   seedSubagentSkills:   vi.fn(),
   getMetaTools:         vi.fn(),
+  listProviders:        vi.fn(),
 }))
 
 import {
   listSubagentSkills, createSubagentSkill, deleteSubagentSkill,
-  seedSubagentSkills, getMetaTools,
+  seedSubagentSkills, getMetaTools, listProviders,
 } from '../lib/api.js'
 
 const SKILL = {
@@ -51,6 +52,9 @@ beforeEach(() => {
     { value: 'read_file', label: 'read_file' },
     { value: 'write_file', label: 'write_file' },
     { value: 'run_subagent', label: 'run_subagent' },
+  ])
+  listProviders.mockResolvedValue([
+    { id: 'p1', name: 'openai', models: [{ name: 'gpt-4o' }] },
   ])
 })
 
@@ -84,6 +88,25 @@ describe('SubagentSkills — CRUD', () => {
     const payload = createSubagentSkill.mock.calls[0][0]
     expect(payload.name).toBe('my_skill')
     expect(payload.max_rounds).toBe(8)
+  })
+
+  it('includes an added provider>model route in the create payload', async () => {
+    render(SubagentSkills)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByText('New subagent skill'))
+    await waitFor(() => screen.getByPlaceholderText(/name \(slug/))
+    await user.type(screen.getByPlaceholderText(/name \(slug/), 'routed_skill')
+
+    // Add one priority route and pick provider + model.
+    await user.click(screen.getByText('+ Add route'))
+    await user.selectOptions(await screen.findByLabelText('priority provider'), 'openai')
+    await user.selectOptions(await screen.findByLabelText('priority model'), 'gpt-4o')
+
+    await user.click(screen.getByText('Save'))
+    await waitFor(() => expect(createSubagentSkill).toHaveBeenCalled())
+    const payload = createSubagentSkill.mock.lastCall[0]
+    expect(payload.models).toEqual([{ provider: 'openai', model: 'gpt-4o' }])
   })
 
   it('calls the seed helper', async () => {

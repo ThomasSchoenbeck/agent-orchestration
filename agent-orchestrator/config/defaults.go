@@ -15,6 +15,7 @@ const (
 	DefaultPortPoolStart                 = 18000
 	DefaultPortPoolSize                  = 100
 	DefaultMergeSupervisorIntervalSec    = 10
+	DefaultContextThresholdFraction      = 0.80 // auto-checkpoint at 80% of the context window
 
 	// Agent startup connection retry defaults.
 	DefaultConnectInitialDelayMs = 1000  // 1 s initial backoff

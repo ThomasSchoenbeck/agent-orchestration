@@ -44,6 +44,40 @@ type Executor struct {
 	// subagentTimeoutOverride, when > 0, replaces the default subagentTimeout for a
 	// single subagent run. Test hook only; production leaves it zero.
 	subagentTimeoutOverride time.Duration
+	// Phase 5 (T5.4): the agent's own system-prompt layer, fetched lazily from its
+	// agent record and cached. Empty when unset or unavailable.
+	agentSystemPrompt         string
+	agentSystemPromptResolved bool
+	// contextThresholdFraction overrides the auto-checkpoint threshold (share of
+	// the context window). 0 → the package default (checkpointContextFraction).
+	// Set from config at agent startup (T7.1).
+	contextThresholdFraction float64
+}
+
+// checkpointFraction returns the effective auto-checkpoint threshold: the
+// configured override when set (0,1], else the package default (0.80).
+func (e *Executor) checkpointFraction() float64 {
+	if e.contextThresholdFraction > 0 && e.contextThresholdFraction <= 1 {
+		return e.contextThresholdFraction
+	}
+	return checkpointContextFraction
+}
+
+// resolveAgentSystemPrompt fetches the executor's own agent record once and caches
+// its system-prompt layer (Phase 5, T5.4). Failures are non-fatal: the layer is
+// simply left empty. No-op when there is no client.
+func (e *Executor) resolveAgentSystemPrompt(ctx context.Context) string {
+	if e.agentSystemPromptResolved || e.client == nil {
+		return e.agentSystemPrompt
+	}
+	e.agentSystemPromptResolved = true
+	a, err := e.client.GetAgent(ctx, e.agentID)
+	if err != nil {
+		e.log.Warn("could not fetch agent record for system prompt: %v", err)
+		return ""
+	}
+	e.agentSystemPrompt = a.SystemPrompt
+	return e.agentSystemPrompt
 }
 
 // resolveSubagentSkills fetches the enabled subagent skills from the server once
@@ -819,6 +853,7 @@ func (e *Executor) runMainLoop(
 	// role layer + the task description); prior carries the previous round's prompt
 	// and result. When prompt_prep is not seeded, preparePrompt is a no-op.
 	baseLayers := PromptLayers{
+		Agent:    e.resolveAgentSystemPrompt(ctx),
 		Role:     systemMsg,
 		Provider: route.ProviderPrompt,
 		Model:    route.ModelPrompt,
@@ -945,7 +980,7 @@ func (e *Executor) runMainLoop(
 			// never enters this conversation.
 			var toolResultStr string
 			if tc.Name == tools.SubagentToolName {
-				toolResultStr = e.dispatchSubagent(ctx, tlog, *route, task, tc, stats)
+				toolResultStr = e.dispatchSubagent(ctx, tlog, *route, sess, task, tc, stats)
 			} else if tc.Name == tools.SessionToolName {
 				// Defer the actual checkpoint to the end of the round (after all
 				// tool results are in), then compact the history.
@@ -1010,7 +1045,7 @@ func (e *Executor) runMainLoop(
 		// (checkpoint_session tool) or when context usage crosses the threshold.
 		// Replaces the in-memory history with [system, summary]; the full
 		// pre-checkpoint messages are persisted as an AgentSession.
-		if checkpointRequested || shouldCheckpoint(contextUsed, contextMax) {
+		if checkpointRequested || e.shouldCheckpointNow(contextUsed, contextMax) {
 			reason := "context_pressure"
 			if checkpointRequested {
 				reason = "requested"

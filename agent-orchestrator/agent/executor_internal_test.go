@@ -233,7 +233,8 @@ func TestDispatchSubagent_FoldsStatsAndReturnsSummaryOnly(t *testing.T) {
 	}}
 	stats := execStats{}
 
-	out := e.dispatchSubagent(context.Background(), e.log.ForTask("t1"), route, task, tc, &stats)
+	sess := newSession(SessionKindMain, "t1", "agent-1", route)
+	out := e.dispatchSubagent(context.Background(), e.log.ForTask("t1"), route, sess, task, tc, &stats)
 
 	// Token isolation: the task stats include the subagent usage.
 	if stats.inputTokens != 40 || stats.outputTokens != 15 {
@@ -258,7 +259,8 @@ func TestDispatchSubagent_UnknownSkillReturnsError(t *testing.T) {
 	route := router.RouteResult{Provider: &scriptedProvider{}, Model: "m", Role: "worker"}
 	task := &db.Task{ID: "t1"}
 	tc := llm.ToolCall{Name: "run_subagent", Arguments: map[string]interface{}{"skill": "nope", "instructions": "x"}}
-	out := e.dispatchSubagent(context.Background(), e.log.ForTask("t1"), route, task, tc, &execStats{})
+	sess := newSession(SessionKindMain, "t1", "agent-1", route)
+	out := e.dispatchSubagent(context.Background(), e.log.ForTask("t1"), route, sess, task, tc, &execStats{})
 	if !strings.Contains(out, "error") || !strings.Contains(out, "nope") {
 		t.Errorf("expected error for unknown skill, got %s", out)
 	}
@@ -285,6 +287,45 @@ func TestResolveSubagentSkills_CachesEnabled(t *testing.T) {
 	}
 	if e.lookupSubagentSkill(context.Background(), "nope") != nil {
 		t.Error("unknown subagent skill must return nil")
+	}
+}
+
+func TestResolveAgentSystemPrompt_FetchesAndCaches(t *testing.T) {
+	var calls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/agent/agents/agent-1", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_ = json.NewEncoder(w).Encode(&db.Agent{ID: "agent-1", Name: "w", SystemPrompt: "be careful"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	e := NewExecutor(nil, nil, NewServerClient(srv.URL), "agent-1")
+	if got := e.resolveAgentSystemPrompt(context.Background()); got != "be careful" {
+		t.Fatalf("system prompt = %q, want %q", got, "be careful")
+	}
+	// Second call is served from cache (no extra HTTP request).
+	if got := e.resolveAgentSystemPrompt(context.Background()); got != "be careful" {
+		t.Errorf("cached system prompt = %q, want %q", got, "be careful")
+	}
+	if calls != 1 {
+		t.Errorf("agent record fetched %d times, want 1 (cached)", calls)
+	}
+}
+
+func TestResolveAgentSystemPrompt_ToleratesFetchError(t *testing.T) {
+	mux := http.NewServeMux() // no handler → 404
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	e := NewExecutor(nil, nil, NewServerClient(srv.URL), "missing")
+	if got := e.resolveAgentSystemPrompt(context.Background()); got != "" {
+		t.Errorf("on fetch error, system prompt = %q, want empty", got)
+	}
+	// No client → empty, no panic.
+	e2 := NewExecutor(nil, nil, nil, "x")
+	if got := e2.resolveAgentSystemPrompt(context.Background()); got != "" {
+		t.Errorf("nil client system prompt = %q, want empty", got)
 	}
 }
 

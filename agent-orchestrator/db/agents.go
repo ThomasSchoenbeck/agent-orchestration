@@ -34,11 +34,11 @@ func (d *Database) CreateAgent(ctx context.Context, a *Agent) error {
 		a.DesiredState = "run"
 	}
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO agents (id, name, roles, status, mode, skills, start_roles, start_skills, desired_state, template_id, capabilities, registered_at, last_heartbeat)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agents (id, name, roles, status, mode, skills, start_roles, start_skills, desired_state, template_id, system_prompt, capabilities, registered_at, last_heartbeat)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.Name, marshalJSONArray(a.Roles), a.Status, a.Mode,
 		marshalJSONArray(a.Skills), marshalJSONArray(a.StartRoles), marshalJSONArray(a.StartSkills),
-		a.DesiredState, a.TemplateID, marshalJSON(a.Capabilities), a.RegisteredAt, a.LastHeartbeat,
+		a.DesiredState, a.TemplateID, a.SystemPrompt, marshalJSON(a.Capabilities), a.RegisteredAt, a.LastHeartbeat,
 	)
 	return err
 }
@@ -80,12 +80,19 @@ func (d *Database) UpdateAgent(ctx context.Context, a *Agent) error {
 	}
 	_, err := d.db.ExecContext(ctx,
 		`UPDATE agents SET roles=?, status=?, mode=?, current_task_id=?, skills=?,
-		 start_roles=?, start_skills=?, desired_state=?, capabilities=?, last_heartbeat=?
+		 start_roles=?, start_skills=?, desired_state=?, system_prompt=?, capabilities=?, last_heartbeat=?
 		 WHERE id=?`,
 		marshalJSONArray(a.Roles), a.Status, a.Mode, nullableStr(a.CurrentTaskID),
 		marshalJSONArray(a.Skills), marshalJSONArray(a.StartRoles), marshalJSONArray(a.StartSkills),
-		a.DesiredState, marshalJSON(a.Capabilities), a.LastHeartbeat, a.ID,
+		a.DesiredState, a.SystemPrompt, marshalJSON(a.Capabilities), a.LastHeartbeat, a.ID,
 	)
+	return err
+}
+
+// SetAgentSystemPrompt sets the agent-level system-prompt layer (Phase 5, T5.4).
+func (d *Database) SetAgentSystemPrompt(ctx context.Context, agentID, prompt string) error {
+	_, err := d.db.ExecContext(ctx,
+		`UPDATE agents SET system_prompt=? WHERE id=?`, prompt, agentID)
 	return err
 }
 
@@ -163,7 +170,7 @@ func (d *Database) DeleteStaleOfflineAgents(ctx context.Context, olderThanSec in
 const agentSelectSQL = `SELECT id, name, roles, status,
     COALESCE(mode,'remote'), COALESCE(current_task_id,''), COALESCE(skills,'[]'),
     COALESCE(start_roles,'[]'), COALESCE(start_skills,'[]'), COALESCE(desired_state,'run'),
-    COALESCE(template_id,''), capabilities, registered_at, last_heartbeat
+    COALESCE(template_id,''), COALESCE(system_prompt,''), capabilities, registered_at, last_heartbeat
     FROM agents`
 
 func scanAgent(row *sql.Row) (*Agent, error) {
@@ -172,7 +179,7 @@ func scanAgent(row *sql.Row) (*Agent, error) {
 	err := row.Scan(&a.ID, &a.Name, &rolesJSON, &a.Status,
 		&a.Mode, &a.CurrentTaskID, &skillsJSON,
 		&startRolesJSON, &startSkillsJSON, &a.DesiredState, &a.TemplateID,
-		&capsJSON, &registeredAt, &lastHeartbeat)
+		&a.SystemPrompt, &capsJSON, &registeredAt, &lastHeartbeat)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +201,7 @@ func scanAgents(rows *sql.Rows) ([]*Agent, error) {
 		if err := rows.Scan(&a.ID, &a.Name, &rolesJSON, &a.Status,
 			&a.Mode, &a.CurrentTaskID, &skillsJSON,
 			&startRolesJSON, &startSkillsJSON, &a.DesiredState, &a.TemplateID,
-			&capsJSON, &registeredAt, &lastHeartbeat); err != nil {
+			&a.SystemPrompt, &capsJSON, &registeredAt, &lastHeartbeat); err != nil {
 			return nil, err
 		}
 		a.Roles = unmarshalJSONStringSlice(rolesJSON)

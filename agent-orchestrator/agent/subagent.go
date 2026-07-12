@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,20 @@ func injectRepoPath(args map[string]interface{}, worktree string) {
 	}
 }
 
+// subagentSessionKind maps a subagent skill to the session kind recorded in the
+// task's session tree (T3.2): codebase investigation → discovery, task_status →
+// task_status, and coding/review (and anything else) → work.
+func subagentSessionKind(skillName string) SessionKind {
+	switch skillName {
+	case "investigate_codebase":
+		return SessionKindDiscovery
+	case taskStatusSkillName:
+		return SessionKindTaskStatus
+	default:
+		return SessionKindWork
+	}
+}
+
 // dispatchSubagent handles a run_subagent tool call emitted by the main loop. It
 // runs the named subagent skill's nested loop and returns the tool-result JSON
 // string to splice back into the main conversation.
@@ -56,7 +71,7 @@ func injectRepoPath(args map[string]interface{}, worktree string) {
 // result). That isolation is the whole point of the feature.
 func (e *Executor) dispatchSubagent(
 	ctx context.Context, tlog *AgentLogger, route router.RouteResult,
-	task *db.Task, tc llm.ToolCall, stats *execStats,
+	sess *Session, task *db.Task, tc llm.ToolCall, stats *execStats,
 ) string {
 	skillName, _ := tc.Arguments["skill"].(string)
 	instructions, _ := tc.Arguments["instructions"].(string)
@@ -74,6 +89,11 @@ func (e *Executor) dispatchSubagent(
 		"instructions": instructions,
 	})
 
+	// Track this subagent as a linked child session (T3.2) so it appears in the
+	// task's session tree, parented to the spawning session.
+	child := newChildSession(sess, subagentSessionKind(skill.Name), route)
+	child.Title = skill.Name
+
 	summary, sstats, err := e.runSubagent(ctx, tlog, route, task.WorktreePath, skill, instructions)
 
 	// Fold subagent usage into the task totals (cost views stay accurate) even on
@@ -82,6 +102,19 @@ func (e *Executor) dispatchSubagent(
 	stats.inputTokens += sstats.inputTokens
 	stats.outputTokens += sstats.outputTokens
 	stats.cost += sstats.cost
+
+	// Record the child's own usage + terminal status, then persist it as a tree
+	// node (best-effort — persistence failure never fails the subagent).
+	child.Stats = sstats
+	switch {
+	case err == nil:
+		child.markDone()
+	case errors.Is(err, context.DeadlineExceeded):
+		child.markTimedOut()
+	default:
+		child.markFailed()
+	}
+	e.persistSession(ctx, tlog, child, summary, 0)
 
 	tlog.LogWithMeta(ctx, "info", fmt.Sprintf("subagent %s completed", skill.Name), map[string]interface{}{
 		"source":        "subagent",

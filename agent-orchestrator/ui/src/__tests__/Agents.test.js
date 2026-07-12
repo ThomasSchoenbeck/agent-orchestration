@@ -111,6 +111,30 @@ describe('Agents — rendering', () => {
   })
 })
 
+// ── Live edit: agent system prompt (T5.8) ───────────────────────────────────────
+describe('Agents — live edit system prompt', () => {
+  it('PATCHes the agent with the edited system prompt', async () => {
+    stubFetch()
+    render(Agents)
+    const user = userEvent.setup()
+    await waitFor(() => screen.getByText('worker-1'))
+
+    // First agent (worker-1) → open its live editor.
+    await user.click(screen.getAllByText('Edit live')[0])
+    const ta = await screen.findByPlaceholderText(/agent system prompt/)
+    await user.type(ta, 'Be careful.')
+    await user.click(screen.getByText('Save'))
+
+    await waitFor(() => {
+      const patch = fetch.mock.calls.find(
+        (c) => c[1]?.method === 'PATCH' && c[0] === '/api/agents/a1'
+      )
+      expect(patch).toBeTruthy()
+      expect(JSON.parse(patch[1].body).system_prompt).toBe('Be careful.')
+    })
+  })
+})
+
 // ── Log panel ─────────────────────────────────────────────────────────────────
 describe('Agents — log panel', () => {
   it('shows log panel header', async () => {

@@ -191,6 +191,9 @@ type Agent struct {
 	StartSkills   []string               `json:"start_skills"`
 	DesiredState  string                 `json:"desired_state"`         // run | stop (default: run)
 	TemplateID    string                 `json:"template_id,omitempty"` // set when spawned from an AgentTemplate (Feature 8)
+	// SystemPrompt is the agent-level system-prompt layer (Phase 5, T5.4): the
+	// executor folds it into the layered prompt composed for each LLM round.
+	SystemPrompt  string                 `json:"system_prompt,omitempty"`
 	Capabilities  map[string]interface{} `json:"capabilities"`
 	RegisteredAt  time.Time              `json:"registered_at"`
 	LastHeartbeat time.Time              `json:"last_heartbeat"`

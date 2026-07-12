@@ -12,6 +12,13 @@ Checkbox legend: `[x]` done (implemented + tests green) — **no need to re-read
 - [x] **Phase 3** — Feature 6 (skills) → Feature 7 (lifecycle) → Feature 8 (managed agents)
 - [x] **Phase 4** — `AGENTS.md` documentation
 
+> **Multi-session orchestration (2026-07)** — a separate track tracked in
+> `tasks_2026-07-04.md`: per-task main session + synchronous subagents, durable task
+> memory + cross-session continuation, model provider>model priority lists with
+> failover, layered system prompts (agent/role/subagent/provider/model) via
+> `prompt_prep`, and the `agents.context_threshold_fraction` auto-checkpoint knob.
+> Operator-facing summary in `AGENTS.md` §13.
+
 Per-spec status:
 
 | Spec | File | Status |

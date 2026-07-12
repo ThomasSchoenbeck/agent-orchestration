@@ -42,14 +42,14 @@
   ]
 
   const emptyModel = () => ({
-    name: '', roles: '', input_per_million: '', output_per_million: '',
+    name: '', system_prompt: '', input_per_million: '', output_per_million: '',
     text_tool_calls: false, fold_system_into_user: false,
     system_prefix: '', tool_allowlist: [],
   })
 
   const emptyForm = () => ({
     name: '', type: 'openai_compatible', api_key: '',
-    base_url: '', model_name: '', enabled: true, deployment: '', text_tool_calls: false, fold_system_into_user: false, system_prefix: '', tool_allowlist: [],
+    base_url: '', model_name: '', enabled: true, deployment: '', text_tool_calls: false, fold_system_into_user: false, system_prefix: '', system_prompt: '', tool_allowlist: [],
     roles: [],
     models: [],  // per-model config rows
   })
@@ -125,11 +125,12 @@
       text_tool_calls:      p.config?.text_tool_calls ?? false,
       fold_system_into_user: p.config?.fold_system_into_user ?? false,
       system_prefix:         p.config?.system_prefix ?? '',
+      system_prompt:         p.config?.system_prompt ?? '',
       tool_allowlist:        Array.isArray(p.config?.tool_allowlist) ? [...p.config.tool_allowlist] : [],
       roles:      p.roles ?? [],
       models:     (p.models ?? []).map(m => ({
         name:               m.name,
-        roles:              (m.roles ?? []).join(', '),
+        system_prompt:      m.system_prompt ?? '',
         input_per_million:  String(m.input_per_million ?? ''),
         output_per_million: String(m.output_per_million ?? ''),
         text_tool_calls:    m.text_tool_calls ?? false,
@@ -157,6 +158,7 @@
         ...(form.text_tool_calls ? { text_tool_calls: true } : {}),
         ...(form.fold_system_into_user ? { fold_system_into_user: true } : {}),
         ...(form.system_prefix ? { system_prefix: form.system_prefix } : {}),
+        ...(form.system_prompt ? { system_prompt: form.system_prompt } : {}),
         ...(form.tool_allowlist.length ? { tool_allowlist: form.tool_allowlist } : {}),
       },
     }
@@ -165,12 +167,12 @@
       .filter(m => m.name.trim())
       .map(m => ({
         name:               m.name.trim(),
-        roles:              m.roles.split(',').map(r => r.trim()).filter(Boolean),
         input_per_million:  parseFloat(m.input_per_million) || 0,
         output_per_million: parseFloat(m.output_per_million) || 0,
         ...(m.text_tool_calls        ? { text_tool_calls: true }              : {}),
         ...(m.fold_system_into_user  ? { fold_system_into_user: true }        : {}),
         ...(m.system_prefix.trim()   ? { system_prefix: m.system_prefix.trim() } : {}),
+        ...(m.system_prompt.trim()   ? { system_prompt: m.system_prompt.trim() } : {}),
         ...(m.tool_allowlist.length  ? { tool_allowlist: m.tool_allowlist } : {}),
       }))
 
@@ -383,6 +385,20 @@
       </div>
 
       <div>
+        <label for="provider-system-prompt" class="text-xs text-gray-500 mb-1 block">
+          System prompt
+          <span class="text-gray-600 ml-1">(provider-level prompt layer, blended into every call for this provider)</span>
+        </label>
+        <textarea
+          id="provider-system-prompt"
+          class="w-full bg-surface-700 border border-surface-500 rounded px-3 py-2 text-sm
+                 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent resize-y min-h-16"
+          placeholder="e.g. Always prefer concise answers."
+          bind:value={form.system_prompt}
+        ></textarea>
+      </div>
+
+      <div>
         <label for="provider-tool-allowlist" class="text-xs text-gray-500 mb-1 block">
           Tool allowlist
           <span class="text-gray-600 ml-1">(leave empty to send all tools; recommended for small models)</span>
@@ -439,7 +455,7 @@
               <thead class="bg-surface-700 text-gray-500">
                 <tr>
                   <th class="px-2 py-1 text-left font-medium">Model name</th>
-                  <th class="px-2 py-1 text-left font-medium">Roles</th>
+                  <th class="px-2 py-1 text-left font-medium">System prompt</th>
                   <th class="px-2 py-1 text-left font-medium">In $/M</th>
                   <th class="px-2 py-1 text-left font-medium">Out $/M</th>
                   <th class="px-2 py-1 text-left font-medium" title="Text tool calls">TTC</th>
@@ -461,9 +477,9 @@
                     </td>
                     <td class="px-2 py-1">
                       <input
-                        class="w-28 bg-surface-700 rounded px-2 py-1 text-gray-200 focus:outline-none focus:ring-1 focus:ring-accent"
-                        placeholder="worker, reviewer"
-                        bind:value={m.roles}
+                        class="w-36 bg-surface-700 rounded px-2 py-1 text-gray-200 focus:outline-none focus:ring-1 focus:ring-accent"
+                        placeholder="model prompt layer"
+                        bind:value={m.system_prompt}
                       />
                     </td>
                     <td class="px-2 py-1">
@@ -567,8 +583,8 @@
                   {#each p.models as m}
                     <div class="text-xs text-gray-500 font-mono flex flex-wrap gap-x-2">
                       <span class="text-gray-400">{m.name}</span>
-                      {#if m.roles?.length > 0}
-                        <span class="text-blue-500">{m.roles.join(', ')}</span>
+                      {#if m.system_prompt}
+                        <span class="text-blue-500" title={m.system_prompt}>prompt</span>
                       {/if}
                       {#if m.input_per_million > 0 || m.output_per_million > 0}
                         <span class="text-gray-600">${m.input_per_million}/${m.output_per_million}/M</span>

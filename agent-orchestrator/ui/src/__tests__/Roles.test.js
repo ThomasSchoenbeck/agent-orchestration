@@ -144,6 +144,44 @@ describe('Roles — provider dropdown filtering', () => {
   })
 })
 
+describe('Roles — model priority list (T5.8)', () => {
+  it('includes an added provider>model route in the create body', async () => {
+    render(Roles)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByText('+ Add Role'))
+    await waitFor(() => screen.getByPlaceholderText('e.g. worker'))
+    await user.type(screen.getByPlaceholderText('e.g. worker'), 'builder')
+
+    // Add a priority route (fixture providers carry no models → model is a text input).
+    await user.click(screen.getByText('+ Add route'))
+    await user.selectOptions(await screen.findByLabelText('priority provider'), 'gpt-4o')
+    await user.type(await screen.findByLabelText('priority model'), 'gpt-4o-mini')
+
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(createRole).toHaveBeenCalled())
+    const body = createRole.mock.lastCall[0]
+    expect(body.models).toEqual([{ provider: 'gpt-4o', model: 'gpt-4o-mini' }])
+  })
+
+  it('drops incomplete priority rows from the body', async () => {
+    render(Roles)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByText('+ Add Role'))
+    await waitFor(() => screen.getByPlaceholderText('e.g. worker'))
+    await user.type(screen.getByPlaceholderText('e.g. worker'), 'builder')
+
+    // Add a route but leave it blank → filtered out.
+    await user.click(screen.getByText('+ Add route'))
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+
+    await waitFor(() => expect(createRole).toHaveBeenCalled())
+    const body = createRole.mock.lastCall[0]
+    expect(body.models).toEqual([])
+  })
+})
+
 describe('Roles — re-sync prompt (creates_tasks only)', () => {
   const ORCH = {
     id: 'r9', name: 'orchestrator', label: 'Orchestrator', description: '',

@@ -8,6 +8,7 @@
   import { toasts } from '../lib/stores.js'
   import Skeleton from '../components/Skeleton.svelte'
   import MultiSelect from '../components/MultiSelect.svelte'
+  import ModelPriorityList from '../components/ModelPriorityList.svelte'
 
   // Capability flags the server actually acts on (router/authorization).
   const KNOWN_CAPABILITIES = ['handles_review', 'handles_merge', 'handles_deploy']
@@ -27,6 +28,7 @@
     description:     '',
     provider_id:     '',
     model_override:  '',
+    models:          [],  // ordered provider>model priority list (Phase 5)
     system_prompt:   '',
     context_include: '',  // space-separated tags
     context_exclude: '',
@@ -120,6 +122,7 @@
       description:     r.description,
       provider_id:     r.provider_id ?? '',
       model_override:  r.model_override ?? '',
+      models:          Array.isArray(r.models) ? r.models.map(m => ({ provider: m.provider, model: m.model })) : [],
       system_prompt:   r.system_prompt ?? '',
       context_include: joinTags(r.context_include),
       context_exclude: joinTags(r.context_exclude),
@@ -144,6 +147,7 @@
       description:     form.description.trim(),
       provider_id:     form.provider_id || '',
       model_override:  form.model_override.trim(),
+      models:          form.models.filter(m => m.provider && m.model),
       system_prompt:   form.system_prompt,
       context_include: splitTags(form.context_include),
       context_exclude: splitTags(form.context_exclude),
@@ -277,7 +281,16 @@
 
       <!-- Model -->
       <div class="border-t border-surface-600 pt-3">
-        <p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Model</p>
+        <p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Model priority list</p>
+        <p class="text-xs text-gray-500 mb-2">
+          Ordered provider &gt; model routes. The first available is used; the router fails
+          over to the next on error/unavailability. Leave empty to use the single binding below.
+        </p>
+        <ModelPriorityList bind:value={form.models} {providers} />
+
+        <p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2 mt-4">
+          Single binding <span class="text-gray-600 normal-case">(fallback when the list is empty)</span>
+        </p>
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="text-xs text-gray-500 mb-1 block">

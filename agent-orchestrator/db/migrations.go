@@ -709,6 +709,12 @@ func (d *Database) applyColumnMigrations() error {
 			name: "add_models_json_to_subagent_skills",
 			sql:  "ALTER TABLE subagent_skills ADD COLUMN models_json TEXT NOT NULL DEFAULT '[]'",
 		},
+		// Phase 5 (T5.7): agent-level system-prompt layer. Additive; existing rows
+		// backfill to '' (no prior per-agent prompt existed).
+		{
+			name: "add_system_prompt_to_agents",
+			sql:  "ALTER TABLE agents ADD COLUMN system_prompt TEXT NOT NULL DEFAULT ''",
+		},
 	}
 
 	for _, m := range migrations {

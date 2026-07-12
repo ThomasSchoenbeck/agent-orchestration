@@ -72,6 +72,40 @@ func TestResetAgentToStart(t *testing.T) {
 	}
 }
 
+func TestAgentSystemPrompt_RoundTripAndSetter(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	// Round-trips through CreateAgent.
+	a := &db.Agent{Name: "w5", Roles: []string{"worker"}, SystemPrompt: "you are careful"}
+	if err := d.CreateAgent(ctx, a); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	got, _ := d.GetAgent(ctx, a.ID)
+	if got.SystemPrompt != "you are careful" {
+		t.Errorf("system_prompt = %q, want %q", got.SystemPrompt, "you are careful")
+	}
+
+	// Targeted setter (PATCH path) updates it.
+	if err := d.SetAgentSystemPrompt(ctx, a.ID, "reviewer persona"); err != nil {
+		t.Fatalf("SetAgentSystemPrompt: %v", err)
+	}
+	got, _ = d.GetAgent(ctx, a.ID)
+	if got.SystemPrompt != "reviewer persona" {
+		t.Errorf("after set, system_prompt = %q, want %q", got.SystemPrompt, "reviewer persona")
+	}
+
+	// Re-registration (UpdateAgent) preserves it when the record already carries it.
+	got.Status = "online"
+	if err := d.UpdateAgent(ctx, got); err != nil {
+		t.Fatalf("UpdateAgent: %v", err)
+	}
+	got, _ = d.GetAgent(ctx, a.ID)
+	if got.SystemPrompt != "reviewer persona" {
+		t.Errorf("after UpdateAgent, system_prompt = %q, want %q", got.SystemPrompt, "reviewer persona")
+	}
+}
+
 func TestSetAgentDesiredState(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()

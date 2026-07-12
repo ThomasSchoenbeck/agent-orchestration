@@ -231,6 +231,41 @@ describe('Providers — roles multi-select', () => {
   })
 })
 
+// ── Form: provider-level system prompt (T5.8) ───────────────────────────────────
+describe('Providers — system prompt', () => {
+  it('includes the provider system prompt in the create body config', async () => {
+    render(Providers)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByText('+ Add Provider'))
+    await waitFor(() => expect(screen.getByPlaceholderText('e.g. my-openai')).toBeInTheDocument())
+
+    await user.type(screen.getByPlaceholderText('e.g. my-openai'), 'test-provider')
+    await user.type(screen.getByPlaceholderText('e.g. Always prefer concise answers.'), 'Be terse.')
+    await user.click(screen.getByText('Create'))
+
+    await waitFor(() =>
+      expect(createProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({ system_prompt: 'Be terse.' }),
+        })
+      )
+    )
+  })
+
+  it('no longer renders a per-model Roles column', async () => {
+    render(Providers)
+    const user = userEvent.setup()
+    await user.click(screen.getByText('+ Add Provider'))
+    await waitFor(() => expect(screen.getByText('+ Add model')).toBeInTheDocument())
+    await user.click(screen.getByText('+ Add model'))
+
+    // The model row exposes a System prompt column, not Roles.
+    await waitFor(() => expect(screen.getByPlaceholderText('model prompt layer')).toBeInTheDocument())
+    expect(screen.queryByPlaceholderText('worker, reviewer')).not.toBeInTheDocument()
+  })
+})
+
 // ── Form: tool allowlist multi-select (predefined list) ─────────────────────────
 describe('Providers — tool allowlist multi-select', () => {
   const toolInput = () => screen.getByPlaceholderText('write_file, read_file, list_files…')

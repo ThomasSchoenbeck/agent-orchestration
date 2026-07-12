@@ -316,6 +316,49 @@ agent-orchestrator agents --config config.yaml
 touching a terminal.
 
 Relevant config keys live under `agents:` — `heartbeat_interval_sec`,
-`task_poll_interval_sec`, `task_timeout_sec`, `max_managed_agents`, and the
-`definitions` list. Roles, skills, and project scope are all managed at runtime
-through the UI; nothing here requires a redeploy.
+`task_poll_interval_sec`, `task_timeout_sec`, `max_managed_agents`,
+`context_threshold_fraction`, and the `definitions` list. Roles, skills, and
+project scope are all managed at runtime through the UI; nothing here requires a
+redeploy.
+
+---
+
+## 13. Multi-session orchestration (model routing, layered prompts, continuation)
+
+A worker/reviewer task runs as a thin **main session** that delegates real work to
+synchronous **subagents**; when it fills its context window it checkpoints and
+continues in a fresh session. Four things shape this:
+
+**Model priority lists + failover.** A role (and a subagent skill) may declare an
+ordered `models:` list of `{provider, model}` routes. The router picks the first
+available and fails over to the next on error/unavailability (open circuit,
+unregistered provider) — normal completions stay on the first. When `models:` is
+set it is preferred; the legacy `provider` / `model_override` binding remains the
+fallback used only when every list entry is unavailable. Failover is **sticky**:
+once a task moves A→B it stays on B until B also errors. A role must resolve to
+*some* route or config validation rejects it.
+
+**Layered system prompts.** Each LLM round's system prompt is synthesized by the
+`prompt_prep` subagent from all present layers — **agent, role, subagent, provider,
+model** — plus the task description, blended in that priority order and rolled
+forward using the previous prompt + result. Set each layer where it lives: the
+agent record (agent editor), the role, the subagent skill's template, the provider
+(`system_prompt`), and the model (`system_prompt`).
+
+**Auto-checkpoint + continuation.** When context usage crosses
+`agents.context_threshold_fraction` (default **0.80**), the main loop summarizes,
+persists the session, compacts history to `[system, summary]`, and continues in a
+new linked session. Progress survives across sessions via the task's durable memory
+(`.agent_context/` scratchpad, mirrored to the DB) plus events/status history, so
+even a remote agent without the original worktree can catch up.
+
+**Mandatory core subagent skills.** Before a worker/reviewer task runs, a preflight
+requires `prompt_prep`, `investigate_codebase`, `task_status`, and the role's work
+skill (`code_subtask` for workers, `review_subtask` for reviewers) to exist and be
+enabled — otherwise the task fails fast. Orchestrator/planner and merge-review tasks
+are exempt. If you provide a `subagent_skills:` section in config it **overrides**
+the built-in set, so it must list every required skill; omit the section to seed the
+full built-in five.
+
+Inspect any task's session tree, durable memory, and per-round synthesized prompts
+from the task's **Sessions & memory** view in the UI.

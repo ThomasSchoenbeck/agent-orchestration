@@ -184,6 +184,42 @@ func TestValidate_ProviderWithoutModels(t *testing.T) {
 	}
 }
 
+// TestContextThresholdFraction_Default (T7.1): omitted → 0.80 default.
+func TestContextThresholdFraction_Default(t *testing.T) {
+	path := writeTemp(t, minimalValidYAML)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agents.ContextThresholdFraction != config.DefaultContextThresholdFraction {
+		t.Errorf("context_threshold_fraction = %v, want default %v",
+			cfg.Agents.ContextThresholdFraction, config.DefaultContextThresholdFraction)
+	}
+}
+
+// TestContextThresholdFraction_Explicit (T7.1): an in-range value is kept; an
+// out-of-range value falls back to the default.
+func TestContextThresholdFraction_Explicit(t *testing.T) {
+	ok := writeTemp(t, minimalValidYAML+"\nagents:\n  context_threshold_fraction: 0.5\n")
+	cfg, err := config.Load(ok)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agents.ContextThresholdFraction != 0.5 {
+		t.Errorf("context_threshold_fraction = %v, want 0.5", cfg.Agents.ContextThresholdFraction)
+	}
+
+	bad := writeTemp(t, minimalValidYAML+"\nagents:\n  context_threshold_fraction: 1.5\n")
+	cfg2, err := config.Load(bad)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg2.Agents.ContextThresholdFraction != config.DefaultContextThresholdFraction {
+		t.Errorf("out-of-range fraction = %v, want default %v",
+			cfg2.Agents.ContextThresholdFraction, config.DefaultContextThresholdFraction)
+	}
+}
+
 func TestDefaults_Applied(t *testing.T) {
 	path := writeTemp(t, minimalValidYAML)
 	cfg, err := config.Load(path)
@@ -291,6 +327,82 @@ database:
 	}
 }
 
+// TestValidate_RoleRoutability (Phase 5, T5.2): a role with neither a models list,
+// a provider binding, nor a provider that declares it is unroutable and rejected.
+func TestValidate_RoleRoutability(t *testing.T) {
+	base := func(rd config.RoleDefinitionConfig, provRoles []string) *config.Config {
+		return &config.Config{
+			Providers: []config.ProviderConfig{{
+				Name: "p", Type: "ollama", Roles: provRoles,
+				Models: []config.ProviderModelConfig{{Name: "m"}},
+			}},
+			RoleDefinitions: []config.RoleDefinitionConfig{rd},
+			Server:          config.ServerConfig{Port: 8080},
+			Database:        config.DatabaseConfig{Path: "./t.db"},
+		}
+	}
+
+	// Unroutable: no models, no provider, not claimed.
+	if err := base(config.RoleDefinitionConfig{Name: "worker"}, nil).Validate(); err == nil {
+		t.Error("expected error for unroutable role, got nil")
+	} else if !strings.Contains(err.Error(), "unroutable") {
+		t.Errorf("expected 'unroutable' in error, got: %v", err)
+	}
+
+	// Routable via provider binding.
+	if err := base(config.RoleDefinitionConfig{Name: "worker", Provider: "p"}, nil).Validate(); err != nil {
+		t.Errorf("provider-bound role should be valid, got: %v", err)
+	}
+	// Routable via provider-declared roles.
+	if err := base(config.RoleDefinitionConfig{Name: "worker"}, []string{"worker"}).Validate(); err != nil {
+		t.Errorf("provider-claimed role should be valid, got: %v", err)
+	}
+	// Routable via a models priority list.
+	rd := config.RoleDefinitionConfig{Name: "worker", Models: []config.ModelRefConfig{{Provider: "p", Model: "m"}}}
+	if err := base(rd, nil).Validate(); err != nil {
+		t.Errorf("models-list role should be valid, got: %v", err)
+	}
+	// Malformed priority-list entry (missing model) is rejected.
+	bad := config.RoleDefinitionConfig{Name: "worker", Models: []config.ModelRefConfig{{Provider: "p"}}}
+	if err := base(bad, nil).Validate(); err == nil {
+		t.Error("expected error for models entry missing model, got nil")
+	}
+}
+
+// TestValidate_SubagentModelsEntry (T5.2/T8.2): a subagent skill may omit its
+// models list (it inherits the spawn route), but any entry it does declare must
+// name both a provider and a model.
+func TestValidate_SubagentModelsEntry(t *testing.T) {
+	base := func(models []config.ModelRefConfig) *config.Config {
+		return &config.Config{
+			Providers: []config.ProviderConfig{{
+				Name: "p", Type: "ollama", Models: []config.ProviderModelConfig{{Name: "m"}},
+			}},
+			RoleDefinitions: []config.RoleDefinitionConfig{{Name: "worker", Provider: "p"}},
+			SubagentSkills:  []config.SubagentSkillConfig{{Name: "code_subtask", Models: models}},
+			Server:          config.ServerConfig{Port: 8080},
+			Database:        config.DatabaseConfig{Path: "./t.db"},
+		}
+	}
+
+	// Empty models → valid (inherits spawn route).
+	if err := base(nil).Validate(); err != nil {
+		t.Errorf("empty subagent models should be valid, got: %v", err)
+	}
+	// Complete entry → valid.
+	if err := base([]config.ModelRefConfig{{Provider: "p", Model: "m"}}).Validate(); err != nil {
+		t.Errorf("complete subagent models entry should be valid, got: %v", err)
+	}
+	// Missing model → rejected.
+	if err := base([]config.ModelRefConfig{{Provider: "p"}}).Validate(); err == nil {
+		t.Error("expected error for subagent models entry missing model")
+	}
+	// Missing provider → rejected.
+	if err := base([]config.ModelRefConfig{{Model: "m"}}).Validate(); err == nil {
+		t.Error("expected error for subagent models entry missing provider")
+	}
+}
+
 // TestValidate_RoleDefinitionsSatisfyRoleRequirement: role_definitions alone
 // (no `roles` map) satisfies the "at least one role" rule.
 func TestValidate_RoleDefinitionsSatisfyRoleRequirement(t *testing.T) {
@@ -299,7 +411,8 @@ func TestValidate_RoleDefinitionsSatisfyRoleRequirement(t *testing.T) {
 			Name: "p", Type: "ollama",
 			Models: []config.ProviderModelConfig{{Name: "m"}},
 		}},
-		RoleDefinitions: []config.RoleDefinitionConfig{{Name: "worker"}},
+		// Role carries a provider binding so it is routable (Phase 5, T5.2).
+		RoleDefinitions: []config.RoleDefinitionConfig{{Name: "worker", Provider: "p"}},
 		Server:          config.ServerConfig{Port: 8080},
 		Database:        config.DatabaseConfig{Path: "./test.db"},
 	}
